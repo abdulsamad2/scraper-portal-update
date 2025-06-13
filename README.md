@@ -1,5 +1,27 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+# Scraper Portal Dashboard
+
+Internal web portal for managing ticket-scraper data — events, seat inventories, error logs and operational stats.  
+Built with **Next.js (App Router)**, **TypeScript**, **Tailwind CSS**, **react-data-table-component** and **MongoDB (Mongoose)**.
+
+## ✨ Key Features
+
+- **Dashboard overview** showing total events, seats, errors & recent events.
+- **Inventory page** with server-side pagination, infinite scroll, advanced filters and a responsive data-table (50 rows / page).
+- **Events manager** listing events and related actions.
+- **Error log viewer** for quick troubleshooting.
+- Fully typed codebase & modular **server actions** for CRUD operations.
+
+## 🗂️ Tech Stack
+
+| Layer      | Technology                                                  |
+|------------|-------------------------------------------------------------|
+| Front-end  | Next.js 14 (App Router), React 18, TypeScript, Tailwind CSS |
+| Tables     | react-data-table-component                                  |
+| Back-end   | MongoDB Atlas, Mongoose ODM                                 |
+| Utilities  | lucide-react icons, Zod validation (if needed)              |
+
 ## Getting Started
 
 First, run the development server:
