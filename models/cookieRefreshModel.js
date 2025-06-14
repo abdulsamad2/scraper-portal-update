@@ -78,4 +78,4 @@ cookieRefreshSchema.index({ status: 1 });
 cookieRefreshSchema.index({ startTime: -1 });
 cookieRefreshSchema.index({ nextScheduledRefresh: 1 });
 
-export const CookieRefresh = mongoose.model("CookieRefresh", cookieRefreshSchema); 
+export const CookieRefresh = mongoose.models.CookieRefresh || mongoose.model("CookieRefresh", cookieRefreshSchema);

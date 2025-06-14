@@ -24,3 +24,17 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Styles for the sticky column in the data table */
+.rdt_TableCol:first-child,
+.rdt_TableCell:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--background, #ffffff); /* Fallback to white */
+}
+
+.rdt_TableCol:first-child {
+  z-index: 2; /* Ensure header is above body */
+}
+

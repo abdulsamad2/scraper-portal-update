@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useState } from 'react';
-import { LayoutDashboard, Calendar, Play, List, Package } from 'lucide-react';
+import { LayoutDashboard, Calendar, Play, List, Package, FileText } from 'lucide-react';
 
 const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
   const pathname = usePathname();
@@ -26,9 +26,14 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
       icon: <Package className="w-5 h-5" />,
     },
     {
-      path: '/dashboard/scraper',
-      label: 'Start Scraping',
+      path: '/dashboard/list-event',
+      label: 'Add Event',
       icon: <Play className="w-5 h-5" />,
+    },
+    {
+      path: '/dashboard/export-csv',
+      label: 'Export CSV',
+      icon: <FileText className="w-5 h-5" />,
     },
   ];
 

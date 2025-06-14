@@ -9,7 +9,7 @@ import { revalidatePath } from 'next/cache';
  * @param {object} eventData - The data for the new event.
  * @returns {Promise<object>} The created event object or an error object.
  */
-export async function createEvent(eventData) {
+export async function createEvent(eventData: Partial<Event>) {
   await dbConnect();
   try {
     const newEvent = new Event(eventData);
@@ -17,9 +17,9 @@ export async function createEvent(eventData) {
     revalidatePath('/events'); // Adjust path if your events page is different
     revalidatePath(`/events/${savedEvent._id}`); // Revalidate specific event page if exists
     return JSON.parse(JSON.stringify(savedEvent));
-  } catch (error) {
+  } catch (error:unknown) {
     console.error('Error creating event:', error);
-    return { error: error.message || 'Failed to create event' };
+    return { error: (error as Error).message || 'Failed to create event' };
   }
 }
 
@@ -28,7 +28,7 @@ export async function createEvent(eventData) {
  * @param {string} eventId - The ID of the event to retrieve.
  * @returns {Promise<object|null>} The event object or null if not found, or an error object.
  */
-export async function getEventById(eventId) {
+export async function getEventById(eventId: string) {
   await dbConnect();
   try {
     const event = await Event.findById(eventId);
@@ -38,7 +38,7 @@ export async function getEventById(eventId) {
     return JSON.parse(JSON.stringify(event));
   } catch (error) {
     console.error('Error fetching event by ID:', error);
-    return { error: error.message || 'Failed to fetch event' };
+    return { error: (error as Error).message || 'Failed to fetch event' };
   }
 }
 
@@ -46,14 +46,14 @@ export async function getEventById(eventId) {
  * Retrieves all events.
  * @returns {Promise<Array<object>>} An array of event objects or an error object.
  */
-export async function getAllEvents() {
+export async function getAllEvents(): Promise<Array<object>> {
   await dbConnect();
   try {
     const events = await Event.find({});
     return JSON.parse(JSON.stringify(events));
   } catch (error) {
     console.error('Error fetching all events:', error);
-    return { error: error.message || 'Failed to fetch events' };
+    return [{ error: (error as Error).message || 'Failed to fetch events' }];
   }
 }
 
@@ -63,7 +63,7 @@ export async function getAllEvents() {
  * @param {object} updateData - An object containing the fields to update.
  * @returns {Promise<object|null>} The updated event object or null if not found, or an error object.
  */
-export async function updateEvent(eventId, updateData) {
+export async function updateEvent(eventId: string, updateData: Partial<Event>) {
   await dbConnect();
   try {
     const updatedEvent = await Event.findByIdAndUpdate(eventId, updateData, {
@@ -78,7 +78,7 @@ export async function updateEvent(eventId, updateData) {
     return JSON.parse(JSON.stringify(updatedEvent));
   } catch (error) {
     console.error('Error updating event:', error);
-    return { error: error.message || 'Failed to update event' };
+    return { error: (error as Error).message || 'Failed to update event' };
   }
 }
 
@@ -88,7 +88,7 @@ export async function updateEvent(eventId, updateData) {
  * @param {string} eventSpecificId - The Event_ID of the event to retrieve.
  * @returns {Promise<object|null>} The event object or null if not found, or an error object.
  */
-export async function getEventByEventIdString(eventSpecificId) {
+export async function getEventByEventIdString(eventSpecificId: string) {
   await dbConnect();
   try {
     const event = await Event.findOne({ Event_ID: eventSpecificId });
@@ -96,9 +96,9 @@ export async function getEventByEventIdString(eventSpecificId) {
       return null;
     }
     return JSON.parse(JSON.stringify(event));
-  } catch (error) {
+  } catch (error: unknown) {
     console.error('Error fetching event by Event_ID:', error);
-    return { error: error.message || 'Failed to fetch event by Event_ID' };
+    return { error: (error as Error).message || 'Failed to fetch event by Event_ID' };
   }
 }
 
@@ -108,7 +108,7 @@ export async function getEventByEventIdString(eventSpecificId) {
  * @param {string} eventId - The ID of the event to delete.
  * @returns {Promise<object>} A success message or an error object.
  */
-export async function deleteEvent(eventId) {
+export async function deleteEvent(eventId: string) {
   await dbConnect();
   try {
     const deletedEvent = await Event.findByIdAndDelete(eventId);
@@ -119,7 +119,29 @@ export async function deleteEvent(eventId) {
     return { message: 'Event deleted successfully', success: true, deletedEvent: JSON.parse(JSON.stringify(deletedEvent)) };
   } catch (error) {
     console.error('Error deleting event:', error);
-    return { error: error.message || 'Failed to delete event', success: false };
+    return { error: (error as Error).message || 'Failed to delete event', success: false };
   }
 }
 
+export async function updateAllEvents(status: boolean){
+  await dbConnect()
+  try{
+    const updateEventsStatus = await Event.updateMany(
+      {}, // Update all events
+      { Skip_Scraping: status } // Set Skip_Scraping to the provided status
+    )
+
+    return {
+      success: true,
+      message: `Successfully updated ${updateEventsStatus.modifiedCount} events`,
+      modifiedCount: updateEventsStatus.modifiedCount,
+      status: status
+    }
+  }catch(error){
+    console.error('Error updating all events:', error);
+    return {
+      success: false,
+      error: (error as Error).message || 'Failed to update events'
+    }
+  }
+}

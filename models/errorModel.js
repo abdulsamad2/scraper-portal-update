@@ -40,4 +40,4 @@ const errorLogSchema = new mongoose.Schema(
 // Indexes
 errorLogSchema.index({ eventUrl: 1, createdAt: -1 });
 
-export const ErrorLog = mongoose.model("ErrorLog", errorLogSchema);
+export const ErrorLog = mongoose.models.ErrorLog || mongoose.model("ErrorLog", errorLogSchema);

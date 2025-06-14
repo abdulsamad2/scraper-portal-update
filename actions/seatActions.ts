@@ -2,6 +2,8 @@
 
 import dbConnect from '@/lib/dbConnect';
 import { ConsecutiveGroup } from '@/models/seatModel'; // Assuming models are aliased to @/models
+
+import { UpdateQuery } from 'mongoose';
 import { revalidatePath } from 'next/cache';
 
 /**
@@ -9,7 +11,18 @@ import { revalidatePath } from 'next/cache';
  * @param {object} groupData - The data for the new group.
  * @returns {Promise<object>} The created group object or an error object.
  */
-export async function createConsecutiveGroup(groupData: any) {
+export async function createConsecutiveGroup(groupData: {
+  section: string;
+  row: string;
+  mapping_id: string;
+  event_name: string;
+  venue_name: string;
+  eventId: string;
+  inventory: {
+    quantity: number;
+    seats: string[];
+  };
+}) {
   await dbConnect();
   try {
     const newGroup = new ConsecutiveGroup(groupData);
@@ -17,9 +30,9 @@ export async function createConsecutiveGroup(groupData: any) {
     revalidatePath('/seat-groups'); // Adjust path as needed
     revalidatePath(`/seat-groups/${savedGroup._id}`);
     return JSON.parse(JSON.stringify(savedGroup));
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error creating consecutive group:', error);
-    return { error: error.message || 'Failed to create consecutive group' };
+    return { error: error instanceof Error ? error.message : 'Failed to create consecutive group' };
   }
 }
 
@@ -32,9 +45,9 @@ export async function getAllConsecutiveGroups() {
   try {
     const groups = await ConsecutiveGroup.find({});
     return JSON.parse(JSON.stringify(groups));
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error fetching all consecutive groups:', error);
-    return { error: error.message || 'Failed to fetch consecutive groups' };
+    return { error: error instanceof Error ? error.message : 'Failed to fetch consecutive groups' };
   }
 }
 
@@ -43,7 +56,7 @@ export async function getAllConsecutiveGroups() {
  * @param {string} groupId - The ID of the group to retrieve.
  * @returns {Promise<object|null>} The group object or null if not found, or an error object.
  */
-export async function getConsecutiveGroupById(groupId) {
+export async function getConsecutiveGroupById(groupId: string) {
   await dbConnect();
   try {
     const group = await ConsecutiveGroup.findById(groupId);
@@ -51,9 +64,9 @@ export async function getConsecutiveGroupById(groupId) {
       return null;
     }
     return JSON.parse(JSON.stringify(group));
-  } catch (error: any) {
+  } catch (error: Error | unknown) {
     console.error('Error fetching consecutive group by ID:', error);
-    return { error: error.message || 'Failed to fetch consecutive group' };
+    return { error:'Failed to fetch consecutive group' };
   }
 }
 
@@ -63,7 +76,7 @@ export async function getConsecutiveGroupById(groupId) {
  * @param {object} updateData - An object containing the fields to update.
  * @returns {Promise<object|null>} The updated group object or null if not found, or an error object.
  */
-export async function updateConsecutiveGroup(groupId, updateData) {
+export async function updateConsecutiveGroup(groupId: string, updateData: UpdateQuery<typeof ConsecutiveGroup> | undefined) {
   await dbConnect();
   try {
     const updatedGroup = await ConsecutiveGroup.findByIdAndUpdate(groupId, updateData, {
@@ -76,9 +89,9 @@ export async function updateConsecutiveGroup(groupId, updateData) {
     revalidatePath('/seat-groups');
     revalidatePath(`/seat-groups/${groupId}`);
     return JSON.parse(JSON.stringify(updatedGroup));
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error updating consecutive group:', error);
-    return { error: error.message || 'Failed to update consecutive group' };
+    return { error: error instanceof Error ? error.message : 'Failed to update consecutive group' };
   }
 }
 
@@ -87,7 +100,7 @@ export async function updateConsecutiveGroup(groupId, updateData) {
  * @param {string} groupId - The ID of the group to delete.
  * @returns {Promise<object>} A success message or an error object.
  */
-export async function deleteConsecutiveGroup(groupId) {
+export async function deleteConsecutiveGroup(groupId: string) {
   await dbConnect();
   try {
     const deletedGroup = await ConsecutiveGroup.findByIdAndDelete(groupId);
@@ -96,9 +109,9 @@ export async function deleteConsecutiveGroup(groupId) {
     }
     revalidatePath('/seat-groups');
     return { message: 'Consecutive group deleted successfully', success: true, deletedGroup: JSON.parse(JSON.stringify(deletedGroup)) };
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error deleting consecutive group:', error);
-    return { error: error.message || 'Failed to delete consecutive group', success: false };
+    return { error: error instanceof Error ? error.message : 'Failed to delete consecutive group', success: false };
   }
 }
 
@@ -107,24 +120,24 @@ export async function deleteConsecutiveGroup(groupId) {
  * @param {string} eventId - The eventId to filter groups by.
  * @returns {Promise<Array<object>>} An array of group objects or an error object.
  */
-export async function getConsecutiveGroupsByEventId(eventId) {
+export async function getConsecutiveGroupsByEventId(eventId: string) {
   await dbConnect();
   try {
     const groups = await ConsecutiveGroup.find({ eventId: eventId });
     return JSON.parse(JSON.stringify(groups));
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error fetching consecutive groups by eventId:', error);
-    return { error: error.message || 'Failed to fetch groups for event' };
+    return { error: error instanceof Error ? error.message : 'Failed to fetch groups for event' };
   }
 }
 
 /**
  * Retrieves consecutive groups with pagination and optional search.
  */
-export async function getConsecutiveGroupsPaginated(limit: number = 20, page: number = 1, searchTerm: string = '') {
+export async function getConsecutiveGroupsPaginated(limit: number = 50, page: number = 1, searchTerm: string = '') {
   await dbConnect();
   try {
-    const query: any = {};
+    const query: Record<string, unknown> = {};
     if (searchTerm) {
       const regex = new RegExp(searchTerm, 'i');
       query.$or = [
@@ -142,12 +155,19 @@ export async function getConsecutiveGroupsPaginated(limit: number = 20, page: nu
     ]);
     const totalQuantity = qtyAgg[0]?.seats || 0;
 
+    // Fetch groups for this page
     const groups = await ConsecutiveGroup.find(query)
       .skip((page - 1) * limit)
-      .limit(limit);
-    return { groups: JSON.parse(JSON.stringify(groups)), total, totalQuantity };
-  } catch (error: any) {
+      .limit(limit)
+      .lean();
+
+    // Serialize the data to ensure it's a plain object for client components.
+    // This converts ObjectIds, Dates, etc., to strings.
+    const plainGroups = JSON.parse(JSON.stringify(groups));
+
+    return { groups: plainGroups, total, totalQuantity };
+  } catch (error: Error | unknown) {
     console.error('Error fetching paginated consecutive groups:', error);
-    return { error: error.message || 'Failed to fetch paginated groups' };
+    return { error: error instanceof Error ? error.message : 'Failed to fetch paginated groups' };
   }
 }

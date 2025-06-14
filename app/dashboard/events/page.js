@@ -1,18 +1,19 @@
-'use client';
 
-import { useEffect, useState } from 'react';
+"use client"
+import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { getAllEvents, updateEvent } from '@/actions/eventActions';
-import { Calendar, Plus } from 'lucide-react';
-import EventsTable from './EventsTable';
+import { getAllEvents, updateEvent, updateAllEvents, deleteEvent } from '@/actions/eventActions';
+import { Calendar, Plus, ChevronLeft, ChevronRight } from 'lucide-react';
+import EventsTableModern from './EventsTableModern.jsx';
 
 export default function EventsPage() {
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [loadingSeatCounts] = useState(false);
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
-  const eventsPerPage = 10;
+  const [eventsPerPage, setEventsPerPage] = useState(25);
 
   useEffect(() => {
     async function fetchEvents() {
@@ -55,23 +56,107 @@ export default function EventsPage() {
     }
   };
 
-  // Format date
-  const formatDate = (dateString) => {
-    const options = { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' };
-    return new Date(dateString).toLocaleDateString('en-US', options);
+  // Determine if all filtered events are active
+  const activeCount = filteredEvents.filter(e => !e.Skip_Scraping).length;
+  const totalCount = filteredEvents.length;
+  
+  const allActive = filteredEvents.length > 0 && filteredEvents.every(e => !e.Skip_Scraping);
+
+  // Toggle scraping state for ALL filtered events
+  const toggleScrapingAll = async () => {
+    try {
+      // If all events are active (not skipping), then stop all (set to true)
+      // If not all events are active, then start all (set to false)
+      const newStatus = allActive;
+      
+      const result = await updateAllEvents(newStatus);
+      
+      if (result.success) {
+        // Refresh events to reflect the changes
+        const updatedEvents = await getAllEvents();
+        setEvents(updatedEvents);
+        
+        console.log(`Successfully ${newStatus ? 'stopped' : 'started'} scraping for all events`);
+      } else {
+        console.error('Failed to update events:', result.error);
+      }
+    } catch (error) {
+      console.error('Error toggling scraping for all events:', error);
+    }
   };
 
+  // Pagination helpers
+  const goToPage = (page) => {
+    setCurrentPage(page);
+  };
+
+  const goToPrevPage = () => {
+    setCurrentPage(prev => Math.max(1, prev - 1));
+  };
+
+  const goToNextPage = () => {
+    setCurrentPage(prev => Math.min(totalPages, prev + 1));
+  };
+
+  // Delete event with confirmation
+  const handleDeleteEvent = async (eventId, eventName) => {
+    const isConfirmed = window.confirm(
+      `Are you sure you want to delete the event "${eventName}"?\n\nThis action cannot be undone.`
+    );
+    
+    if (isConfirmed) {
+      try {
+        const result = await deleteEvent(eventId);
+        
+        if (result.success) {
+          // Remove the deleted event from the state
+          setEvents(prev => prev.filter(event => event._id !== eventId));
+          
+          // Adjust current page if necessary
+          const newTotalPages = Math.ceil((events.length - 1) / eventsPerPage);
+          if (currentPage > newTotalPages && newTotalPages > 0) {
+            setCurrentPage(newTotalPages);
+          }
+          
+          console.log('Event deleted successfully');
+        } else {
+          console.error('Failed to delete event:', result.error || result.message);
+          alert('Failed to delete event. Please try again.');
+        }
+      } catch (error) {
+        console.error('Error deleting event:', error);
+        alert('An error occurred while deleting the event. Please try again.');
+      }
+    }
+  };
+
+  // Reset to first page when search changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm]);
+
+ 
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-bold">Events</h1>
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div className="flex items-baseline gap-3">
+            <h1 className="text-2xl font-bold">Events</h1>
+            <span className="text-sm text-gray-600">{activeCount} active / {totalCount} total</span>
+          </div>
         <Link 
-          href="/dashboard/events/create"
+          href="/dashboard/list-event"
           className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
         >
           <Plus className="w-4 h-4 mr-1" />
           Add Event
         </Link>
+        <button
+          onClick={toggleScrapingAll}
+          className={`inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white ${allActive ? 'bg-red-600 hover:bg-red-700 focus:ring-red-500' : 'bg-green-600 hover:bg-green-700 focus:ring-green-500'}`}
+        >
+          {allActive ? 'Stop Scraping All' : 'Start Scraping All'}
+        </button>
+       
       </div>
 
       {/* Search */}
@@ -111,7 +196,7 @@ export default function EventsPage() {
             </p>
             <div className="mt-6">
               <Link 
-                href="/dashboard/events/create"
+                href="/dashboard/list-event"
                 className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
               >
                 <Plus className="w-4 h-4 mr-1" />
@@ -120,31 +205,113 @@ export default function EventsPage() {
             </div>
           </div>
         ) : (
-          <EventsTable data={paginatedEvents} toggleScraping={toggleScraping} />
+          <>
+            <EventsTableModern 
+              data={paginatedEvents} 
+              toggleScraping={toggleScraping}
+              loadingSeatCounts={loadingSeatCounts}
+              onDeleteEvent={handleDeleteEvent}
+            />
+            
+            {/* Enhanced Pagination */}
+            {totalPages > 1 && (
+              <div className="bg-white px-4 py-3 flex items-center justify-between border-t border-gray-200 sm:px-6">
+                <div className="flex-1 flex justify-between sm:hidden">
+                  <button
+                    onClick={goToPrevPage}
+                    disabled={currentPage === 1}
+                    className="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Previous
+                  </button>
+                  <button
+                    onClick={goToNextPage}
+                    disabled={currentPage === totalPages}
+                    className="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Next
+                  </button>
+                </div>
+                <div className="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
+                  <div className="flex items-center space-x-4">
+                    <p className="text-sm text-gray-700">
+                      Showing <span className="font-medium">{(currentPage - 1) * eventsPerPage + 1}</span> to{' '}
+                      <span className="font-medium">
+                        {Math.min(currentPage * eventsPerPage, filteredEvents.length)}
+                      </span>{' '}
+                      of <span className="font-medium">{filteredEvents.length}</span> results
+                    </p>
+                    <div className="flex items-center space-x-2">
+                      <label htmlFor="perPage" className="text-sm text-gray-700">Per page:</label>
+                      <select
+                        id="perPage"
+                        value={eventsPerPage}
+                        onChange={(e) => {
+                          setEventsPerPage(Number(e.target.value));
+                          setCurrentPage(1);
+                        }}
+                        className="border border-gray-300 rounded-md text-sm px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      >
+                        <option value={10}>10</option>
+                        <option value={25}>25</option>
+                        <option value={50}>50</option>
+                        <option value={100}>100</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div>
+                    <nav className="relative z-0 inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
+                      <button
+                        onClick={goToPrevPage}
+                        disabled={currentPage === 1}
+                        className="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <ChevronLeft className="h-5 w-5" />
+                      </button>
+                      
+                      {/* Page numbers */}
+                      {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                        let pageNum;
+                        if (totalPages <= 5) {
+                          pageNum = i + 1;
+                        } else if (currentPage <= 3) {
+                          pageNum = i + 1;
+                        } else if (currentPage >= totalPages - 2) {
+                          pageNum = totalPages - 4 + i;
+                        } else {
+                          pageNum = currentPage - 2 + i;
+                        }
+                        
+                        return (
+                          <button
+                            key={pageNum}
+                            onClick={() => goToPage(pageNum)}
+                            className={`relative inline-flex items-center px-4 py-2 border text-sm font-medium ${
+                              currentPage === pageNum
+                                ? 'z-10 bg-blue-50 border-blue-500 text-blue-600'
+                                : 'bg-white border-gray-300 text-gray-500 hover:bg-gray-50'
+                            }`}
+                          >
+                            {pageNum}
+                          </button>
+                        );
+                      })}
+                      
+                      <button
+                        onClick={goToNextPage}
+                        disabled={currentPage === totalPages}
+                        className="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <ChevronRight className="h-5 w-5" />
+                      </button>
+                    </nav>
+                  </div>
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
-      {/* Pagination controls */}
-      {totalPages > 1 && (
-        <div className="px-4 py-3 bg-gray-50 flex justify-between items-center text-sm">
-          <button
-            onClick={() => setCurrentPage(p => Math.max(p - 1, 1))}
-            disabled={currentPage === 1}
-            className="px-3 py-1 rounded-md border disabled:opacity-50"
-          >
-            Prev
-          </button>
-          <span>
-            Page {currentPage} of {totalPages}
-          </span>
-          <button
-            onClick={() => setCurrentPage(p => Math.min(p + 1, totalPages))}
-            disabled={currentPage === totalPages}
-            className="px-3 py-1 rounded-md border disabled:opacity-50"
-          >
-            Next
-          </button>
-        </div>
-      )}
     </div>
   );
 }
