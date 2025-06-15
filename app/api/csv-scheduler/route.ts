@@ -1,31 +1,25 @@
-import { NextApiRequest, NextApiResponse } from 'next';
-import { generateInventoryCsv, uploadCsvToSyncService, getSchedulerSettings, updateSchedulerSettings } from '../../actions/csvActions';
+import { generateInventoryCsv, uploadCsvToSyncService, getSchedulerSettings, updateSchedulerSettings } from '../../../actions/csvActions';
 import fs from 'fs';
 import path from 'path';
+import { NextRequest, NextResponse } from 'next/server';
 
 // Store the interval instance
 let scheduledInterval: NodeJS.Timeout | null = null;
 
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse
-) {
-  if (req.method === 'GET') {
-    // Get current scheduler settings
-    try {
-      const settings = await getSchedulerSettings();
-      return res.status(200).json(settings);
-    } catch (error) {
-      console.error('Error getting scheduler settings:', error);
-      return res.status(500).json({ message: 'Failed to get scheduler settings' });
-    }
+export async function GET() {
+  // Get current scheduler settings
+  try {
+    const settings = await getSchedulerSettings();
+    return NextResponse.json(settings);
+  } catch (error) {
+    console.error('Error getting scheduler settings:', error);
+    return NextResponse.json({ message: 'Failed to get scheduler settings' }, { status: 500 });
   }
+}
 
-  if (req.method !== 'POST') {
-    return res.status(405).json({ message: 'Method not allowed' });
-  }
-
-  const { action, intervalMinutes, uploadToSync } = req.body;
+export async function POST(req: NextRequest) {
+  const body = await req.json();
+  const { action, intervalMinutes, uploadToSync, eventUpdateFilterMinutes } = body;
 
   try {
     if (action === 'start') {
@@ -43,6 +37,7 @@ export default async function handler(
           scheduleRateMinutes: intervalMinutes,
           uploadToSync: uploadToSync,
           isScheduled: true,
+          eventUpdateFilterMinutes: eventUpdateFilterMinutes || 0,
           nextRunAt: new Date(Date.now() + intervalMinutes * 60 * 1000)
         });
       } else {
@@ -53,7 +48,7 @@ export default async function handler(
 
       // Validate interval
       if (!settings.scheduleRateMinutes || settings.scheduleRateMinutes < 1 || settings.scheduleRateMinutes > 1440) {
-        return res.status(400).json({ message: 'Invalid interval. Must be between 1 and 1440 minutes.' });
+        return NextResponse.json({ message: 'Invalid interval. Must be between 1 and 1440 minutes.' }, { status: 400 });
       }
 
       // Create the scheduled interval with performance optimizations
@@ -75,7 +70,7 @@ export default async function handler(
           });
 
           // Generate CSV with performance tracking
-          const result = await generateInventoryCsv();
+          const result = await generateInventoryCsv(currentSettings.eventUpdateFilterMinutes || 0);
           
           if (result.success && result.csv) {
             // Save CSV to exports directory
@@ -125,7 +120,7 @@ export default async function handler(
       scheduledInterval = setInterval(scheduledTask, intervalMs);
       
       console.log(`CSV scheduler started with ${settings.scheduleRateMinutes} minute interval`);
-      return res.status(200).json({ 
+      return NextResponse.json({ 
         message: `Scheduler started successfully. CSV will be generated every ${settings.scheduleRateMinutes} minutes.`,
         settings: settings
       });
@@ -145,17 +140,17 @@ export default async function handler(
         await updateSchedulerSettings({ isScheduled: false });
         
         console.log('CSV scheduler stopped');
-        return res.status(200).json({ message: 'Scheduler stopped successfully.' });
+        return NextResponse.json({ message: 'Scheduler stopped successfully.' });
       } else {
-        return res.status(400).json({ message: 'No scheduler is currently running.' });
+        return NextResponse.json({ message: 'No scheduler is currently running.' }, { status: 400 });
       }
       
     } else {
-      return res.status(400).json({ message: 'Invalid action. Use "start" or "stop".' });
+      return NextResponse.json({ message: 'Invalid action. Use "start" or "stop".' }, { status: 400 });
     }
     
   } catch (error) {
     console.error('Error in CSV scheduler API:', error);
-    return res.status(500).json({ message: 'Internal server error' });
+    return NextResponse.json({ message: 'Internal server error' }, { status: 500 });
   }
 }

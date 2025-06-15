@@ -5,6 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import dbConnect from '../lib/dbConnect';
 import { ConsecutiveGroup } from '../models/seatModel';
+import { Event } from '../models/eventModel';
 import { SchedulerSettings } from '../models/schedulerModel';
 import SyncService from '../lib/syncService';
 
@@ -67,11 +68,34 @@ const csvColumns = [
   { id: 'shown_quantity', title: 'shown_quantity' },
 ];
 
-export async function generateInventoryCsv() {
+export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0) {
   await dbConnect();
   const startTime = Date.now();
 
   try {
+    let eventFilter = {};
+    
+    // If eventUpdateFilterMinutes is provided, filter by recently updated events
+    if (eventUpdateFilterMinutes > 0) {
+      const cutoffTime = new Date(Date.now() - eventUpdateFilterMinutes * 60 * 1000);
+      
+      // Get recently updated events
+      const recentlyUpdatedEvents = await Event.find(
+        { Last_Updated: { $gte: cutoffTime } },
+        { mapping_id: 1 }
+      ).lean();
+      
+      if (recentlyUpdatedEvents.length === 0) {
+        return { success: false, message: `No events updated within the last ${eventUpdateFilterMinutes} minutes.` };
+      }
+      
+      // Create filter for ConsecutiveGroup query
+      const eventMappingIds = recentlyUpdatedEvents.map(event => event.mapping_id);
+      eventFilter = { mapping_id: { $in: eventMappingIds } };
+      
+      console.log(`Found ${recentlyUpdatedEvents.length} events updated within last ${eventUpdateFilterMinutes} minutes`);
+    }
+
     // Optimized query with projection to fetch only required fields
     const projection = {
       'inventory.inventoryId': 1,
@@ -104,7 +128,7 @@ export async function generateInventoryCsv() {
     };
 
     // Use cursor for memory-efficient streaming
-    const cursor = ConsecutiveGroup.find({}, projection).lean().cursor();
+    const cursor = ConsecutiveGroup.find(eventFilter, projection).lean().cursor();
     const records: CsvRow[] = [];
     const BATCH_SIZE = 1000;
     let processedCount = 0;
@@ -115,9 +139,7 @@ export async function generateInventoryCsv() {
       
       // Pre-compute expensive operations
       const seatsString = doc.seats?.length > 0 ? 
-        doc.seats.map((seat: any) => seat.number).join(',') : '';
-      const barcodesString = doc.barcodes?.length > 0 ? 
-        doc.barcodes.join('|') : '';
+        doc.seats.map((seat: { number: string | number }) => seat.number).join(',') : '';
       const eventDateString = doc.event_date ? 
         new Date(doc.event_date).toISOString().slice(0, 19) : '';
       const inHandDateString = inventory?.inHandDate ? 
@@ -215,12 +237,12 @@ export async function uploadCsvToSyncService(csvContent: string): Promise<{ succ
     // Upload CSV content to sync service
     const result = await syncService.uploadCsvContentToSync(csvContent);
     
-    if (result.success) {
+    if ('success' in result && result.success) {
       // Update database with upload status
       await updateSchedulerSettings({
         lastUploadAt: new Date(),
         lastUploadStatus: 'success',
-        lastUploadId: result.uploadId
+        lastUploadId: result?.uploadId
       });
       
       console.log('CSV content uploaded to sync service successfully');
@@ -231,7 +253,7 @@ export async function uploadCsvToSyncService(csvContent: string): Promise<{ succ
         uploadId: result.uploadId
       };
     } else {
-      throw new Error(result.message || 'Upload failed');
+      throw new Error((result as { message?: string }).message || 'Upload failed');
     }
   } catch (error) {
     console.error('Error uploading to sync service:', error);
@@ -241,7 +263,7 @@ export async function uploadCsvToSyncService(csvContent: string): Promise<{ succ
       await updateSchedulerSettings({
         lastUploadAt: new Date(),
         lastUploadStatus: 'failed',
-        lastUploadError: error.message
+        lastUploadError: error instanceof Error ? error.message : 'Unknown error occurred'
       });
     } catch (dbError) {
       console.error('Error updating database with upload status:', dbError);
@@ -249,7 +271,7 @@ export async function uploadCsvToSyncService(csvContent: string): Promise<{ succ
     
     return {
       success: false,
-      message: `Failed to upload CSV to sync service: ${error.message}`
+      message: `Failed to upload CSV to sync service: ${error instanceof Error ? error.message : 'Unknown error'}`
     };
   }
 }
@@ -270,7 +292,7 @@ export async function clearInventoryFromSync(): Promise<{ success: boolean; mess
     // Clear all inventory
     const result = await syncService.clearAllInventory();
     
-    if (result.success) {
+    if ('success' in result && result.success) {
       // Update database with clear inventory status
       await updateSchedulerSettings({
         lastUploadAt: new Date(),

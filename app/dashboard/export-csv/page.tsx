@@ -24,6 +24,7 @@ interface ExportSettings {
   uploadToSync: boolean;
   scheduleRateMinutes: number;
   isScheduled: boolean;
+  eventUpdateFilterMinutes: number;
 }
 
 interface CsvStatus {
@@ -37,6 +38,7 @@ const ExportCsvPage: React.FC = () => {
     uploadToSync: false,
     scheduleRateMinutes: 60,
     isScheduled: false,
+    eventUpdateFilterMinutes: 0,
   });
   const [schedulerStatus, setSchedulerStatus] = useState<string>('Stopped');
   const [csvStatus, setCsvStatus] = useState<CsvStatus>({
@@ -60,7 +62,8 @@ const ExportCsvPage: React.FC = () => {
           setSettings({
             scheduleRateMinutes: dbSettings.scheduleRateMinutes,
             uploadToSync: dbSettings.uploadToSync,
-            isScheduled: dbSettings.isScheduled
+            isScheduled: dbSettings.isScheduled,
+            eventUpdateFilterMinutes: dbSettings.eventUpdateFilterMinutes || 0
           });
           setSchedulerStatus(dbSettings.isScheduled ? 'Running' : 'Stopped');
           setPerformanceMetrics({
@@ -91,7 +94,7 @@ const ExportCsvPage: React.FC = () => {
     const startTime = Date.now();
     
     try {
-      const result = await generateInventoryCsv();
+      const result = await generateInventoryCsv(settings.eventUpdateFilterMinutes);
       
       if (result.success && result.csv) {
         // Create and download the CSV file
@@ -142,7 +145,7 @@ const ExportCsvPage: React.FC = () => {
     try {
       // In a real application, you would get the latest generated CSV content to upload
       // For now, we'll assume it's available or re-generate if needed.
-      const generateResult = await generateInventoryCsv();
+      const generateResult = await generateInventoryCsv(settings.eventUpdateFilterMinutes);
       if (!generateResult.success || !generateResult.csv) {
         showMessage(generateResult.message || 'Failed to get CSV content for upload.', 'error');
         setLoading(false);
@@ -171,7 +174,8 @@ const ExportCsvPage: React.FC = () => {
         body: JSON.stringify({ 
           action: 'start', 
           intervalMinutes: settings.scheduleRateMinutes,
-          uploadToSync: settings.uploadToSync 
+          uploadToSync: settings.uploadToSync,
+          eventUpdateFilterMinutes: settings.eventUpdateFilterMinutes
         })
       });
       
@@ -292,6 +296,22 @@ const ExportCsvPage: React.FC = () => {
                className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
              />
              <p className="text-xs text-gray-500 mt-1">Enter interval in minutes (1-1440)</p>
+           </div>
+           <div>
+             <label htmlFor="eventUpdateFilterMinutes" className="block text-sm font-medium text-gray-700 mb-1">
+               Event Update Filter (Minutes)
+             </label>
+             <input
+               type="number"
+               id="eventUpdateFilterMinutes"
+               value={settings.eventUpdateFilterMinutes}
+               onChange={(e) => setSettings(prev => ({ ...prev, eventUpdateFilterMinutes: parseInt(e.target.value) || 0 }))}
+               min="0"
+               max="10080"
+               placeholder="0"
+               className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+             />
+             <p className="text-xs text-gray-500 mt-1">Filter events updated within last X minutes (0 = no filter, max 7 days)</p>
            </div>
            <div className="flex items-center space-x-4">
              <div className="flex items-center">

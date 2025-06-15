@@ -1,11 +1,7 @@
-import { NextApiRequest, NextApiResponse } from 'next';
-import { clearInventoryFromSync } from '../../actions/csvActions';
+import { NextRequest, NextResponse } from 'next/server';
+import { clearInventoryFromSync } from '../../../actions/csvActions';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ message: 'Method not allowed' });
-  }
-
+export async function POST(req: NextRequest) {
   try {
     console.log('Starting inventory clear process...');
     
@@ -13,23 +9,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     
     if (result.success) {
       console.log('Inventory cleared successfully');
-      return res.status(200).json({
+      return NextResponse.json({
         success: true,
         message: result.message,
         uploadId: result.uploadId
       });
     } else {
       console.error('Failed to clear inventory:', result.message);
-      return res.status(500).json({
+      return NextResponse.json({
         success: false,
         message: result.message
-      });
+      }, { status: 500 });
     }
   } catch (error) {
     console.error('Error in clear inventory API:', error);
-    return res.status(500).json({
+    return NextResponse.json({
       success: false,
-      message: `Internal server error: ${error.message}`
-    });
+      message: `Internal server error: ${error instanceof Error ? error.message : 'Unknown error'}`
+    }, { status: 500 });
   }
 }

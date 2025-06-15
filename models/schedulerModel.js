@@ -16,6 +16,12 @@ const schedulerSettingsSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  eventUpdateFilterMinutes: {
+    type: Number,
+    min: 0,
+    max: 10080, // 7 days in minutes
+    default: 0
+  },
   lastRunAt: {
     type: Date,
     default: null
@@ -72,7 +78,8 @@ schedulerSettingsSchema.statics.getSettings = async function() {
     settings = await this.create({
       scheduleRateMinutes: 60,
       uploadToSync: false,
-      isScheduled: false
+      isScheduled: false,
+      eventUpdateFilterMinutes: 0
     });
   }
   return settings;

@@ -2,7 +2,7 @@
 
 import DataTable, { TableColumn, TableStyles } from "react-data-table-component";
 import Link from "next/link";
-import React from "react";
+import React, { useState, useEffect } from "react";
 
 export interface InventoryRow {
   _id: string;
@@ -11,10 +11,17 @@ export interface InventoryRow {
   seatCount?: number;
   seatRange?: string;
   inventory?: any; // Contains all inventory and event details now
+  isDeleted?: boolean;
+  deletedAt?: Date;
 }
 
 interface InventoryTableProps {
   data: InventoryRow[];
+}
+
+interface DeletedItem {
+  id: string;
+  deletedAt: Date;
 }
 
 // Helper component for tooltips
@@ -46,6 +53,48 @@ const CustomHeader = ({ title, description }: { title: string; description: stri
 
 
 const InventoryTable: React.FC<InventoryTableProps> = ({ data }) => {
+  const [deletedItems, setDeletedItems] = useState<DeletedItem[]>([]);
+  const [previousData, setPreviousData] = useState<InventoryRow[]>([]);
+
+  // Track deleted items
+  useEffect(() => {
+    if (previousData.length > 0) {
+      const currentIds = new Set(data.map(item => item._id));
+      const newlyDeleted = previousData
+        .filter(item => !currentIds.has(item._id))
+        .map(item => ({ id: item._id, deletedAt: new Date() }));
+      
+      if (newlyDeleted.length > 0) {
+        setDeletedItems(prev => [...prev, ...newlyDeleted]);
+      }
+    }
+    setPreviousData(data);
+  }, [data, previousData]);
+
+  // Clean up deleted items after 1 minute
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = new Date();
+      setDeletedItems(prev => 
+        prev.filter(item => now.getTime() - item.deletedAt.getTime() < 60000)
+      );
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  // Combine current data with recently deleted items
+  const displayData = [
+    ...data,
+    ...deletedItems.map(deletedItem => {
+      const originalItem = previousData.find(item => item._id === deletedItem.id);
+      return originalItem ? {
+        ...originalItem,
+        isDeleted: true,
+        deletedAt: deletedItem.deletedAt
+      } : null;
+    }).filter(Boolean) as InventoryRow[]
+  ];
   const columns: TableColumn<InventoryRow>[] = [
     {
       name: <CustomHeader title="Event Name" description="The name of the event. Click to view event details." />,
@@ -73,11 +122,11 @@ const InventoryTable: React.FC<InventoryTableProps> = ({ data }) => {
       wrap: true,
     },
     {
-      name: <CustomHeader title="Event Date" description="The date and time of the event." />,
+      name: <CustomHeader title="Event Date" description="The date of the event." />,
       selector: (row) => row.inventory?.event_date,
       format: (r) =>
         r.inventory?.event_date
-          ? new Date(r.inventory.event_date).toLocaleString()
+          ? new Date(r.inventory.event_date).toLocaleDateString()
           : "-",
       sortable: true,
       wrap: true,
@@ -85,7 +134,7 @@ const InventoryTable: React.FC<InventoryTableProps> = ({ data }) => {
     {
       name: <CustomHeader title="In Hand Date" description="The date when the tickets are expected to be available." />,
       selector: (r) => r.inventory?.inHandDate,
-      format: (r) => (r.inventory?.inHandDate ? new Date(r.inventory.inHandDate).toLocaleString() : "-"),
+      format: (r) => (r.inventory?.inHandDate ? new Date(r.inventory.inHandDate).toLocaleDateString() : "-"),
       wrap: true,
       sortable: true,
     },
@@ -111,7 +160,7 @@ const InventoryTable: React.FC<InventoryTableProps> = ({ data }) => {
   const modernStyles: TableStyles = {
     table: {
       style: {
-        minWidth: "1800px",
+        minWidth: "2200px",
       },
     },
     headRow: {
@@ -120,16 +169,21 @@ const InventoryTable: React.FC<InventoryTableProps> = ({ data }) => {
         borderBottomWidth: '2px',
         borderBottomColor: '#dee2e6',
         borderBottomStyle: 'solid' as const,
-        fontSize: '12px',
+        fontSize: '13px',
         fontWeight: '600',
         color: '#495057',
         textTransform: 'uppercase' as const,
+        minHeight: '60px',
+        whiteSpace: 'nowrap' as const,
       },
     },
     headCells: {
       style: {
         paddingLeft: '16px',
         paddingRight: '16px',
+        whiteSpace: 'nowrap' as const,
+        overflow: 'visible' as const,
+        textOverflow: 'clip' as const,
       },
     },
     rows: {
@@ -153,6 +207,7 @@ const InventoryTable: React.FC<InventoryTableProps> = ({ data }) => {
     cells: {
       style: {
         padding: '14px 18px',
+        whiteSpace: 'nowrap' as const,
       },
     },
     pagination: {
@@ -162,11 +217,26 @@ const InventoryTable: React.FC<InventoryTableProps> = ({ data }) => {
     },
   };
 
+  // Custom row styling for deleted items
+  const conditionalRowStyles = [
+    {
+      when: (row: InventoryRow) => row.isDeleted === true,
+      style: {
+        backgroundColor: '#fee2e2',
+        color: '#991b1b',
+        opacity: 0.8,
+        '&:hover': {
+          backgroundColor: '#fecaca !important',
+        },
+      },
+    },
+  ];
+
   return (
     <div className="rounded-lg border border-gray-200 bg-white shadow-sm overflow-x-auto">
       <DataTable
         columns={columns}
-        data={data}
+        data={displayData}
         highlightOnHover
         persistTableHead
         pagination
@@ -174,6 +244,7 @@ const InventoryTable: React.FC<InventoryTableProps> = ({ data }) => {
         paginationRowsPerPageOptions={[50, 100, 200]}
         keyField="_id"
         customStyles={modernStyles}
+        conditionalRowStyles={conditionalRowStyles}
         striped
       />
     </div>
