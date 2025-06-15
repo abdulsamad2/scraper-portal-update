@@ -1,8 +1,4 @@
 'use server';
-
-import * as csv from 'fast-csv';
-import fs from 'fs';
-import path from 'path';
 import dbConnect from '../lib/dbConnect';
 import { ConsecutiveGroup } from '../models/seatModel';
 import { Event } from '../models/eventModel';
@@ -45,11 +41,12 @@ const csvColumns = [
   { id: 'event_name', title: 'event_name' },
   { id: 'venue_name', title: 'venue_name' },
   { id: 'event_date', title: 'event_date' },
-  { id: 'mapping_id', title: 'event_id' },
+  { id: 'event_id', title: 'event_id' },
   { id: 'quantity', title: 'quantity' },
   { id: 'section', title: 'section' },
   { id: 'row', title: 'row' },
   { id: 'seats', title: 'seats' },
+  { id: 'barcodes', title: 'barcodes' },
   { id: 'internal_notes', title: 'internal_notes' },
   { id: 'public_notes', title: 'public_notes' },
   { id: 'tags', title: 'tags' },
@@ -63,9 +60,11 @@ const csvColumns = [
   { id: 'instant_transfer', title: 'instant_transfer' },
   { id: 'files_available', title: 'files_available' },
   { id: 'split_type', title: 'split_type' },
+  { id: 'custom_split', title: 'custom_split' },
   { id: 'stock_type', title: 'stock_type' },
   { id: 'zone', title: 'zone' },
   { id: 'shown_quantity', title: 'shown_quantity' },
+  { id: 'passthrough', title: 'passthrough' },
 ];
 
 export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0) {
@@ -108,9 +107,10 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
       'inventory.section': 1,
       'inventory.row': 1,
       'seats.number': 1,
+      'inventory.barcodes': 1,
+      'inventory.tags': 1,
       'inventory.notes': 1,
       'inventory.publicNotes': 1,
-      'inventory.tags': 1,
       'inventory.listPrice': 1,
       'inventory.face_price': 1,
       'inventory.taxed_cost': 1,
@@ -121,10 +121,11 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
       'inventory.instant_transfer': 1,
       'inventory.files_available': 1,
       'inventory.splitType': 1,
+      'inventory.custom_split': 1,
       'inventory.stockType': 1,
       'inventory.zone': 1,
       'inventory.shown_quantity': 1,
-   
+      'inventory.passthrough': 1,
     };
 
     // Use cursor for memory-efficient streaming
@@ -136,42 +137,42 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
     // Process documents in batches for better memory management
     for (let doc = await cursor.next(); doc != null; doc = await cursor.next()) {
       const inventory = doc.inventory;
+         
       
       // Pre-compute expensive operations
       const seatsString = doc.seats?.length > 0 ? 
         doc.seats.map((seat: { number: string | number }) => seat.number).join(',') : '';
       const eventDateString = doc.event_date ? 
-        new Date(doc.event_date).toISOString().slice(0, 19) : '';
+        new Date(doc.event_date).toISOString() : '';
       const inHandDateString = inventory?.inHandDate ? 
         new Date(inventory.inHandDate).toISOString().slice(0, 10) : '';
 
       records.push({
-        inventory_id: inventory?.inventoryId || 0,
+        inventory_id: inventory?.inventoryId,
         event_name: doc.event_name,
         venue_name: doc.venue_name,
         event_date: eventDateString,
-        mapping_id: doc.mapping_id,
+        event_id: doc.mapping_id,
         quantity: inventory?.quantity,
         section: inventory?.section,
         row: inventory?.row,
         seats: seatsString,
         internal_notes: inventory?.notes,
         public_notes: inventory?.publicNotes,
-        tags: inventory?.tags || "",
         list_price: inventory?.listPrice,
         face_price: inventory?.cost,
         taxed_cost: inventory?.cost,
         cost: inventory?.cost,
         hide_seats: inventory?.hideSeatNumbers ? "Y" : "N",
-        in_hand: inventory?.in_hand ? "N" : "N",
+        in_hand: inventory?.in_hand ? "Y" : "N",
         in_hand_date: inHandDateString,
         instant_transfer: inventory?.instant_transfer ? "Y" : "N",
-        files_available: inventory?.files_available ? "Y" : "N",
+        files_available: "Y",
         split_type: inventory?.splitType || "ANY",
+        custom_split: inventory?.custom_split || "",
         stock_type: inventory?.stockType || "ELECTRONIC",
-        zone: inventory?.zone ? "Y" : "N",
-        shown_quantity: inventory?.shown_quantity || "N",
-        passthrough: inventory?.passthrough || "",
+        zone: "N",
+        shown_quantity: "",
       });
 
       processedCount++;
@@ -194,6 +195,7 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
      
      // Add data rows
      records.forEach(record => {
+
        const row = csvColumns.map(col => {
          const value = record[col.id as keyof CsvRow];
          // Escape commas and quotes in CSV values
@@ -237,22 +239,32 @@ export async function uploadCsvToSyncService(csvContent: string): Promise<{ succ
     // Upload CSV content to sync service
     const result = await syncService.uploadCsvContentToSync(csvContent);
     
+    // Log detailed server response for debugging
+    console.log('=== SERVER UPLOAD RESPONSE ===');
+    console.log('Full server response:', JSON.stringify(result, null, 2));
+    console.log('Response type:', typeof result);
+    console.log('Response keys:', Object.keys(result || {}));
+    console.log('==============================');
+    
     if ('success' in result && result.success) {
       // Update database with upload status
       await updateSchedulerSettings({
         lastUploadAt: new Date(),
         lastUploadStatus: 'success',
-        lastUploadId: result?.uploadId
+        lastUploadId: (result as { uploadId?: string })?.uploadId
       });
       
-      console.log('CSV content uploaded to sync service successfully');
+      console.log('✅ CSV content uploaded to sync service successfully');
+      console.log('Upload ID:', (result as { uploadId?: string })?.uploadId);
       
       return {
         success: true,
         message: 'CSV uploaded to sync service successfully',
-        uploadId: result.uploadId
+        uploadId: (result as { uploadId?: string }).uploadId
       };
     } else {
+      console.log('❌ Upload failed - Server response indicates failure');
+      console.log('Error message from server:', (result as { message?: string })?.message);
       throw new Error((result as { message?: string }).message || 'Upload failed');
     }
   } catch (error) {
@@ -297,7 +309,7 @@ export async function clearInventoryFromSync(): Promise<{ success: boolean; mess
       await updateSchedulerSettings({
         lastUploadAt: new Date(),
         lastUploadStatus: 'cleared',
-        lastUploadId: result.uploadId,
+        lastUploadId: (result as { uploadId?: string })?.uploadId,
         lastClearAt: new Date()
       });
       
@@ -306,10 +318,10 @@ export async function clearInventoryFromSync(): Promise<{ success: boolean; mess
       return {
         success: true,
         message: 'Inventory cleared from sync service successfully',
-        uploadId: result.uploadId
+        uploadId: (result as { uploadId?: string })?.uploadId
       };
     } else {
-      throw new Error(result.message || 'Clear inventory failed');
+      throw new Error((result as { message?: string })?.message || 'Clear inventory failed');
     }
   } catch (error) {
     console.error('Error clearing inventory from sync service:', error);
@@ -319,7 +331,7 @@ export async function clearInventoryFromSync(): Promise<{ success: boolean; mess
       await updateSchedulerSettings({
         lastUploadAt: new Date(),
         lastUploadStatus: 'clear_failed',
-        lastUploadError: error.message
+        lastUploadError: error instanceof Error ? error.message : 'Unknown error occurred'
       });
     } catch (dbError) {
       console.error('Error updating database with clear inventory status:', dbError);
@@ -327,7 +339,7 @@ export async function clearInventoryFromSync(): Promise<{ success: boolean; mess
     
     return {
       success: false,
-      message: `Failed to clear inventory from sync service: ${error.message}`
+      message: `Failed to clear inventory from sync service: ${error instanceof Error ? error.message : 'Unknown error'}`
     };
   }
 }
@@ -336,17 +348,23 @@ export async function clearInventoryFromSync(): Promise<{ success: boolean; mess
 export async function getSchedulerSettings() {
   await dbConnect();
   try {
-    return await SchedulerSettings.getSettings();
+    return await SchedulerSettings.findOne({}) || await SchedulerSettings.create({});
   } catch (error) {
     console.error('Error getting scheduler settings:', error);
     throw error;
   }
 }
 
-export async function updateSchedulerSettings(updates: any) {
+export async function updateSchedulerSettings(updates: {
+  lastUploadAt?: Date;
+  lastUploadStatus?: 'success' | 'failed' | 'cleared' | 'clear_failed';
+  lastUploadId?: string;
+  lastUploadError?: string;
+  lastClearAt?: Date;
+}) {
   await dbConnect();
   try {
-    return await SchedulerSettings.updateSettings(updates);
+    return await SchedulerSettings.findOneAndUpdate({}, updates, { new: true, upsert: true });
   } catch (error) {
     console.error('Error updating scheduler settings:', error);
     throw error;

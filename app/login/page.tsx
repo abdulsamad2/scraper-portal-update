@@ -9,12 +9,12 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const router = useRouter();
 
-  const handleSubmit = (e) => {
+  const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setError('');
 
     // Hardcoded credentials for demonstration
-    if (username === 'admin' && password === 'admin') {
+    if (username === 'helpdesk' && password === 'strongPassword@123') {
       // In a real application, you would use a secure authentication mechanism
       // For now, we'll just redirect to the dashboard
       router.push('/dashboard');

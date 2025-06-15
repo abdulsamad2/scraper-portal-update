@@ -1,7 +1,7 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { clearInventoryFromSync } from '../../../actions/csvActions';
 
-export async function POST(req: NextRequest) {
+export async function POST() {
   try {
     console.log('Starting inventory clear process...');
     

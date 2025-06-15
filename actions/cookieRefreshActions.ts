@@ -9,7 +9,7 @@ import { revalidatePath } from 'next/cache';
  * @param {object} refreshData - The data for the new cookie refresh record.
  * @returns {Promise<object>} The created record object or an error object.
  */
-export async function createCookieRefresh(refreshData) {
+export async function createCookieRefresh(refreshData: Record<string, string | number | boolean | Date>) {
   await dbConnect();
   try {
     const newRefresh = new CookieRefresh(refreshData);
@@ -18,7 +18,7 @@ export async function createCookieRefresh(refreshData) {
     return JSON.parse(JSON.stringify(savedRefresh));
   } catch (error) {
     console.error('Error creating cookie refresh record:', error);
-    return { error: error.message || 'Failed to create cookie refresh record' };
+    return { error: error instanceof Error ? error.message : 'Failed to create cookie refresh record' };
   }
 }
 
@@ -27,7 +27,7 @@ export async function createCookieRefresh(refreshData) {
  * @param {string} id - The MongoDB ID of the record to retrieve.
  * @returns {Promise<object|null>} The record object or null if not found, or an error object.
  */
-export async function getCookieRefreshById(id) {
+export async function getCookieRefreshById(id: string) {
   await dbConnect();
   try {
     const refreshRecord = await CookieRefresh.findById(id);
@@ -37,7 +37,7 @@ export async function getCookieRefreshById(id) {
     return JSON.parse(JSON.stringify(refreshRecord));
   } catch (error) {
     console.error('Error fetching cookie refresh record by ID:', error);
-    return { error: error.message || 'Failed to fetch cookie refresh record' };
+    return { error: error instanceof Error ? error.message : 'Failed to fetch cookie refresh record' };
   }
 }
 
@@ -46,7 +46,7 @@ export async function getCookieRefreshById(id) {
  * @param {string} refreshId - The unique refreshId of the record to retrieve.
  * @returns {Promise<object|null>} The record object or null if not found, or an error object.
  */
-export async function getCookieRefreshByRefreshId(refreshId) {
+export async function getCookieRefreshByRefreshId(refreshId: string) {
   await dbConnect();
   try {
     const refreshRecord = await CookieRefresh.findOne({ refreshId });
@@ -56,7 +56,7 @@ export async function getCookieRefreshByRefreshId(refreshId) {
     return JSON.parse(JSON.stringify(refreshRecord));
   } catch (error) {
     console.error('Error fetching cookie refresh record by refreshId:', error);
-    return { error: error.message || 'Failed to fetch cookie refresh record by refreshId' };
+    return { error: error instanceof Error ? error.message : 'Failed to fetch cookie refresh record by refreshId' };
   }
 }
 
@@ -71,7 +71,7 @@ export async function getCookieRefreshByRefreshId(refreshId) {
 export async function getAllCookieRefreshes(query = {}, sort = { createdAt: -1 }, limit = 50, skip = 0) {
   await dbConnect();
   try {
-    const records = await CookieRefresh.find(query).sort(sort).skip(skip).limit(limit);
+    const records = await CookieRefresh.find(query).sort(sort as { [key: string]: import('mongoose').SortOrder }).skip(skip).limit(limit);
     const totalRecords = await CookieRefresh.countDocuments(query);
     return {
       records: JSON.parse(JSON.stringify(records)),
@@ -81,7 +81,7 @@ export async function getAllCookieRefreshes(query = {}, sort = { createdAt: -1 }
     };
   } catch (error) {
     console.error('Error fetching all cookie refresh records:', error);
-    return { error: error.message || 'Failed to fetch cookie refresh records' };
+    return { error: error instanceof Error ? error.message : 'Failed to fetch cookie refresh records' };
   }
 }
 
@@ -91,7 +91,7 @@ export async function getAllCookieRefreshes(query = {}, sort = { createdAt: -1 }
  * @param {object} updateData - An object containing the fields to update.
  * @returns {Promise<object|null>} The updated record object or null if not found, or an error object.
  */
-export async function updateCookieRefresh(id, updateData) {
+export async function updateCookieRefresh(id: string, updateData: Record<string, string | number | boolean | Date>) {
   await dbConnect();
   try {
     const updatedRecord = await CookieRefresh.findByIdAndUpdate(id, updateData, {
@@ -106,7 +106,7 @@ export async function updateCookieRefresh(id, updateData) {
     return JSON.parse(JSON.stringify(updatedRecord));
   } catch (error) {
     console.error('Error updating cookie refresh record:', error);
-    return { error: error.message || 'Failed to update cookie refresh record' };
+    return { error: error instanceof Error ? error.message : 'Failed to update cookie refresh record' };
   }
 }
 
@@ -115,7 +115,7 @@ export async function updateCookieRefresh(id, updateData) {
  * @param {string} id - The MongoDB ID of the record to delete.
  * @returns {Promise<object>} A success message or an error object.
  */
-export async function deleteCookieRefresh(id) {
+export async function deleteCookieRefresh(id: string) {
   await dbConnect();
   try {
     const deletedRecord = await CookieRefresh.findByIdAndDelete(id);
@@ -126,7 +126,7 @@ export async function deleteCookieRefresh(id) {
     return { message: 'Cookie refresh record deleted successfully', success: true, deletedRecord: JSON.parse(JSON.stringify(deletedRecord)) };
   } catch (error) {
     console.error('Error deleting cookie refresh record:', error);
-    return { error: error.message || 'Failed to delete cookie refresh record', success: false };
+    return { error: error instanceof Error ? error.message : 'Failed to delete cookie refresh record', success: false };
   }
 }
 
@@ -135,11 +135,11 @@ export async function deleteCookieRefresh(id) {
  * @param {string} status - The status to filter records by.
  * @returns {Promise<Array<object>>} An array of record objects or an error object.
  */
-export async function getCookieRefreshesByStatus(status, sort = { createdAt: -1 }, limit = 50, skip = 0) {
+export async function getCookieRefreshesByStatus(status: string, sort = { createdAt: -1 }, limit = 50, skip = 0) {
   await dbConnect();
   try {
     const query = { status };
-    const records = await CookieRefresh.find(query).sort(sort).skip(skip).limit(limit);
+    const records = await CookieRefresh.find(query).sort(sort as { [key: string]: import('mongoose').SortOrder }).skip(skip).limit(limit);
     const totalRecords = await CookieRefresh.countDocuments(query);
      return {
       records: JSON.parse(JSON.stringify(records)),
@@ -149,7 +149,7 @@ export async function getCookieRefreshesByStatus(status, sort = { createdAt: -1 
     };
   } catch (error) {
     console.error('Error fetching cookie refresh records by status:', error);
-    return { error: error.message || 'Failed to fetch records by status' };
+    return { error: error instanceof Error ? error.message : 'Failed to fetch records by status' };
   }
 }
 
@@ -158,11 +158,11 @@ export async function getCookieRefreshesByStatus(status, sort = { createdAt: -1 
  * @param {string} eventId - The eventId to filter records by.
  * @returns {Promise<Array<object>>} An array of record objects or an error object.
  */
-export async function getCookieRefreshesByEventId(eventId, sort = { createdAt: -1 }, limit = 50, skip = 0) {
+export async function getCookieRefreshesByEventId(eventId: string, sort = { createdAt: -1 }, limit = 50, skip = 0) {
   await dbConnect();
   try {
     const query = { eventId };
-    const records = await CookieRefresh.find(query).sort(sort).skip(skip).limit(limit);
+    const records = await CookieRefresh.find(query).sort(sort as { [key: string]: import('mongoose').SortOrder }).skip(skip).limit(limit);
     const totalRecords = await CookieRefresh.countDocuments(query);
     return {
       records: JSON.parse(JSON.stringify(records)),
@@ -172,6 +172,6 @@ export async function getCookieRefreshesByEventId(eventId, sort = { createdAt: -
     };
   } catch (error) {
     console.error('Error fetching cookie refresh records by eventId:', error);
-    return { error: error.message || 'Failed to fetch records for eventId' };
+    return { error: error instanceof Error ? error.message : 'Failed to fetch records for eventId' };
   }
 }

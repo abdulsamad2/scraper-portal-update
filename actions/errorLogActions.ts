@@ -9,7 +9,7 @@ import { revalidatePath } from 'next/cache';
  * @param {object} logData - The data for the new error log.
  * @returns {Promise<object>} The created log object or an error object.
  */
-export async function createErrorLog(logData) {
+export async function createErrorLog(logData: Record<string, unknown>) {
   await dbConnect();
   try {
     const newLog = new ErrorLog(logData);
@@ -19,7 +19,7 @@ export async function createErrorLog(logData) {
     return JSON.parse(JSON.stringify(savedLog));
   } catch (error) {
     console.error('Error creating error log:', error);
-    return { error: error.message || 'Failed to create error log' };
+    return { error: error instanceof Error ? error.message : 'Failed to create error log' };
   }
 }
 
@@ -28,7 +28,7 @@ export async function createErrorLog(logData) {
  * @param {string} logId - The ID of the log to retrieve.
  * @returns {Promise<object|null>} The log object or null if not found, or an error object.
  */
-export async function getErrorLogById(logId) {
+export async function getErrorLogById(logId: string) {
   await dbConnect();
   try {
     const log = await ErrorLog.findById(logId);
@@ -38,7 +38,7 @@ export async function getErrorLogById(logId) {
     return JSON.parse(JSON.stringify(log));
   } catch (error) {
     console.error('Error fetching error log by ID:', error);
-    return { error: error.message || 'Failed to fetch error log' };
+    return { error: error instanceof Error ? error.message : 'Failed to fetch error log' };
   }
 }
 
@@ -53,7 +53,7 @@ export async function getErrorLogById(logId) {
 export async function getAllErrorLogs(query = {}, sort = { createdAt: -1 }, limit = 50, skip = 0) {
   await dbConnect();
   try {
-    const logs = await ErrorLog.find(query).sort(sort).skip(skip).limit(limit);
+    const logs = await ErrorLog.find(query).sort(sort as { [key: string]: 1 | -1 }).skip(skip).limit(limit);
     const totalLogs = await ErrorLog.countDocuments(query);
     return {
       logs: JSON.parse(JSON.stringify(logs)),
@@ -61,9 +61,9 @@ export async function getAllErrorLogs(query = {}, sort = { createdAt: -1 }, limi
       page: Math.floor(skip / limit) + 1,
       totalPages: Math.ceil(totalLogs / limit),
     };
-  } catch (error) {
+  } catch (error:unknown) {
     console.error('Error fetching all error logs:', error);
-    return { error: error.message || 'Failed to fetch error logs' };
+    return { error: error instanceof Error ? error.message : 'Failed to fetch error logs' };
   }
 }
 
@@ -73,7 +73,7 @@ export async function getAllErrorLogs(query = {}, sort = { createdAt: -1 }, limi
  * @param {object} updateData - An object containing the fields to update.
  * @returns {Promise<object|null>} The updated log object or null if not found, or an error object.
  */
-export async function updateErrorLog(logId, updateData) {
+export async function updateErrorLog(logId: string, updateData: object) {
   await dbConnect();
   try {
     const updatedLog = await ErrorLog.findByIdAndUpdate(logId, updateData, {
@@ -88,7 +88,7 @@ export async function updateErrorLog(logId, updateData) {
     return JSON.parse(JSON.stringify(updatedLog));
   } catch (error) {
     console.error('Error updating error log:', error);
-    return { error: error.message || 'Failed to update error log' };
+    return { error: (error as Error).message || 'Failed to update error log' };
   }
 }
 
@@ -97,7 +97,7 @@ export async function updateErrorLog(logId, updateData) {
  * @param {string} logId - The ID of the log to delete.
  * @returns {Promise<object>} A success message or an error object.
  */
-export async function deleteErrorLog(logId) {
+export async function deleteErrorLog(logId: string) {
   await dbConnect();
   try {
     const deletedLog = await ErrorLog.findByIdAndDelete(logId);
@@ -108,7 +108,7 @@ export async function deleteErrorLog(logId) {
     return { message: 'Error log deleted successfully', success: true, deletedLog: JSON.parse(JSON.stringify(deletedLog)) };
   } catch (error) {
     console.error('Error deleting error log:', error);
-    return { error: error.message || 'Failed to delete error log', success: false };
+    return { error: (error as Error).message || 'Failed to delete error log', success: false };
   }
 }
 
@@ -117,11 +117,11 @@ export async function deleteErrorLog(logId) {
  * @param {string} eventUrl - The eventUrl to filter logs by.
  * @returns {Promise<Array<object>>} An array of log objects or an error object.
  */
-export async function getErrorLogsByEventUrl(eventUrl, sort = { createdAt: -1 }, limit = 50, skip = 0) {
+export async function getErrorLogsByEventUrl(eventUrl: string, sort = { createdAt: -1 }, limit = 50, skip = 0) {
   await dbConnect();
   try {
     const query = { eventUrl };
-    const logs = await ErrorLog.find(query).sort(sort).skip(skip).limit(limit);
+    const logs = await ErrorLog.find(query).sort(sort as { [key: string]: 1 | -1 }).skip(skip).limit(limit);
     const totalLogs = await ErrorLog.countDocuments(query);
     return {
       logs: JSON.parse(JSON.stringify(logs)),
@@ -131,6 +131,6 @@ export async function getErrorLogsByEventUrl(eventUrl, sort = { createdAt: -1 },
     };
   } catch (error) {
     console.error('Error fetching error logs by eventUrl:', error);
-    return { error: error.message || 'Failed to fetch error logs for eventUrl' };
+    return { error: (error as Error).message || 'Failed to fetch error logs for eventUrl' };
   }
 }
