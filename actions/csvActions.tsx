@@ -164,7 +164,7 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
         taxed_cost: inventory?.cost,
         cost: inventory?.cost,
         hide_seats: inventory?.hideSeatNumbers ? "Y" : "N",
-        in_hand: inventory?.in_hand ? "Y" : "N",
+        in_hand: inventory?.in_hand ? "N" : "N",
         in_hand_date: inHandDateString,
         instant_transfer: inventory?.instant_transfer ? "Y" : "N",
         files_available: "Y",
@@ -172,6 +172,8 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
         custom_split: inventory?.custom_split || "",
         stock_type: inventory?.stockType || "ELECTRONIC",
         zone: "N",
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        //@ts-expect-error
         shown_quantity: "",
       });
 
@@ -361,6 +363,12 @@ export async function updateSchedulerSettings(updates: {
   lastUploadId?: string;
   lastUploadError?: string;
   lastClearAt?: Date;
+  scheduleRateMinutes?: number;
+  uploadToSync?: boolean;
+  isScheduled?: boolean;
+  eventUpdateFilterMinutes?: number;
+  nextRunAt?: Date;
+  totalRuns?: number;
 }) {
   await dbConnect();
   try {

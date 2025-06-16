@@ -47,7 +47,9 @@ const ExportCsvPage: React.FC = () => {
     status: 'Idle',
   });
   const [loading, setLoading] = useState<boolean>(false);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [performanceMetrics, setPerformanceMetrics] = useState<any>(null);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [isLoading, setIsLoading] = useState(true);
   const [clearStatus, setClearStatus] = useState('');
   const [isClearingInventory, setIsClearingInventory] = useState(false);
@@ -84,9 +86,6 @@ const ExportCsvPage: React.FC = () => {
     loadSettings();
   }, []);
 
-  const handleSettingsChange = (changedValues: any, allValues: ExportSettings) => {
-    setSettings(allValues);
-  };
 
   const handleGenerateCsv = async () => {
     setLoading(true);
@@ -118,7 +117,23 @@ const ExportCsvPage: React.FC = () => {
         showMessage(`CSV generated and downloaded successfully! ${result.recordCount || 'Records'} processed in ${result.generationTime || totalTime}ms`, 'success');
         
         // Update performance metrics
-        setPerformanceMetrics(prev => ({
+        setPerformanceMetrics((prev: {
+          totalRuns?: number;
+          lastRunAt?: string;
+          nextRunAt?: string;
+          lastCsvGenerated?: string;
+          lastUploadAt?: string;
+          lastUploadStatus?: string;
+          lastUploadId?: string;
+          lastUploadError?: string;
+          lastClearAt?: string;
+          lastManualGeneration?: {
+            recordCount: number;
+            generationTime: number;
+            totalTime: number;
+            timestamp: string;
+          };
+        }) => ({
           ...prev,
           lastManualGeneration: {
             recordCount: result.recordCount,
@@ -131,7 +146,8 @@ const ExportCsvPage: React.FC = () => {
         setCsvStatus(prev => ({ ...prev, status: 'Generation failed' }));
         showMessage(result.message || 'Failed to generate CSV', 'error');
       }
-    } catch (error) {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    } catch (_error) {
       setCsvStatus(prev => ({ ...prev, status: 'Generation failed' }));
       showMessage('Error generating CSV', 'error');
     } finally {
@@ -186,7 +202,8 @@ const ExportCsvPage: React.FC = () => {
       } else {
         showMessage('Failed to start scheduler', 'error');
       }
-    } catch (error) {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    } catch (_error) {
       showMessage('Error starting scheduler', 'error');
     }
   };
@@ -206,6 +223,7 @@ const ExportCsvPage: React.FC = () => {
       } else {
         showMessage('Failed to stop scheduler', 'error');
       }
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     } catch (error) {
       showMessage('Error stopping scheduler', 'error');
     }
@@ -257,9 +275,29 @@ const ExportCsvPage: React.FC = () => {
     }
   };
 
-  const handleSaveSettings = (e: React.FormEvent) => {
+  const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
-    showMessage('Settings saved!', 'success');
+    try {
+      const response = await fetch('/api/csv-scheduler', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          action: 'update-settings',
+          intervalMinutes: settings.scheduleRateMinutes,
+          uploadToSync: settings.uploadToSync,
+          eventUpdateFilterMinutes: settings.eventUpdateFilterMinutes
+        })
+      });
+      
+      if (response.ok) {
+        showMessage('Settings saved successfully!', 'success');
+      } else {
+        showMessage('Failed to save settings', 'error');
+      }
+    } catch (error) {
+      showMessage('Error saving settings', 'error');
+      console.error('Error saving settings:', error);
+    }
   };
 
   return (

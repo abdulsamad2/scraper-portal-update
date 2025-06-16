@@ -66,7 +66,6 @@ const EventsTableModern = memo(function EventsTableModern({ data, toggleScraping
       ),
     },
     { name: <Header title="Event Date" description="Date" />, selector: r => r.Event_DateTime, sortable: true, format: r=>formatDate(r.Event_DateTime), width:'170px' },
-    { name: <Header title="In Hand" description="In hand date" />, selector: r => r.inHandDate, sortable: true, format: r=>formatDate(r.inHandDate), width:'170px' },
     { name: <Header title="Seats" description="Total available seats" />, selector: r => seatCounts[r._id] || r.Available_Seats || 0, sortable: true, right:true, width:'120px',
       cell: r => {
         const seatCount = seatCounts[r._id];

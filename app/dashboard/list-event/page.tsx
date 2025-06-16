@@ -1,5 +1,4 @@
 "use client";
-import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import NewScraper from './NewScraper';
 
@@ -10,7 +9,7 @@ export default function ListEventPage() {
     router.push('/dashboard/events');
   };
 
-  const handleSuccess = (data) => {
+  const handleSuccess = () => {
     // Redirect to events page after successful creation
     router.push('/dashboard/events');
   };

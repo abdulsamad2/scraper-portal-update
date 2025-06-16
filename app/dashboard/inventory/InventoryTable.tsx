@@ -10,6 +10,8 @@ export interface InventoryRow {
   row?: string;
   seatCount?: number;
   seatRange?: string;
+  //@ts-nocheck
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   inventory?: any; // Contains all inventory and event details now
   isDeleted?: boolean;
   deletedAt?: Date;

@@ -15,8 +15,9 @@ export default function LoginPage() {
 
     // Hardcoded credentials for demonstration
     if (username === 'helpdesk' && password === 'strongPassword@123') {
-      // In a real application, you would use a secure authentication mechanism
-      // For now, we'll just redirect to the dashboard
+      // Set authentication cookie
+      document.cookie = 'authenticated=true; path=/; max-age=86400'; // 24 hours
+      // Redirect to the dashboard
       router.push('/dashboard');
     } else {
       setError('Invalid username or password');

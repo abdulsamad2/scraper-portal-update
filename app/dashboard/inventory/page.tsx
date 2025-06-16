@@ -4,7 +4,7 @@ import { useEffect, useState, useRef } from 'react';
 import { getConsecutiveGroupsPaginated } from '@/actions/seatActions';
 import { Loader, Package } from 'lucide-react';
 
-import InventoryTable from './InventoryTable';
+import InventoryTable, { InventoryRow } from './InventoryTable';
 
 interface FilterState {
   event: string;
@@ -19,7 +19,7 @@ interface FilterField {
 }
 
 export default function InventoryPage() {
-  const [groups, setGroups] = useState<any[]>([]);
+  const [groups, setGroups] = useState<unknown[]>([]);
   
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
@@ -47,7 +47,7 @@ export default function InventoryPage() {
       const combined = `${search} ${filters.event} ${filters.mapping} ${filters.section} ${filters.row}`.trim();
       const resp = await getConsecutiveGroupsPaginated(groupsPerPage, page, combined);
       if (!resp.error) {
-        setGroups((prev: any[]) => [...prev, ...(resp.groups || [])]);
+        setGroups((prev: unknown[]) => [...prev, ...(resp.groups || [])]);
         setTotalGroups(resp.total || 0);
         setTotalQty(resp.totalQuantity || 0);
         setHasMore((page * groupsPerPage) < (resp.total || 0));
@@ -179,7 +179,7 @@ export default function InventoryPage() {
         {paginated.length === 0 ? (
           <div className="p-8 text-center text-gray-500">No records found.</div>
         ) : (
-          <InventoryTable data={paginated} />
+          <InventoryTable data={paginated as InventoryRow[]} />
         )}
       </div>
 

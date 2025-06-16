@@ -42,7 +42,7 @@ export default function DashboardPage() {
         const errorsData = await getAllErrorLogs({}, { createdAt: -1 }, 10, 0);
 
         // Check if any of these returned an error
-        if (eventsData.error || seatsData.error || errorsData.error) {
+        if (!Array?.isArray(eventsData) || !Array.isArray(seatsData) || !errorsData.totalLogs) {
           throw new Error("Error fetching dashboard data");
         }
 
@@ -50,7 +50,12 @@ export default function DashboardPage() {
           totalEvents: Array.isArray(eventsData) ? eventsData.length : 0,
           totalSeats: Array.isArray(seatsData) ? seatsData.length : 0,
           totalErrors: errorsData.totalLogs || 0,
-          recentEvents: Array.isArray(eventsData) 
+          recentEvents: Array.isArray(eventsData) && eventsData.length > 0 && eventsData.every((event): event is EventDoc => 
+            typeof event === 'object' &&
+            'Event_DateTime' in event &&
+            '_id' in event &&
+            'Event_Name' in event &&
+            'createdAt' in event)
             ? eventsData
                 .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
                 .slice(0, 5)
