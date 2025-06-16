@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
-import { getConsecutiveGroupsPaginated } from '@/actions/seatActions';
+import { useEffect, useState } from 'react';
+import { getAllConsecutiveGroups } from '@/actions/seatActions';
 import { Loader, Package } from 'lucide-react';
 
 import InventoryTable, { InventoryRow } from './InventoryTable';
@@ -20,59 +20,86 @@ interface FilterField {
 
 export default function InventoryPage() {
   const [groups, setGroups] = useState<unknown[]>([]);
-  
+  const [filteredGroups, setFilteredGroups] = useState<unknown[]>([]);
   const [loading, setLoading] = useState(true);
-  const [page, setPage] = useState(1);
-  const groupsPerPage = 50;
   const [search, setSearch] = useState('');
   const [totalGroups, setTotalGroups] = useState(0);
   const [totalQty, setTotalQty] = useState(0);
-  const loadMoreRef = useRef<HTMLDivElement>(null);
-  const [hasMore, setHasMore] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
   const [filters, setFilters] = useState<FilterState>({ event: '', mapping: '', section: '', row: '' });
+  
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(50);
+  const [paginatedData, setPaginatedData] = useState<unknown[]>([]);
 
-  // Reset when search changes
-  useEffect(() => {
-    setGroups([]);
-    setPage(1);
-    setHasMore(true);
-  }, [search]);
-
-  // Fetch page data
+  // Fetch all data once
   useEffect(() => {
     const load = async () => {
-      if (!hasMore) return;
-      const combined = `${search} ${filters.event} ${filters.mapping} ${filters.section} ${filters.row}`.trim();
-      const resp = await getConsecutiveGroupsPaginated(groupsPerPage, page, combined);
-      if (!resp.error) {
-        setGroups((prev: unknown[]) => [...prev, ...(resp.groups || [])]);
-        setTotalGroups(resp.total || 0);
-        setTotalQty(resp.totalQuantity || 0);
-        setHasMore((page * groupsPerPage) < (resp.total || 0));
+      try {
+        const resp = await getAllConsecutiveGroups();
+        if (Array.isArray(resp)) {
+          setGroups(resp);
+          setFilteredGroups(resp);
+          setTotalGroups(resp.length);
+          setTotalQty(resp.reduce((sum: number, group: any) => sum + (group.seatCount || 0), 0));
+        }
+      } catch (error) {
+        console.error('Error fetching inventory:', error);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
-      setLoadingMore(false);
     };
-    setLoadingMore(true);
     load();
-  }, [page, search, filters, hasMore]);
+  }, []);
 
-  // IntersectionObserver for infinite scroll
+  // Filter data based on search and filters
   useEffect(() => {
-    const sentinel = loadMoreRef.current;
-    if (!sentinel) return;
-    const observer = new IntersectionObserver(entries => {
-      if (entries[0].isIntersecting && hasMore && !loadingMore) {
-        setPage(prev => prev + 1);
-      }
-    }, { rootMargin: '200px' });
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, [hasMore, loadingMore]);
+    let filtered = groups;
+    
+    if (search || Object.values(filters).some(f => f)) {
+      filtered = groups.filter((group: any) => {
+        const searchLower = search.toLowerCase();
+        const eventMatch = !filters.event || group.inventory?.event_name?.toLowerCase().includes(filters.event.toLowerCase());
+        const mappingMatch = !filters.mapping || group.inventory?.mapping_id?.toLowerCase().includes(filters.mapping.toLowerCase());
+        const sectionMatch = !filters.section || group.section?.toLowerCase().includes(filters.section.toLowerCase()) || group.inventory?.section?.toLowerCase().includes(filters.section.toLowerCase());
+        const rowMatch = !filters.row || group.row?.toLowerCase().includes(filters.row.toLowerCase()) || group.inventory?.row?.toLowerCase().includes(filters.row.toLowerCase());
+        
+        const generalSearch = !search || 
+          group.inventory?.event_name?.toLowerCase().includes(searchLower) ||
+          group.inventory?.venue_name?.toLowerCase().includes(searchLower) ||
+          group.section?.toLowerCase().includes(searchLower) ||
+          group.row?.toLowerCase().includes(searchLower) ||
+          group.inventory?.section?.toLowerCase().includes(searchLower) ||
+          group.inventory?.row?.toLowerCase().includes(searchLower);
+        
+        return eventMatch && mappingMatch && sectionMatch && rowMatch && generalSearch;
+      });
+    }
+    
+    setFilteredGroups(filtered);
+    setTotalGroups(filtered.length);
+    setTotalQty(filtered.reduce((sum: number, group: any) => sum + (group.seatCount || 0), 0));
+    setCurrentPage(1); // Reset to first page when filters change
+  }, [search, filters, groups]);
 
-  const paginated = groups; // data already contains loaded pages
+  // Paginate filtered data
+  useEffect(() => {
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    const endIndex = startIndex + itemsPerPage;
+    setPaginatedData(filteredGroups.slice(startIndex, endIndex));
+  }, [filteredGroups, currentPage, itemsPerPage]);
+
+  const totalPages = Math.ceil(filteredGroups.length / itemsPerPage);
+
+  const handlePageChange = (page: number) => {
+    setCurrentPage(page);
+  };
+
+  const handleItemsPerPageChange = (items: number) => {
+    setItemsPerPage(items);
+    setCurrentPage(1);
+  };
 
 
   if (loading) {
@@ -109,10 +136,8 @@ export default function InventoryPage() {
           <input
             type="text"
             placeholder="Quick search..."
-            onChange={(e) => {
-              setSearch(e.target.value);
-              setPage(1);
-            }}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
             className="border rounded-md px-3 py-2 w-64"
           />
           <button
@@ -143,12 +168,7 @@ export default function InventoryPage() {
               ))}
               <div className="flex gap-2 justify-end">
                 <button
-                  onClick={() => {
-                    const combined = Object.values(filters).join(" ");
-                    setSearch(combined);
-                    setPage(1);
-                    setShowFilters(false);
-                  }}
+                  onClick={() => setShowFilters(false)}
                   className="bg-blue-600 text-white px-4 py-2 rounded-md text-sm"
                 >
                   Apply
@@ -162,7 +182,6 @@ export default function InventoryPage() {
                       row: "",
                     });
                     setSearch("");
-                    setPage(1);
                     setShowFilters(false);
                   }}
                   className="border px-4 py-2 rounded-md text-sm"
@@ -176,19 +195,101 @@ export default function InventoryPage() {
       </div>
 
       <div className="bg-white shadow-md rounded-lg overflow-hidden">
-        {paginated.length === 0 ? (
+        {filteredGroups.length === 0 ? (
           <div className="p-8 text-center text-gray-500">No records found.</div>
         ) : (
-          <InventoryTable data={paginated as InventoryRow[]} />
+          <>
+            <InventoryTable data={paginatedData as InventoryRow[]} />
+            
+            {/* Pagination Controls */}
+            <div className="px-6 py-4 border-t border-gray-200 bg-gray-50">
+              <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
+                <div className="flex items-center gap-4">
+                  <span className="text-sm text-gray-700">
+                    Showing {((currentPage - 1) * itemsPerPage) + 1} to {Math.min(currentPage * itemsPerPage, filteredGroups.length)} of {filteredGroups.length} entries
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <label className="text-sm text-gray-700">Show:</label>
+                    <select 
+                      value={itemsPerPage} 
+                      onChange={(e) => handleItemsPerPageChange(Number(e.target.value))}
+                      className="border rounded px-2 py-1 text-sm"
+                    >
+                      <option value={25}>25</option>
+                      <option value={50}>50</option>
+                      <option value={100}>100</option>
+                      <option value={200}>200</option>
+                    </select>
+                    <span className="text-sm text-gray-700">per page</span>
+                  </div>
+                </div>
+                
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handlePageChange(1)}
+                    disabled={currentPage === 1}
+                    className="px-3 py-1 text-sm border rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100"
+                  >
+                    First
+                  </button>
+                  <button
+                    onClick={() => handlePageChange(currentPage - 1)}
+                    disabled={currentPage === 1}
+                    className="px-3 py-1 text-sm border rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100"
+                  >
+                    Previous
+                  </button>
+                  
+                  {/* Page numbers */}
+                  <div className="flex gap-1">
+                    {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                      let pageNum;
+                      if (totalPages <= 5) {
+                        pageNum = i + 1;
+                      } else if (currentPage <= 3) {
+                        pageNum = i + 1;
+                      } else if (currentPage >= totalPages - 2) {
+                        pageNum = totalPages - 4 + i;
+                      } else {
+                        pageNum = currentPage - 2 + i;
+                      }
+                      
+                      return (
+                        <button
+                          key={pageNum}
+                          onClick={() => handlePageChange(pageNum)}
+                          className={`px-3 py-1 text-sm border rounded ${
+                            currentPage === pageNum
+                              ? 'bg-blue-600 text-white border-blue-600'
+                              : 'hover:bg-gray-100'
+                          }`}
+                        >
+                          {pageNum}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  
+                  <button
+                    onClick={() => handlePageChange(currentPage + 1)}
+                    disabled={currentPage === totalPages}
+                    className="px-3 py-1 text-sm border rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100"
+                  >
+                    Next
+                  </button>
+                  <button
+                    onClick={() => handlePageChange(totalPages)}
+                    disabled={currentPage === totalPages}
+                    className="px-3 py-1 text-sm border rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100"
+                  >
+                    Last
+                  </button>
+                </div>
+              </div>
+            </div>
+          </>
         )}
       </div>
-
-      {loadingMore && (
-        <div className="flex items-center justify-center py-4">
-          <Loader className="w-5 h-5 animate-spin text-blue-600" />
-        </div>
-      )}
-      <div ref={loadMoreRef} className="h-2" />
     </div>
   );
 }
