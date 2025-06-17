@@ -6,6 +6,23 @@ import { Loader, Package } from 'lucide-react';
 
 import InventoryTable, { InventoryRow } from './InventoryTable';
 
+interface InventoryGroup {
+  _id: string;
+  section?: string;
+  row?: string;
+  seatCount?: number;
+  seatRange?: string;
+  inventory?: {
+    event_name?: string;
+    venue_name?: string;
+    mapping_id?: string;
+    section?: string;
+    row?: string;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
 interface FilterState {
   event: string;
   mapping: string;
@@ -19,8 +36,8 @@ interface FilterField {
 }
 
 export default function InventoryPage() {
-  const [groups, setGroups] = useState<unknown[]>([]);
-  const [filteredGroups, setFilteredGroups] = useState<unknown[]>([]);
+  const [groups, setGroups] = useState<InventoryGroup[]>([]);
+  const [filteredGroups, setFilteredGroups] = useState<InventoryGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [totalGroups, setTotalGroups] = useState(0);
@@ -31,7 +48,7 @@ export default function InventoryPage() {
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(50);
-  const [paginatedData, setPaginatedData] = useState<unknown[]>([]);
+  const [paginatedData, setPaginatedData] = useState<InventoryGroup[]>([]);
 
   // Fetch all data once
   useEffect(() => {
@@ -39,10 +56,11 @@ export default function InventoryPage() {
       try {
         const resp = await getAllConsecutiveGroups();
         if (Array.isArray(resp)) {
-          setGroups(resp);
-          setFilteredGroups(resp);
-          setTotalGroups(resp.length);
-          setTotalQty(resp.reduce((sum: number, group: any) => sum + (group.seatCount || 0), 0));
+          const typedResp = resp as InventoryGroup[];
+          setGroups(typedResp);
+          setFilteredGroups(typedResp);
+          setTotalGroups(typedResp.length);
+          setTotalQty(typedResp.reduce((sum: number, group: InventoryGroup) => sum + (group.seatCount || 0), 0));
         }
       } catch (error) {
         console.error('Error fetching inventory:', error);
@@ -58,7 +76,7 @@ export default function InventoryPage() {
     let filtered = groups;
     
     if (search || Object.values(filters).some(f => f)) {
-      filtered = groups.filter((group: any) => {
+      filtered = groups.filter((group: InventoryGroup) => {
         const searchLower = search.toLowerCase();
         const eventMatch = !filters.event || group.inventory?.event_name?.toLowerCase().includes(filters.event.toLowerCase());
         const mappingMatch = !filters.mapping || group.inventory?.mapping_id?.toLowerCase().includes(filters.mapping.toLowerCase());
@@ -79,7 +97,7 @@ export default function InventoryPage() {
     
     setFilteredGroups(filtered);
     setTotalGroups(filtered.length);
-    setTotalQty(filtered.reduce((sum: number, group: any) => sum + (group.seatCount || 0), 0));
+    setTotalQty(filtered.reduce((sum: number, group: InventoryGroup) => sum + (group.seatCount || 0), 0));
     setCurrentPage(1); // Reset to first page when filters change
   }, [search, filters, groups]);
 
