@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from 'react';
 import { getAllConsecutiveGroups } from '@/actions/seatActions';
-import { Loader, Package } from 'lucide-react';
+import { Package } from 'lucide-react';
 
-import InventoryTable, { InventoryRow } from './InventoryTable';
+import OptimizedInventoryTable, { InventoryRow } from './OptimizedInventoryTable';
 
 interface InventoryGroup {
   _id: string;
@@ -49,6 +49,10 @@ export default function InventoryPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(50);
   const [paginatedData, setPaginatedData] = useState<InventoryGroup[]>([]);
+  
+  // Sorting state
+  const [sortField, setSortField] = useState<string>('');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
 
   // Fetch all data once
   useEffect(() => {
@@ -71,7 +75,7 @@ export default function InventoryPage() {
     load();
   }, []);
 
-  // Filter data based on search and filters
+  // Filter and sort data based on search, filters, and sorting
   useEffect(() => {
     let filtered = groups;
     
@@ -95,11 +99,15 @@ export default function InventoryPage() {
       });
     }
     
-    setFilteredGroups(filtered);
-    setTotalGroups(filtered.length);
-    setTotalQty(filtered.reduce((sum: number, group: InventoryGroup) => sum + (group.seatCount || 0), 0));
+    // Apply sorting
+    const sorted = sortData(filtered);
+    
+    setFilteredGroups(sorted);
+    setTotalGroups(sorted.length);
+    setTotalQty(sorted.reduce((sum: number, group: InventoryGroup) => sum + (group.seatCount || 0), 0));
     setCurrentPage(1); // Reset to first page when filters change
-  }, [search, filters, groups]);
+    
+  }, [search, filters, groups, sortField, sortDirection]);
 
   // Paginate filtered data
   useEffect(() => {
@@ -119,11 +127,149 @@ export default function InventoryPage() {
     setCurrentPage(1);
   };
 
+  // Sorting function
+  const handleSort = (field: string) => {
+    if (sortField === field) {
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortDirection('asc');
+    }
+  };
+
+  // Sort data function
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const sortData = (data: InventoryGroup[]) => {
+    if (!sortField) return data;
+    
+    return [...data].sort((a, b) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let aValue: any;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let bValue: any;
+      
+      // Handle nested inventory fields
+      if (sortField.includes('_') || ['event_name', 'venue_name', 'event_date', 'inventoryId', 'stockType', 'cost', 'listPrice', 'hideSeatNumbers', 'instant_transfer', 'files_available'].includes(sortField)) {
+        aValue = a.inventory?.[sortField];
+        bValue = b.inventory?.[sortField];
+      } else {
+        aValue = a[sortField as keyof InventoryGroup];
+        bValue = b[sortField as keyof InventoryGroup];
+      }
+      
+      // Handle undefined/null values
+      if (aValue == null && bValue == null) return 0;
+      if (aValue == null) return sortDirection === 'asc' ? 1 : -1;
+      if (bValue == null) return sortDirection === 'asc' ? -1 : 1;
+      
+      // Handle different data types
+      if (typeof aValue === 'string' && typeof bValue === 'string') {
+        const comparison = aValue.toLowerCase().localeCompare(bValue.toLowerCase());
+        return sortDirection === 'asc' ? comparison : -comparison;
+      }
+      
+      if (typeof aValue === 'number' && typeof bValue === 'number') {
+        return sortDirection === 'asc' ? aValue - bValue : bValue - aValue;
+      }
+      
+      // Handle dates
+      if (sortField === 'event_date') {
+        const dateA = new Date(aValue).getTime();
+        const dateB = new Date(bValue).getTime();
+        return sortDirection === 'asc' ? dateA - dateB : dateB - dateA;
+      }
+      
+      // Handle boolean values
+      if (typeof aValue === 'boolean' && typeof bValue === 'boolean') {
+        if (aValue === bValue) return 0;
+        return sortDirection === 'asc' ? (aValue ? 1 : -1) : (aValue ? -1 : 1);
+      }
+      
+      // Default string comparison
+      const comparison = String(aValue).localeCompare(String(bValue));
+      return sortDirection === 'asc' ? comparison : -comparison;
+    });
+  };
+
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <Loader className="w-8 h-8 animate-spin text-blue-600" />
+      <div className="space-y-6">
+        <div className="flex items-center gap-2">
+          <div className="w-6 h-6 bg-gray-200 rounded animate-pulse"></div>
+          <div className="w-24 h-8 bg-gray-200 rounded animate-pulse"></div>
+        </div>
+        
+        {/* Summary cards skeleton */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {[...Array(4)].map((_, i) => (
+            <div key={i} className="bg-white shadow-sm rounded-lg p-4 flex flex-col items-center">
+              <div className="w-16 h-3 bg-gray-200 rounded animate-pulse mb-2"></div>
+              <div className="w-12 h-8 bg-gray-200 rounded animate-pulse"></div>
+            </div>
+          ))}
+        </div>
+
+        {/* Search and filters skeleton */}
+        <div className="flex flex-col md:flex-row md:justify-between items-start md:items-center gap-3">
+          <div className="flex gap-2 items-center">
+            <div className="w-64 h-10 bg-gray-200 rounded-md animate-pulse"></div>
+            <div className="w-20 h-10 bg-gray-200 rounded-md animate-pulse"></div>
+          </div>
+        </div>
+
+        {/* Table skeleton */}
+        <div className="bg-white shadow-md rounded-lg overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gradient-to-r from-gray-50 to-gray-100 border-b-2 border-gray-200">
+                <tr>
+                  {[...Array(16)].map((_, i) => (
+                    <th key={i} className="px-6 py-4 text-left">
+                      <div className="w-20 h-4 bg-gray-200 rounded animate-pulse"></div>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-100">
+                {[...Array(10)].map((_, rowIndex) => (
+                  <tr key={rowIndex} className={rowIndex % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}>
+                    {[...Array(16)].map((_, colIndex) => (
+                      <td key={colIndex} className="px-6 py-4">
+                        <div className={`h-4 bg-gray-200 rounded animate-pulse ${
+                          colIndex === 0 ? 'w-32' : 
+                          colIndex === 1 ? 'w-24' :
+                          colIndex === 2 ? 'w-28' :
+                          colIndex === 6 || colIndex === 9 || colIndex === 10 ? 'w-16' :
+                          'w-20'
+                        }`}></div>
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          
+          {/* Pagination skeleton */}
+          <div className="px-6 py-4 border-t border-gray-200 bg-gray-50">
+            <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
+              <div className="flex items-center gap-4">
+                <div className="w-48 h-4 bg-gray-200 rounded animate-pulse"></div>
+                <div className="flex items-center gap-2">
+                  <div className="w-12 h-4 bg-gray-200 rounded animate-pulse"></div>
+                  <div className="w-16 h-8 bg-gray-200 rounded animate-pulse"></div>
+                  <div className="w-16 h-4 bg-gray-200 rounded animate-pulse"></div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                {[...Array(7)].map((_, i) => (
+                  <div key={i} className="w-12 h-8 bg-gray-200 rounded animate-pulse"></div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     );
   }
@@ -217,7 +363,12 @@ export default function InventoryPage() {
           <div className="p-8 text-center text-gray-500">No records found.</div>
         ) : (
           <>
-            <InventoryTable data={paginatedData as InventoryRow[]} />
+            <OptimizedInventoryTable 
+              data={paginatedData as InventoryRow[]} 
+              sortField={sortField}
+              sortDirection={sortDirection}
+              onSort={handleSort}
+            />
             
             {/* Pagination Controls */}
             <div className="px-6 py-4 border-t border-gray-200 bg-gray-50">
