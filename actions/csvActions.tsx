@@ -157,7 +157,7 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
         section: inventory?.section,
         row: inventory?.row,
         seats: seatsString,
-        internal_notes: inventory?.notes,
+        internal_notes: "-tnow -tmplus",
         public_notes: inventory?.publicNotes,
         list_price: inventory?.listPrice.toFixed(2),
         face_price: inventory?.cost.toFixed(2),
