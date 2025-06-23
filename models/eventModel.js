@@ -71,5 +71,6 @@ const eventSchema = new mongoose.Schema(
 
 // Indexes
 eventSchema.index({ URL: 1 }, { unique: true });
+eventSchema.index({ Last_Updated: 1 }); // Index for CSV generation filtering
 
 export const Event = mongoose.models.Event || mongoose.model("Event", eventSchema);

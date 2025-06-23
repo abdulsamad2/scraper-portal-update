@@ -3,35 +3,60 @@
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { getAllEvents, updateEvent, updateAllEvents, deleteEvent } from '@/actions/eventActions';
-import { Calendar, Plus, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Calendar, Plus, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react';
 import EventsTableModern from './EventsTableModern.jsx';
 
 export default function EventsPage() {
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [loadingSeatCounts] = useState(false);
+  const [lastRefresh, setLastRefresh] = useState(new Date());
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
   const [eventsPerPage, setEventsPerPage] = useState(25);
 
-  useEffect(() => {
-    async function fetchEvents() {
-      try {
-        const data = await getAllEvents();
-        if (Array.isArray(data)) {
-          setEvents(data);
-        } else {
-          console.error('Error fetching events:', data.error);
+  // Function to fetch events
+  const fetchEvents = async (isRefresh = false) => {
+    try {
+      if (!isRefresh) {
+        setLoading(true);
+      } else {
+        setRefreshing(true);
+      }
+      const data = await getAllEvents();
+      if (Array.isArray(data)) {
+        setEvents(data);
+        if (isRefresh) {
+          setLastRefresh(new Date());
         }
-      } catch (err) {
-        console.error('Failed to fetch events:', err);
-      } finally {
+      } else {
+        console.error('Error fetching events:', data.error);
+      }
+    } catch (err) {
+      console.error('Failed to fetch events:', err);
+    } finally {
+      if (!isRefresh) {
         setLoading(false);
+      } else {
+        setRefreshing(false);
       }
     }
+  };
 
+  // Initial fetch
+  useEffect(() => {
     fetchEvents();
+  }, []);
+
+  // Auto-refresh every 60 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchEvents(true);
+    }, 60000); // 60 seconds
+
+    return () => clearInterval(interval);
   }, []);
 
   // Filter events based on search term
@@ -73,8 +98,7 @@ export default function EventsPage() {
       
       if (result.success) {
         // Refresh events to reflect the changes
-        const updatedEvents = await getAllEvents();
-        setEvents(updatedEvents);
+        await fetchEvents(true);
         
         console.log(`Successfully ${newStatus ? 'stopped' : 'started'} scraping for all events`);
       } else {
@@ -142,20 +166,39 @@ export default function EventsPage() {
         <div className="flex items-baseline gap-3">
             <h1 className="text-2xl font-bold">Events</h1>
             <span className="text-sm text-gray-600">{activeCount} active / {totalCount} total</span>
+            <span className="text-xs text-gray-500 flex items-center gap-1">
+              Last updated: {lastRefresh.toLocaleTimeString()}
+              {refreshing && (
+                <>
+                  <span className="text-blue-500">•</span>
+                  <span className="text-blue-500">Refreshing...</span>
+                </>
+              )}
+            </span>
           </div>
-        <Link 
-          href="/dashboard/list-event"
-          className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-        >
-          <Plus className="w-4 h-4 mr-1" />
-          Add Event
-        </Link>
-        <button
-          onClick={toggleScrapingAll}
-          className={`inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white ${allActive ? 'bg-red-600 hover:bg-red-700 focus:ring-red-500' : 'bg-green-600 hover:bg-green-700 focus:ring-green-500'}`}
-        >
-          {allActive ? 'Stop Scraping All' : 'Start Scraping All'}
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => fetchEvents(true)}
+            disabled={refreshing}
+            className="inline-flex items-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <RefreshCw className={`w-4 h-4 mr-1 ${refreshing ? 'animate-spin' : ''}`} />
+            {refreshing ? 'Refreshing...' : 'Refresh'}
+          </button>
+          <Link 
+            href="/dashboard/list-event"
+            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+          >
+            <Plus className="w-4 h-4 mr-1" />
+            Add Event
+          </Link>
+          <button
+            onClick={toggleScrapingAll}
+            className={`inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white ${allActive ? 'bg-red-600 hover:bg-red-700 focus:ring-red-500' : 'bg-green-600 hover:bg-green-700 focus:ring-green-500'}`}
+          >
+            {allActive ? 'Stop Scraping All' : 'Start Scraping All'}
+          </button>
+        </div>
        
       </div>
 

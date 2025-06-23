@@ -1,6 +1,6 @@
 "use client";
-import React, { useState } from "react";
-import { createEvent } from "@/actions/eventActions";
+import React, { useState, useEffect } from "react";
+import { createEvent, updateEvent } from "@/actions/eventActions";
 import {
   Calendar,
   Globe,
@@ -16,7 +16,7 @@ import {
   Loader,
 } from "lucide-react";
 
-const NewScraper = ({ onCancel, onSuccess }) => {
+const NewScraper = ({ onCancel, onSuccess, initialData = null, isEdit = false }) => {
   const [formData, setFormData] = useState({
     URL: "",
     Event_ID: "",
@@ -30,6 +30,31 @@ const NewScraper = ({ onCancel, onSuccess }) => {
     mapping_id: "",
     Percentage_Increase_ListCost: 0,
   });
+
+  // Load initial data for edit mode
+  useEffect(() => {
+    if (isEdit && initialData) {
+      const formatDateForInput = (dateString) => {
+        if (!dateString) return "";
+        const date = new Date(dateString);
+        return date.toISOString().slice(0, 16); // Format for datetime-local input
+      };
+
+      setFormData({
+        URL: initialData.URL || "",
+        Event_ID: initialData.Event_ID || "",
+        Event_Name: initialData.Event_Name || "",
+        Event_DateTime: formatDateForInput(initialData.Event_DateTime),
+        Venue: initialData.Venue || "",
+        Zone: initialData.Zone || "General",
+        Available_Seats: initialData.Available_Seats || 0,
+        Skip_Scraping: initialData.Skip_Scraping !== undefined ? initialData.Skip_Scraping : true,
+        inHandDate: formatDateForInput(initialData.inHandDate),
+        mapping_id: initialData.mapping_id || "",
+        Percentage_Increase_ListCost: initialData.priceIncreasePercentage || 0,
+      });
+    }
+  }, [isEdit, initialData]);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -227,13 +252,18 @@ const NewScraper = ({ onCancel, onSuccess }) => {
         priceIncreasePercentage: formData.Percentage_Increase_ListCost,
       };
 
-      const result = await createEvent(eventData);
+      let result;
+      if (isEdit && initialData?._id) {
+        result = await updateEvent(initialData._id, eventData);
+      } else {
+        result = await createEvent(eventData);
+      }
 
       if (result.error) {
         throw new Error(result.error);
       }
 
-      setSuccess("Event created successfully!");
+      setSuccess(isEdit ? "Event updated successfully!" : "Event created successfully!");
 
       // Clear form and reset states
       setTimeout(() => {
@@ -261,10 +291,10 @@ const NewScraper = ({ onCancel, onSuccess }) => {
           </button>
           <div>
             <h1 className="text-xl md:text-2xl font-bold text-gray-800">
-              Add New Event
+              {isEdit ? "Edit Event" : "Add New Event"}
             </h1>
             <p className="text-sm text-gray-500">
-              Create a new event to track ticket availability
+              {isEdit ? "Update event details" : "Create a new event to track ticket availability"}
             </p>
           </div>
         </div>
@@ -803,12 +833,12 @@ const NewScraper = ({ onCancel, onSuccess }) => {
               {loading ? (
                 <>
                   <Loader className="w-4 h-4 animate-spin" />
-                  Creating...
+                  {isEdit ? "Updating..." : "Creating..."}
                 </>
               ) : (
                 <>
                   <Save className="w-4 h-4" />
-                  Start Tracking
+                  {isEdit ? "Update Event" : "Start Tracking"}
                 </>
               )}
             </button>

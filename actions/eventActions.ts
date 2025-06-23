@@ -14,8 +14,8 @@ export async function createEvent(eventData: Partial<Event>) {
   try {
     const newEvent = new Event(eventData);
     const savedEvent = await newEvent.save();
-    revalidatePath('/events'); // Adjust path if your events page is different
-    revalidatePath(`/events/${savedEvent._id}`); // Revalidate specific event page if exists
+    revalidatePath('/dashboard/events'); // Revalidate events page
+    revalidatePath(`/dashboard/events/${savedEvent._id}`); // Revalidate specific event page
     return JSON.parse(JSON.stringify(savedEvent));
   } catch (error:unknown) {
     console.error('Error creating event:', error);
@@ -28,16 +28,19 @@ export async function createEvent(eventData: Partial<Event>) {
  * @param {string} eventId - The ID of the event to retrieve.
  * @returns {Promise<object|null>} The event object or null if not found, or an error object.
  */
-export async function getEventById(eventId: string) {
+export async function getEventById(eventId: string): Promise<object | null> {
   await dbConnect();
   try {
-    const event = await Event.findById(eventId);
+    const event = await Event.findOne({
+      _id: eventId,
+    });
     if (!event) {
+      console.error('Event not found with ID:', eventId);
       return null;
     }
     return JSON.parse(JSON.stringify(event));
   } catch (error) {
-    console.error('Error fetching event by ID:', error);
+    console.error('Error fetching event by ID:', eventId, error);
     return { error: (error as Error).message || 'Failed to fetch event' };
   }
 }
@@ -73,8 +76,8 @@ export async function updateEvent(eventId: string, updateData: Partial<Event>) {
     if (!updatedEvent) {
       return null;
     }
-    revalidatePath('/events'); // Adjust path if your events page is different
-    revalidatePath(`/events/${eventId}`); // Revalidate specific event page
+    revalidatePath('/dashboard/events'); // Revalidate events page
+    revalidatePath(`/dashboard/events/${eventId}`); // Revalidate specific event page
     return JSON.parse(JSON.stringify(updatedEvent));
   } catch (error) {
     console.error('Error updating event:', error);
@@ -115,7 +118,7 @@ export async function deleteEvent(eventId: string) {
     if (!deletedEvent) {
       return { message: 'Event not found', success: false };
     }
-    revalidatePath('/events');
+    revalidatePath('/dashboard/events');
     return { message: 'Event deleted successfully', success: true, deletedEvent: JSON.parse(JSON.stringify(deletedEvent)) };
   } catch (error) {
     console.error('Error deleting event:', error);

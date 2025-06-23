@@ -37,13 +37,28 @@ export async function createConsecutiveGroup(groupData: {
 }
 
 /**
- * Retrieves all consecutive groups.
+ * Retrieves all consecutive groups with pagination and optimization.
+ * @param {number} limit - Optional limit for number of results
+ * @param {number} skip - Optional number of results to skip
  * @returns {Promise<Array<object>>} An array of group objects or an error object.
  */
-export async function getAllConsecutiveGroups() {
+export async function getAllConsecutiveGroups(limit?: number, skip?: number) {
   await dbConnect();
   try {
-    const groups = await ConsecutiveGroup.find({});
+    let query = ConsecutiveGroup.find({});
+    
+    // Add lean() for better performance - returns plain JS objects instead of Mongoose documents
+    query = query.lean();
+    
+    // Add pagination if provided
+    if (skip !== undefined) {
+      query = query.skip(skip);
+    }
+    // Set default limit to 100 if not provided
+    const resultLimit = limit !== undefined ? limit : 100;
+    query = query.limit(resultLimit);
+    
+    const groups = await query;
     return JSON.parse(JSON.stringify(groups));
   } catch (error: unknown) {
     console.error('Error fetching all consecutive groups:', error);
@@ -134,19 +149,61 @@ export async function getConsecutiveGroupsByEventId(eventId: string) {
 /**
  * Retrieves consecutive groups with pagination and optional search.
  */
-export async function getConsecutiveGroupsPaginated(limit: number = 50, page: number = 1, searchTerm: string = '') {
+interface FilterOptions {
+  event?: string;
+  mapping?: string;
+  section?: string;
+  row?: string;
+}
+
+export async function getConsecutiveGroupsPaginated(
+  limit: number = 50, 
+  page: number = 1, 
+  searchTerm: string = '',
+  filters?: FilterOptions
+) {
   await dbConnect();
   try {
     const query: Record<string, unknown> = {};
+    const conditions: Record<string, unknown>[] = [];
+    
+    // Handle general search term
     if (searchTerm) {
       const regex = new RegExp(searchTerm, 'i');
-      query.$or = [
-        { section: regex },
-        { row: regex },
-        { mapping_id: regex },
-        { event_name: regex },
-        { venue_name: regex },
-      ];
+      conditions.push({
+        $or: [
+          { section: regex },
+          { row: regex },
+          { mapping_id: regex },
+          { event_name: regex },
+          { venue_name: regex },
+        ]
+      });
+    }
+    
+    // Handle specific filters
+    if (filters) {
+      if (filters.event) {
+        const regex = new RegExp(filters.event, 'i');
+        conditions.push({ event_name: regex });
+      }
+      if (filters.mapping) {
+        const regex = new RegExp(filters.mapping, 'i');
+        conditions.push({ mapping_id: regex });
+      }
+      if (filters.section) {
+        const regex = new RegExp(filters.section, 'i');
+        conditions.push({ section: regex });
+      }
+      if (filters.row) {
+        const regex = new RegExp(filters.row, 'i');
+        conditions.push({ row: regex });
+      }
+    }
+    
+    // Combine all conditions
+    if (conditions.length > 0) {
+      query.$and = conditions;
     }
     const total = await ConsecutiveGroup.countDocuments(query);
     const qtyAgg = await ConsecutiveGroup.aggregate([

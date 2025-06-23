@@ -60,14 +60,15 @@ const ExportCsvPage: React.FC = () => {
       try {
         const response = await fetch('/api/csv-scheduler');
         if (response.ok) {
-          const dbSettings = await response.json();
+          const data = await response.json();
+          const dbSettings = data.settings;
           setSettings({
             scheduleRateMinutes: dbSettings.scheduleRateMinutes,
             uploadToSync: dbSettings.uploadToSync,
-            isScheduled: dbSettings.isScheduled,
+            isScheduled: dbSettings.isRunning,
             eventUpdateFilterMinutes: dbSettings.eventUpdateFilterMinutes || 0
           });
-          setSchedulerStatus(dbSettings.isScheduled ? 'Running' : 'Stopped');
+          setSchedulerStatus(dbSettings.isRunning ? 'Running' : 'Stopped');
           setPerformanceMetrics({
             totalRuns: dbSettings.totalRuns,
             lastRunAt: dbSettings.lastRunAt,

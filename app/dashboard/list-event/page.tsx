@@ -16,7 +16,11 @@ export default function ListEventPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <NewScraper onCancel={handleCancel} onSuccess={handleSuccess} />
+      <NewScraper
+        onCancel={handleCancel}
+        onSuccess={handleSuccess}
+        isEdit={false}
+      />
     </div>
   );
 }

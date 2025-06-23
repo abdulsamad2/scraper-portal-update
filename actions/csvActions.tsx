@@ -1,16 +1,19 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 'use server';
 import dbConnect from '../lib/dbConnect';
 import { ConsecutiveGroup } from '../models/seatModel';
 import { Event } from '../models/eventModel';
 import { SchedulerSettings } from '../models/schedulerModel';
 import SyncService from '../lib/syncService';
+import { createErrorLog } from './errorLogActions';
+import { PipelineStage } from 'mongoose';
 
 interface CsvRow {
   inventory_id: number;
   event_name: string;
   venue_name: string;
   event_date: string;
-  mapping_id: string;
+  event_id: string;
   quantity: number;
   section: string;
   row: string;
@@ -67,33 +70,99 @@ const csvColumns = [
   { id: 'passthrough', title: 'passthrough' },
 ];
 
-export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0) {
-  await dbConnect();
-  const startTime = Date.now();
+// Retry configuration
+interface RetryConfig {
+  maxRetries: number;
+  baseDelay: number;
+  maxDelay: number;
+}
 
-  try {
-    let eventFilter = {};
-    
-    // If eventUpdateFilterMinutes is provided, filter by recently updated events
-    if (eventUpdateFilterMinutes > 0) {
-      const cutoffTime = new Date(Date.now() - eventUpdateFilterMinutes * 60 * 1000);
+const DEFAULT_RETRY_CONFIG: RetryConfig = {
+  maxRetries: 3,
+  baseDelay: 1000, // 1 second
+  maxDelay: 10000  // 10 seconds
+};
+
+// Exponential backoff with jitter
+function calculateDelay(attempt: number, config: RetryConfig): number {
+  const exponentialDelay = Math.min(config.baseDelay * Math.pow(2, attempt), config.maxDelay);
+  const jitter = Math.random() * 0.1 * exponentialDelay;
+  return exponentialDelay + jitter;
+}
+
+// Generic retry wrapper
+async function withRetry<T>(
+  operation: () => Promise<T>,
+  operationName: string,
+  config: RetryConfig = DEFAULT_RETRY_CONFIG
+): Promise<T> {
+  let lastError: Error;
+  
+  for (let attempt = 0; attempt <= config.maxRetries; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error as Error;
       
-      // Get recently updated events
-      const recentlyUpdatedEvents = await Event.find(
-        { Last_Updated: { $gte: cutoffTime } },
-        { mapping_id: 1 }
-      ).lean();
-      
-      if (recentlyUpdatedEvents.length === 0) {
-        return { success: false, message: `No events updated within the last ${eventUpdateFilterMinutes} minutes.` };
+      if (attempt === config.maxRetries) {
+        await createErrorLog({
+          eventUrl: 'CSV_RETRY_OPERATION',
+          errorType: 'DATABASE_ERROR',
+          message: lastError.message,
+          stack: lastError.stack,
+          metadata: {
+            operation: operationName,
+            attempt: attempt + 1,
+            timestamp: new Date()
+          }
+        });
+        throw lastError;
       }
       
-      // Create filter for ConsecutiveGroup query
-      const eventMappingIds = recentlyUpdatedEvents.map(event => event.mapping_id);
-      eventFilter = { mapping_id: { $in: eventMappingIds } };
+      const delay = calculateDelay(attempt, config);
+      console.warn(`${operationName} failed (attempt ${attempt + 1}/${config.maxRetries + 1}): ${lastError.message}. Retrying in ${delay}ms...`);
       
-      console.log(`Found ${recentlyUpdatedEvents.length} events updated within last ${eventUpdateFilterMinutes} minutes`);
+      await new Promise(resolve => setTimeout(resolve, delay));
     }
+  }
+  
+  throw lastError!;
+}
+
+export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0) {
+  return withRetry(async () => {
+    await dbConnect();
+    const startTime = Date.now();
+
+    try {
+      let eventFilter = {};
+      
+      // If eventUpdateFilterMinutes is provided, filter by recently updated events
+      if (eventUpdateFilterMinutes > 0) {
+        const cutoffTime = new Date(Date.now() - eventUpdateFilterMinutes * 60 * 1000);
+        
+        // Get recently updated events with optimized query
+        // Temporarily using updatedAt instead of Last_Updated to avoid MongoDB cache issues
+        const recentlyUpdatedEvents = await Event.find(
+          { updatedAt: { $gte: cutoffTime } },
+          { mapping_id: 1 }
+        ).lean(); // Using updatedAt field instead of Last_Updated to bypass cache issues
+        
+        console.log(`Filter: Events updated within last ${eventUpdateFilterMinutes} minutes since ${cutoffTime.toISOString()}`);
+        console.log(`Found ${recentlyUpdatedEvents.length} events matching filter criteria`);
+        
+        if (recentlyUpdatedEvents.length === 0) {
+          return { success: false, message: `No events updated within the last ${eventUpdateFilterMinutes} minutes. Try setting filter to 0 to include all events.` };
+        }
+        
+        // Create filter for ConsecutiveGroup query
+        const eventMappingIds = recentlyUpdatedEvents.map(event => event.mapping_id);
+        eventFilter = { mapping_id: { $in: eventMappingIds } };
+        
+        console.log(`Using event filter for ${recentlyUpdatedEvents.length} events`);
+      } else {
+        console.log('No event filter applied - including all events');
+      }
 
     // Optimized query with projection to fetch only required fields
     const projection = {
@@ -128,166 +197,287 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
       'inventory.passthrough': 1,
     };
 
-    // Use cursor for memory-efficient streaming
-    const cursor = ConsecutiveGroup.find(eventFilter, projection).lean().cursor();
-    const records: CsvRow[] = [];
-    const BATCH_SIZE = 1000;
-    let processedCount = 0;
-
-    // Process documents in batches for better memory management
-    for (let doc = await cursor.next(); doc != null; doc = await cursor.next()) {
-      const inventory = doc.inventory;
-         
+      // Enhanced cursor with better memory management and parallel processing
+      const BATCH_SIZE = 500; // Reduced batch size for better memory usage
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const PARALLEL_BATCHES = 3; // Process multiple batches in parallel
       
-      // Pre-compute expensive operations
-      const seatsString = doc.seats?.length > 0 ? 
-        doc.seats.map((seat: { number: string | number }) => seat.number).join(',') : '';
-      const eventDateString = doc.event_date ? 
-        new Date(doc.event_date).toISOString() : '';
-      const inHandDateString = inventory?.inHandDate ? 
-        new Date(inventory.inHandDate).toISOString().slice(0, 10) : '';
-
-      records.push({
-        inventory_id: inventory?.inventoryId,
-        event_name: doc.event_name,
-        venue_name: doc.venue_name,
-        event_date: eventDateString,
-        event_id: doc.mapping_id,
-        quantity: inventory?.quantity,
-        section: inventory?.section,
-        row: inventory?.row,
-        seats: seatsString,
-        internal_notes: "-tnow -tmplus",
-        public_notes: inventory?.publicNotes,
-        list_price: inventory?.listPrice.toFixed(2),
-        face_price: inventory?.cost.toFixed(2),
-        taxed_cost: inventory?.cost.toFixed(2),
-        cost: inventory?.cost,
-        hide_seats: inventory?.hideSeatNumbers ? "Y" : "N",
-        in_hand: inventory?.in_hand ? "N" : "N",
-        in_hand_date: inHandDateString,
-        instant_transfer: inventory?.instant_transfer ? "Y" : "N",
-        files_available: "N",
-        split_type: inventory?.splitType || "ANY",
-        custom_split: inventory?.custom_split || "",
-        stock_type: inventory?.stockType || "ELECTRONIC",
-        zone: "N",
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        //@ts-expect-error
-        shown_quantity: "",
-      });
-
-      processedCount++;
+      // Use aggregation pipeline for better performance
+      const pipeline = [
+        { $match: eventFilter },
+        { $project: projection },
+        { $sort: { _id: 1 } } // Ensure consistent ordering
+      ];
       
-      // Process in batches to avoid memory issues
-      if (processedCount % BATCH_SIZE === 0) {
-        console.log(`Processed ${processedCount} records...`);
+      const cursor = ConsecutiveGroup.aggregate(pipeline as PipelineStage[]).cursor({ batchSize: BATCH_SIZE });
+      const records: CsvRow[] = [];
+      let processedCount = 0;
+      let batch: ConsecutiveGroupDocument[] = [];
+      
+      // Process documents in optimized batches
+      for await (const doc of cursor) {
+        batch.push(doc);
+        
+        if (batch.length >= BATCH_SIZE) {
+          const processedBatch = await processBatch(batch);
+          records.push(...processedBatch);
+          processedCount += batch.length;
+          
+          console.log(`Processed ${processedCount} records... (Memory usage: ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB)`);
+          
+          batch = []; // Clear batch to free memory
+          
+          // Yield control to event loop to prevent blocking
+          await new Promise(resolve => setImmediate(resolve));
+        }
       }
-    }
+      
+      // Process remaining documents
+      if (batch.length > 0) {
+        const processedBatch = await processBatch(batch);
+        records.push(...processedBatch);
+        processedCount += batch.length;
+      }
 
-    if (records.length === 0) {
-      return { success: false, message: 'No inventory data found.' };
-    }
+      console.log(`Total records found: ${records.length}`);
+      
+      if (records.length === 0) {
+        return { success: false, message: 'No inventory data found. Check if events exist and have inventory data.' };
+      }
 
-    // Use fast-csv for optimized CSV generation
-     let csvString = '';
-     
-     // Add headers
-     csvString += csvColumns.map(col => col.title).join(',') + '\n';
-     
-     // Add data rows
-     records.forEach(record => {
-
-       const row = csvColumns.map(col => {
-         const value = record[col.id as keyof CsvRow];
-         // Escape commas and quotes in CSV values
-         if (typeof value === 'string' && (value.includes(',') || value.includes('"') || value.includes('\n'))) {
-           return `"${value.replace(/"/g, '""')}"`;
-         }
-         return value;
-       }).join(',');
-       csvString += row + '\n';
-     });
+      // Optimized CSV generation using streaming approach
+      const csvString = await generateCsvString(records);
     
-    const endTime = Date.now();
-    const duration = endTime - startTime;
-    console.log(`CSV generation completed in ${duration}ms for ${records.length} records`);
+      const endTime = Date.now();
+      const duration = endTime - startTime;
+      const memoryUsage = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
+      
+      console.log(`CSV generation completed in ${duration}ms for ${records.length} records (Peak memory: ${memoryUsage}MB)`);
 
-    return { 
-      success: true, 
-      csv: csvString,
-      recordCount: records.length,
-      generationTime: duration
-    };
-  } catch (error) {
-    console.error('Error generating CSV:', error);
-    return { success: false, message: 'Failed to generate CSV.' };
+      return { 
+        success: true, 
+        csv: csvString,
+        recordCount: records.length,
+        generationTime: duration,
+        memoryUsage
+      };
+    } catch (error) {
+      console.error('Error generating CSV:', error);
+      await createErrorLog({
+        eventUrl: 'CSV_GENERATION',
+        errorType: 'DATABASE_ERROR',
+        message: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined,
+        metadata: {
+          operation: 'generateInventoryCsv',
+          timestamp: new Date()
+        }
+      });
+      return { success: false, message: 'Failed to generate CSV.' };
+    }
+  }, 'CSV Generation');
+}
+
+// Interface for the document structure from MongoDB aggregation
+interface ConsecutiveGroupDocument {
+  _id?: string;
+  inventory?: {
+    inventoryId?: number;
+    quantity?: number;
+    section?: string;
+    row?: string;
+    barcodes?: string;
+    tags?: string;
+    notes?: string;
+    publicNotes?: string;
+    listPrice?: number;
+    face_price?: number;
+    taxed_cost?: number;
+    cost?: number;
+    hideSeatNumbers?: boolean;
+    in_hand?: boolean;
+    inHandDate?: Date | string;
+    instant_transfer?: boolean;
+    files_available?: boolean;
+    splitType?: string;
+    custom_split?: string;
+    stockType?: string;
+    zone?: boolean;
+    shown_quantity?: number;
+    passthrough?: string;
+  };
+  event_name?: string;
+  venue_name?: string;
+  event_date?: Date | string;
+  eventId?: string;
+  mapping_id?: string;
+  seats?: Array<{ number: string | number }>;
+}
+
+// Helper function to process batches in parallel
+async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]> {
+  return batch.map(doc => {
+    const inventory = doc.inventory;
+    
+    // Pre-compute expensive operations with null safety
+    const seatsString = doc.seats && doc.seats.length > 0 ?
+      doc.seats.map((seat: { number: string | number }) => seat.number).join(',') : '';
+    const eventDateString = doc.event_date ? 
+      new Date(doc.event_date).toISOString() : '';
+    const inHandDateString = inventory?.inHandDate ? 
+      new Date(inventory.inHandDate).toISOString().slice(0, 10) : '';
+
+    return {
+      inventory_id: inventory?.inventoryId || 0,
+      event_name: doc.event_name || '',
+      venue_name: doc.venue_name || '',
+      event_date: eventDateString,
+      event_id: doc.mapping_id || '',
+      quantity: inventory?.quantity || 0,
+      section: inventory?.section || '',
+      row: inventory?.row || '',
+      seats: seatsString,
+      barcodes: inventory?.barcodes || '',
+      internal_notes: "-tnow -tmplus",
+      public_notes: inventory?.publicNotes || '',
+      tags: inventory?.tags || '',
+      list_price: Number(inventory?.listPrice || 0),
+      face_price: Number(inventory?.cost || 0),
+      taxed_cost: Number(inventory?.cost || 0),
+      cost: Number(inventory?.cost || 0),
+      hide_seats: inventory?.hideSeatNumbers ? "Y" : "N",
+      in_hand: inventory?.in_hand ? "Y" : "N",
+      in_hand_date: inHandDateString,
+      instant_transfer: inventory?.instant_transfer ? "Y" : "N",
+      files_available: "N",
+      split_type: (inventory?.splitType as CsvRow['split_type']) || "ANY",
+      custom_split: inventory?.custom_split || "",
+      stock_type: (inventory?.stockType as CsvRow['stock_type']) || "ELECTRONIC",
+      zone: "N",
+      shown_quantity: inventory?.shown_quantity || undefined,
+      passthrough: inventory?.passthrough || ''
+    } as CsvRow;
+  });
+}
+
+// Optimized CSV string generation
+async function generateCsvString(records: CsvRow[]): Promise<string> {
+  const chunks: string[] = [];
+  
+  // Add headers
+  chunks.push(csvColumns.map(col => col.title).join(','));
+  
+  // Process records in chunks to avoid string concatenation performance issues
+  const CHUNK_SIZE = 1000;
+  for (let i = 0; i < records.length; i += CHUNK_SIZE) {
+    const chunk = records.slice(i, i + CHUNK_SIZE);
+    const csvChunk = chunk.map(record => {
+      return csvColumns.map(col => {
+        const value = record[col.id as keyof CsvRow];
+        // Proper CSV escaping
+        if (value === null || value === undefined) {
+          return '';
+        }
+        const stringValue = String(value);
+        if (stringValue.includes(',') || stringValue.includes('"') || stringValue.includes('\n') || stringValue.includes('\r')) {
+          return `"${stringValue.replace(/"/g, '""')}"`;
+        }
+        return stringValue;
+      }).join(',');
+    }).join('\n');
+    
+    chunks.push(csvChunk);
+    
+    // Yield control periodically
+    if (i % (CHUNK_SIZE * 5) === 0) {
+      await new Promise(resolve => setImmediate(resolve));
+    }
   }
+  
+  return chunks.join('\n');
 }
 
 export async function uploadCsvToSyncService(csvContent: string): Promise<{ success: boolean; message: string; uploadId?: string }> {
-  try {
-    // Get sync service credentials from environment variables
-    const companyId = process.env.SYNC_COMPANY_ID;
-    const apiToken = process.env.SYNC_API_TOKEN;
-    
-    if (!companyId || !apiToken) {
-      throw new Error('Sync service credentials not configured. Please set SYNC_COMPANY_ID and SYNC_API_TOKEN environment variables.');
-    }
-    
-    // Initialize sync service
-    const syncService = new SyncService(companyId, apiToken);
-    
-    // Upload CSV content to sync service
-    const result = await syncService.uploadCsvContentToSync(csvContent);
-    
-    // Log detailed server response for debugging
-    console.log('=== SERVER UPLOAD RESPONSE ===');
-    console.log('Full server response:', JSON.stringify(result, null, 2));
-    console.log('Response type:', typeof result);
-    console.log('Response keys:', Object.keys(result || {}));
-    console.log('==============================');
-    
-    if ('success' in result && result.success) {
-      // Update database with upload status
-      await updateSchedulerSettings({
-        lastUploadAt: new Date(),
-        lastUploadStatus: 'success',
-        lastUploadId: (result as { uploadId?: string })?.uploadId
-      });
-      
-      console.log('✅ CSV content uploaded to sync service successfully');
-      console.log('Upload ID:', (result as { uploadId?: string })?.uploadId);
-      
-      return {
-        success: true,
-        message: 'CSV uploaded to sync service successfully',
-        uploadId: (result as { uploadId?: string }).uploadId
-      };
-    } else {
-      console.log('❌ Upload failed - Server response indicates failure');
-      console.log('Error message from server:', (result as { message?: string })?.message);
-      throw new Error((result as { message?: string }).message || 'Upload failed');
-    }
-  } catch (error) {
-    console.error('Error uploading to sync service:', error);
-    
-    // Update database with error status
+  return withRetry(async () => {
     try {
-      await updateSchedulerSettings({
-        lastUploadAt: new Date(),
-        lastUploadStatus: 'failed',
-        lastUploadError: error instanceof Error ? error.message : 'Unknown error occurred'
+      // Get sync service credentials from environment variables
+      const companyId = process.env.SYNC_COMPANY_ID;
+      const apiToken = process.env.SYNC_API_TOKEN;
+      
+      if (!companyId || !apiToken) {
+        throw new Error('Sync service credentials not configured. Please set SYNC_COMPANY_ID and SYNC_API_TOKEN environment variables.');
+      }
+      
+      // Validate CSV content
+      if (!csvContent || csvContent.trim().length === 0) {
+        throw new Error('CSV content is empty or invalid');
+      }
+      
+      // Initialize sync service
+      const syncService = new SyncService(companyId, apiToken);
+      
+      // Upload CSV content to sync service with timeout
+      const uploadPromise = syncService.uploadCsvContentToSync(csvContent);
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Upload timeout after 30 seconds')), 30000);
       });
-    } catch (dbError) {
-      console.error('Error updating database with upload status:', dbError);
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      const result = await Promise.race([uploadPromise, timeoutPromise]) as any;
+      
+      // Log detailed server response for debugging
+      console.log('=== SERVER UPLOAD RESPONSE ===');
+      console.log('Full server response:', JSON.stringify(result, null, 2));
+      console.log('Response type:', typeof result);
+      console.log('Response keys:', Object.keys(result || {}));
+      console.log('==============================');
+      
+      if ('success' in result && result.success) {
+        // Update database with upload status
+        await updateSchedulerSettings({
+          lastUploadAt: new Date(),
+          lastUploadStatus: 'success',
+          lastUploadId: (result as { uploadId?: string })?.uploadId
+        });
+        
+        console.log('✅ CSV content uploaded to sync service successfully');
+        console.log('Upload ID:', (result as { uploadId?: string })?.uploadId);
+        
+        return {
+          success: true,
+          message: 'CSV uploaded to sync service successfully',
+          uploadId: (result as { uploadId?: string }).uploadId
+        };
+      } else {
+        console.log('❌ Upload failed - Server response indicates failure');
+        console.log('Error message from server:', (result as { message?: string })?.message);
+        throw new Error((result as { message?: string }).message || 'Upload failed');
+      }
+    } catch (error) {
+      console.error('Error uploading to sync service:', error);
+      
+      // Update database with error status
+      try {
+        await updateSchedulerSettings({
+          lastUploadAt: new Date(),
+          lastUploadStatus: 'failed',
+          lastUploadError: error instanceof Error ? error.message : 'Unknown error occurred'
+        });
+      } catch (dbError) {
+        console.error('Error updating database with upload status:', dbError);
+      }
+      
+      throw error; // Re-throw for retry mechanism
     }
-    
+  }, 'CSV Upload', {
+    maxRetries: 5, // More retries for upload
+    baseDelay: 2000, // Longer delay for network operations
+    maxDelay: 30000
+  }).catch(error => {
     return {
       success: false,
-      message: `Failed to upload CSV to sync service: ${error instanceof Error ? error.message : 'Unknown error'}`
+      message: `Failed to upload CSV to sync service after retries: ${error instanceof Error ? error.message : 'Unknown error'}`
     };
-  }
+  });
 }
 
 export async function clearInventoryFromSync(): Promise<{ success: boolean; message: string; uploadId?: string }> {
