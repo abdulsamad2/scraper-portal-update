@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  nextjs-app:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - MONGODB_URI=${MONGODB_URI}
+      - CSV_GENERATION_FREQUENCY=${CSV_GENERATION_FREQUENCY:-6}
+      - NEXT_SERVER_ACTIONS_ENCRYPTION_KEY=${NEXT_SERVER_ACTIONS_ENCRYPTION_KEY}
+      - CSV_AUTO_START=${CSV_AUTO_START:-true}
+      - SYNC_COMPANY_ID=${SYNC_COMPANY_ID}
+      - SYNC_API_TOKEN=${SYNC_API_TOKEN}
+    env_file:
+      - .env.local
+    restart: unless-stopped
+    volumes:
+      - ./exports:/app/exports
+      - ./temp:/app/temp
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  exports:
+  temp:

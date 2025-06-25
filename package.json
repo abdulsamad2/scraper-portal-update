@@ -6,7 +6,8 @@
     "dev": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "update-pricing": "node scripts/updateEventsPricing.js"
   },
   "dependencies": {
     "@types/node-cron": "^3.0.11",
