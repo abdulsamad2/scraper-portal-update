@@ -6,6 +6,7 @@ const nextConfig: NextConfig = {
       bodySizeLimit: '100mb', // Increase body size limit for CSV operations
     },
   },
+  output: 'standalone', // Enable standalone output for Docker
 };
 
 export default nextConfig;
