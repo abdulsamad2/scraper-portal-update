@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { getAllEvents, updateEvent, updateAllEvents, deleteEvent } from '@/actions/eventActions';
-import { Calendar, Plus, ChevronLeft, ChevronRight, RefreshCw, Search, Filter, X, SlidersHorizontal } from 'lucide-react';
+import { Calendar, Plus, ChevronLeft, ChevronRight, RefreshCw, Search, X, SlidersHorizontal } from 'lucide-react';
 import EventsTableModern from './EventsTableModern.jsx';
 
 export default function EventsPage() {

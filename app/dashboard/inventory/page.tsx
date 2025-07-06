@@ -141,7 +141,7 @@ export default function InventoryPage() {
   useEffect(() => {
     setPendingSearch(search);
     setPendingFilters(filters);
-  }, []);
+  }, [search, filters]);
 
   // Sorting function
   const handleSort = (field: string) => {

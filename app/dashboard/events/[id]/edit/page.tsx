@@ -4,18 +4,18 @@ import { getEventById } from '@/actions/eventActions'
 import EditEventWrapper from './EditEventWrapper'
 
 interface PageProps {
-  params: {
+  params: Promise<{
     id: string
-  }
+  }>
 }
 
 type EventResult = {
   error?: string
-  [key: string]: any
+  [key: string]: unknown
 } | null
 
 const page = async ({ params }: PageProps) => {
-  const { id } = params
+  const { id } = await params
   
   try {
     const event = await getEventById(id) as EventResult

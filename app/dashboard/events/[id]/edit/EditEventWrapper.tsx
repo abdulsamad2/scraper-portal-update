@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import NewScraper from '@/app/dashboard/list-event/NewScraper'
 
 interface EditEventWrapperProps {
-  initialData: any
+  initialData: Record<string, unknown> | null
 }
 
 const EditEventWrapper: React.FC<EditEventWrapperProps> = ({ initialData }) => {
@@ -24,7 +24,7 @@ const EditEventWrapper: React.FC<EditEventWrapperProps> = ({ initialData }) => {
       onCancel={handleCancel} 
       onSuccess={handleSuccess} 
       isEdit={true} 
-      initialData={initialData} 
+      initialData={initialData as never} 
     />
   )
 }
