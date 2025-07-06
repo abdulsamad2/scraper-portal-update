@@ -7,8 +7,6 @@
 import { getSchedulerSettings, updateSchedulerSettings } from '@/actions/csvActions';
 import { generateInventoryCsv, uploadCsvToSyncService } from '@/actions/csvActions';
 import { createErrorLog } from '@/actions/errorLogActions';
-import fs from 'fs';
-import path from 'path';
 import { NextRequest, NextResponse } from 'next/server';
 
 // Scheduler metrics for monitoring
@@ -122,30 +120,8 @@ async function startScheduler(intervalMinutes: number, uploadToSync: boolean, ev
       generationTime = Date.now() - generationStart;
       
       if (result.success && result.csv) {
-        // Save CSV to exports directory with atomic write
-        const fileTimestamp = new Date().toISOString().replace(/[:.]/g, '-');
-        const filename = `inventory-${fileTimestamp}.csv`;
-        const exportsDir = path.join(process.cwd(), 'exports');
-        
-        // Ensure exports directory exists
-        await fs.promises.mkdir(exportsDir, { recursive: true });
-        
-        const filePath = path.join(exportsDir, filename);
-        const tempFilePath = `${filePath}.tmp`;
-        
-        // Atomic write: write to temp file first, then rename
-        await fs.promises.writeFile(tempFilePath, result.csv, 'utf8');
-        await fs.promises.rename(tempFilePath, filePath);
-        
-        // Update database with last generated CSV info
-        await updateSchedulerSettings({
-          //@ts-expect-error
-          lastCsvGenerated: filename
-        });
-        
-        const fileSize = Buffer.byteLength(result.csv, 'utf8');
-        const fileSizeMB = (fileSize / 1024 / 1024).toFixed(2);
-        console.log(`[${timestamp}] 💾 CSV saved: ${filename} (${result.recordCount} records, ${fileSizeMB}MB, generated in ${generationTime}ms)`);
+        // Skip file saving to prevent storage issues - CSV is uploaded to sync service directly
+        console.log(`[${timestamp}] ✅ CSV generated in memory (${result.recordCount} records, generated in ${generationTime}ms)`);
         
         // Upload to sync service if enabled
         if (currentSettings.uploadToSync) {

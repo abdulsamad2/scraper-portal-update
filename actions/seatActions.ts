@@ -228,3 +228,24 @@ export async function getConsecutiveGroupsPaginated(
     return { error: error instanceof Error ? error.message : 'Failed to fetch paginated groups' };
   }
 }
+
+/**
+ * Deletes all consecutive groups by eventId.
+ * @param {string} eventId - The eventId to delete groups for.
+ * @returns {Promise<object>} A success message with count of deleted groups or an error object.
+ */
+export async function deleteConsecutiveGroupsByEventId(eventId: string) {
+  await dbConnect();
+  try {
+    const deleteResult = await ConsecutiveGroup.deleteMany({ eventId: eventId });
+    revalidatePath('/seat-groups');
+    return { 
+      message: `Successfully deleted ${deleteResult.deletedCount} consecutive seat groups for event`, 
+      success: true, 
+      deletedCount: deleteResult.deletedCount 
+    };
+  } catch (error: unknown) {
+    console.error('Error deleting consecutive groups by eventId:', error);
+    return { error: error instanceof Error ? error.message : 'Failed to delete consecutive groups for event', success: false };
+  }
+}

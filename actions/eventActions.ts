@@ -3,6 +3,7 @@
 import dbConnect from '@/lib/dbConnect';
 import { Event } from '@/models/eventModel'; // Assuming models are aliased to @/models
 import { revalidatePath } from 'next/cache';
+import { deleteConsecutiveGroupsByEventId } from './seatActions';
 
 /**
  * Creates a new event.
@@ -107,19 +108,34 @@ export async function getEventByEventIdString(eventSpecificId: string) {
 
 // You might also want a delete action:
 /**
- * Deletes an event by its ID.
+ * Deletes an event by its ID and all associated consecutive seat groups.
  * @param {string} eventId - The ID of the event to delete.
  * @returns {Promise<object>} A success message or an error object.
  */
 export async function deleteEvent(eventId: string) {
   await dbConnect();
   try {
-    const deletedEvent = await Event.findByIdAndDelete(eventId);
-    if (!deletedEvent) {
+    // First, find the event to get its details before deletion
+    const eventToDelete = await Event.findById(eventId);
+    if (!eventToDelete) {
       return { message: 'Event not found', success: false };
     }
+
+    // Delete all associated consecutive seat groups first
+    const seatDeletionResult = await deleteConsecutiveGroupsByEventId(eventId);
+    
+    // Delete the event
+    const deletedEvent = await Event.findByIdAndDelete(eventId);
+    
     revalidatePath('/dashboard/events');
-    return { message: 'Event deleted successfully', success: true, deletedEvent: JSON.parse(JSON.stringify(deletedEvent)) };
+    revalidatePath('/dashboard/inventory');
+    
+    return { 
+      message: `Event deleted successfully. Also deleted ${seatDeletionResult.deletedCount || 0} associated seat groups.`, 
+      success: true, 
+      deletedEvent: JSON.parse(JSON.stringify(deletedEvent)),
+      deletedSeatGroups: seatDeletionResult.deletedCount || 0
+    };
   } catch (error) {
     console.error('Error deleting event:', error);
     return { error: (error as Error).message || 'Failed to delete event', success: false };

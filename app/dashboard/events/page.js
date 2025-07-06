@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { getAllEvents, updateEvent, updateAllEvents, deleteEvent } from '@/actions/eventActions';
-import { Calendar, Plus, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react';
+import { Calendar, Plus, ChevronLeft, ChevronRight, RefreshCw, Search, Filter, X, SlidersHorizontal } from 'lucide-react';
 import EventsTableModern from './EventsTableModern.jsx';
 
 export default function EventsPage() {
@@ -13,6 +13,24 @@ export default function EventsPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [loadingSeatCounts] = useState(false);
   const [lastRefresh, setLastRefresh] = useState(new Date());
+  const [showFilters, setShowFilters] = useState(false);
+  
+  // Advanced filter states
+  const [filters, setFilters] = useState({
+    dateFrom: '',
+    dateTo: '',
+    venue: '',
+    seatRange: {
+      min: '',
+      max: ''
+    },
+    scrapingStatus: 'all', // 'all', 'active', 'inactive'
+    createdDateFrom: '',
+    createdDateTo: '',
+    hasAvailableSeats: 'all', // 'all', 'yes', 'no'
+    sortBy: 'newest', // 'newest', 'oldest', 'name', 'date', 'seats'
+  });
+  
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
   const [eventsPerPage, setEventsPerPage] = useState(25);
@@ -59,13 +77,70 @@ export default function EventsPage() {
     return () => clearInterval(interval);
   }, []);
 
-  // Filter events based on search term
-  const filteredEvents = events.filter(event => {
-    const matchesSearch = event.Event_Name?.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                         event.Venue?.toLowerCase().includes(searchTerm.toLowerCase());
-    
-    return matchesSearch;
-  });
+  // Advanced filter function
+  const getFilteredAndSortedEvents = () => {
+    let filtered = events.filter(event => {
+      // Text search
+      const matchesSearch = !searchTerm || 
+        event.Event_Name?.toLowerCase().includes(searchTerm.toLowerCase()) || 
+        event.Venue?.toLowerCase().includes(searchTerm.toLowerCase());
+      
+      // Date range filter (event date)
+      const eventDate = new Date(event.Event_DateTime);
+      const matchesDateRange = (!filters.dateFrom || eventDate >= new Date(filters.dateFrom)) &&
+                              (!filters.dateTo || eventDate <= new Date(filters.dateTo + 'T23:59:59'));
+      
+      // Venue filter
+      const matchesVenue = !filters.venue || 
+        event.Venue?.toLowerCase().includes(filters.venue.toLowerCase());
+      
+      // Seat range filter
+      const eventSeats = event.Available_Seats || 0;
+      const matchesSeatRange = (!filters.seatRange.min || eventSeats >= parseInt(filters.seatRange.min)) &&
+                              (!filters.seatRange.max || eventSeats <= parseInt(filters.seatRange.max));
+      
+      // Scraping status filter
+      const matchesScrapingStatus = filters.scrapingStatus === 'all' ||
+        (filters.scrapingStatus === 'active' && !event.Skip_Scraping) ||
+        (filters.scrapingStatus === 'inactive' && event.Skip_Scraping);
+      
+      // Created date range filter
+      const createdDate = new Date(event.createdAt);
+      const matchesCreatedRange = (!filters.createdDateFrom || createdDate >= new Date(filters.createdDateFrom)) &&
+                                 (!filters.createdDateTo || createdDate <= new Date(filters.createdDateTo + 'T23:59:59'));
+      
+      // Available seats filter
+      const matchesAvailableSeats = filters.hasAvailableSeats === 'all' ||
+        (filters.hasAvailableSeats === 'yes' && eventSeats > 0) ||
+        (filters.hasAvailableSeats === 'no' && eventSeats === 0);
+      
+      return matchesSearch && matchesDateRange && matchesVenue && 
+             matchesSeatRange && matchesScrapingStatus && matchesCreatedRange && 
+             matchesAvailableSeats;
+    });
+
+    // Sort the filtered results
+    filtered.sort((a, b) => {
+      switch (filters.sortBy) {
+        case 'oldest':
+          return new Date(a.createdAt) - new Date(b.createdAt);
+        case 'newest':
+          return new Date(b.createdAt) - new Date(a.createdAt);
+        case 'name':
+          return (a.Event_Name || '').localeCompare(b.Event_Name || '');
+        case 'date':
+          return new Date(a.Event_DateTime) - new Date(b.Event_DateTime);
+        case 'seats':
+          return (b.Available_Seats || 0) - (a.Available_Seats || 0);
+        default:
+          return new Date(b.createdAt) - new Date(a.createdAt);
+      }
+    });
+
+    return filtered;
+  };
+
+  const filteredEvents = getFilteredAndSortedEvents();
 
   // Pagination calculations
   const totalPages = Math.ceil(filteredEvents.length / eventsPerPage);
@@ -125,7 +200,7 @@ export default function EventsPage() {
   // Delete event with confirmation
   const handleDeleteEvent = async (eventId, eventName) => {
     const isConfirmed = window.confirm(
-      `Are you sure you want to delete the event "${eventName}"?\n\nThis action cannot be undone.`
+      `Are you sure you want to delete the event "${eventName}"?\n\nThis action will also delete all associated inventory seats and consecutive seat groups.\n\nThis action cannot be undone.`
     );
     
     if (isConfirmed) {
@@ -142,7 +217,12 @@ export default function EventsPage() {
             setCurrentPage(newTotalPages);
           }
           
-          console.log('Event deleted successfully');
+          // Show success message with seat group deletion info
+          const seatGroupsMessage = result.deletedSeatGroups > 0 
+            ? ` Also deleted ${result.deletedSeatGroups} associated seat groups.`
+            : '';
+          alert(`Event deleted successfully!${seatGroupsMessage}`);
+          console.log('Event deleted successfully', result);
         } else {
           console.error('Failed to delete event:', result.error || result.message);
           alert('Failed to delete event. Please try again.');
@@ -154,10 +234,53 @@ export default function EventsPage() {
     }
   };
 
-  // Reset to first page when search changes
+  // Reset to first page when search or filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm]);
+  }, [searchTerm, filters]);
+
+  // Filter helper functions
+  const updateFilter = (key, value) => {
+    setFilters(prev => ({
+      ...prev,
+      [key]: value
+    }));
+  };
+
+  const updateNestedFilter = (parentKey, childKey, value) => {
+    setFilters(prev => ({
+      ...prev,
+      [parentKey]: {
+        ...prev[parentKey],
+        [childKey]: value
+      }
+    }));
+  };
+
+  const clearAllFilters = () => {
+    setSearchTerm('');
+    setFilters({
+      dateFrom: '',
+      dateTo: '',
+      venue: '',
+      seatRange: { min: '', max: '' },
+      scrapingStatus: 'all',
+      createdDateFrom: '',
+      createdDateTo: '',
+      hasAvailableSeats: 'all',
+      sortBy: 'newest',
+    });
+  };
+
+  const hasActiveFilters = () => {
+    return searchTerm || 
+           filters.dateFrom || filters.dateTo || filters.venue ||
+           filters.seatRange.min || filters.seatRange.max ||
+           filters.scrapingStatus !== 'all' ||
+           filters.createdDateFrom || filters.createdDateTo ||
+           filters.hasAvailableSeats !== 'all' ||
+           filters.sortBy !== 'newest';
+  };
 
  
   return (
@@ -202,26 +325,194 @@ export default function EventsPage() {
        
       </div>
 
-      {/* Search */}
-      <div className="flex flex-col md:flex-row gap-4">
-        <div className="flex-1">
-          <label htmlFor="search" className="sr-only">Search</label>
-          <div className="relative">
+      {/* Modern Search and Filters */}
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+        {/* Search Bar */}
+        <div className="flex flex-col lg:flex-row gap-4 items-center">
+          <div className="flex-1 relative">
             <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-              <svg className="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-              </svg>
+              <Search className="h-5 w-5 text-gray-400" />
             </div>
             <input
               type="text"
-              id="search"
-              className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-              placeholder="Search events..."
+              placeholder="Search events by name or venue..."
+              className="block w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
             />
           </div>
+          
+          <div className="flex items-center gap-3">
+            {/* Sort Dropdown */}
+            <select
+              value={filters.sortBy}
+              onChange={(e) => updateFilter('sortBy', e.target.value)}
+              className="border border-gray-300 rounded-lg px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+            >
+              <option value="newest">Newest First</option>
+              <option value="oldest">Oldest First</option>
+              <option value="name">Name A-Z</option>
+              <option value="date">Event Date</option>
+              <option value="seats">Most Seats</option>
+            </select>
+            
+            {/* Filter Toggle Button */}
+            <button
+              onClick={() => setShowFilters(!showFilters)}
+              className={`inline-flex items-center px-4 py-3 rounded-lg border transition-colors ${
+                showFilters || hasActiveFilters()
+                  ? 'bg-blue-50 border-blue-300 text-blue-700'
+                  : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
+              }`}
+            >
+              <SlidersHorizontal className="w-5 h-5 mr-2" />
+              Filters
+              {hasActiveFilters() && (
+                <span className="ml-2 bg-blue-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                  !
+                </span>
+              )}
+            </button>
+            
+            {/* Clear Filters */}
+            {hasActiveFilters() && (
+              <button
+                onClick={clearAllFilters}
+                className="inline-flex items-center px-3 py-3 text-gray-500 hover:text-gray-700 transition-colors"
+                title="Clear all filters"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            )}
+          </div>
         </div>
+
+        {/* Advanced Filters Panel */}
+        {showFilters && (
+          <div className="mt-6 pt-6 border-t border-gray-200">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              {/* Event Date Range */}
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-gray-700">Event Date Range</label>
+                <div className="space-y-2">
+                  <input
+                    type="date"
+                    placeholder="From date"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                    value={filters.dateFrom}
+                    onChange={(e) => updateFilter('dateFrom', e.target.value)}
+                  />
+                  <input
+                    type="date"
+                    placeholder="To date"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                    value={filters.dateTo}
+                    onChange={(e) => updateFilter('dateTo', e.target.value)}
+                  />
+                </div>
+              </div>
+
+              {/* Created Date Range */}
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-gray-700">Created Date Range</label>
+                <div className="space-y-2">
+                  <input
+                    type="date"
+                    placeholder="From date"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                    value={filters.createdDateFrom}
+                    onChange={(e) => updateFilter('createdDateFrom', e.target.value)}
+                  />
+                  <input
+                    type="date"
+                    placeholder="To date"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                    value={filters.createdDateTo}
+                    onChange={(e) => updateFilter('createdDateTo', e.target.value)}
+                  />
+                </div>
+              </div>
+
+              {/* Venue Filter */}
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-gray-700">Venue</label>
+                <input
+                  type="text"
+                  placeholder="Filter by venue"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                  value={filters.venue}
+                  onChange={(e) => updateFilter('venue', e.target.value)}
+                />
+              </div>
+
+              {/* Seat Range */}
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-gray-700">Seat Range</label>
+                <div className="space-y-2">
+                  <input
+                    type="number"
+                    placeholder="Min seats"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                    value={filters.seatRange.min}
+                    onChange={(e) => updateNestedFilter('seatRange', 'min', e.target.value)}
+                  />
+                  <input
+                    type="number"
+                    placeholder="Max seats"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                    value={filters.seatRange.max}
+                    onChange={(e) => updateNestedFilter('seatRange', 'max', e.target.value)}
+                  />
+                </div>
+              </div>
+
+              {/* Scraping Status */}
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-gray-700">Scraping Status</label>
+                <select
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                  value={filters.scrapingStatus}
+                  onChange={(e) => updateFilter('scrapingStatus', e.target.value)}
+                >
+                  <option value="all">All Events</option>
+                  <option value="active">Active Scraping</option>
+                  <option value="inactive">Inactive Scraping</option>
+                </select>
+              </div>
+
+              {/* Available Seats Status */}
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-gray-700">Available Seats</label>
+                <select
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                  value={filters.hasAvailableSeats}
+                  onChange={(e) => updateFilter('hasAvailableSeats', e.target.value)}
+                >
+                  <option value="all">All Events</option>
+                  <option value="yes">Has Seats (&gt;0)</option>
+                  <option value="no">No Seats (0)</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Filter Summary */}
+            {hasActiveFilters() && (
+              <div className="mt-4 p-3 bg-blue-50 rounded-lg">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-blue-700">
+                    {filteredEvents.length} events match your current filters
+                  </span>
+                  <button
+                    onClick={clearAllFilters}
+                    className="text-sm text-blue-600 hover:text-blue-800 font-medium"
+                  >
+                    Clear all filters
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Events Table */}
