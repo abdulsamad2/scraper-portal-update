@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { getAllEvents } from '@/actions/eventActions';
 import { getConsecutiveGroupsPaginated } from '@/actions/seatActions';
 import { 
@@ -9,7 +10,10 @@ import {
   Activity,
   ArrowUpRight,
   TrendingUp,
-  
+  Plus,
+  Download,
+  BarChart3,
+  MousePointer2
 } from 'lucide-react';
 
 interface EventDoc {
@@ -19,25 +23,32 @@ interface EventDoc {
   Venue?: string;
   createdAt: string;
   Available_Seats?: number;
+  Skip_Scraping?: boolean; // Add this field
   // add more fields if needed
 }
 
 interface DashboardStats {
   totalEvents: number;
   totalSeats: number;
+  activeScrapingCount: number; // Add this new field
   recentEvents: EventDoc[];
   weeklyEventsData: { day: string; count: number; seats: number }[];
   loading: boolean;
 }
 
 export default function DashboardPage() {
+  const router = useRouter();
   const [stats, setStats] = useState<DashboardStats>({
     totalEvents: 0,
     totalSeats: 0,
+    activeScrapingCount: 0, // Initialize the new field
     recentEvents: [],
     weeklyEventsData: [],
     loading: true,
   });
+
+  const [chartMode, setChartMode] = useState<'time' | 'scatter'>('time');
+  const [hoveredBar, setHoveredBar] = useState<number | null>(null);
 
   useEffect(() => {
     async function fetchData() {
@@ -50,6 +61,16 @@ export default function DashboardPage() {
         if (!Array.isArray(eventsData) || 'error' in seatsData) {
           throw new Error("Error fetching dashboard data");
         }
+
+        // Calculate active scraping count (events where Skip_Scraping is false or undefined)
+        const activeScrapingCount = Array.isArray(eventsData) 
+          ? eventsData.filter(
+              (event): event is EventDoc =>
+                typeof event === 'object' &&
+                event !== null &&
+                'Skip_Scraping' in event
+            ).filter(event => !event.Skip_Scraping).length
+          : 0;
 
         // Calculate weekly events data
         const weeklyData = Array.isArray(eventsData) && eventsData.length > 0 && eventsData.every((event): event is EventDoc => 
@@ -64,6 +85,7 @@ export default function DashboardPage() {
         setStats({
           totalEvents: Array.isArray(eventsData) ? eventsData.length : 0,
           totalSeats: seatsData.totalQuantity || 0,
+          activeScrapingCount, // Set the calculated value
           weeklyEventsData: weeklyData,
           recentEvents: Array.isArray(eventsData) && eventsData.length > 0 && eventsData.every((event): event is EventDoc => 
             typeof event === 'object' &&
@@ -124,6 +146,26 @@ export default function DashboardPage() {
       day: 'numeric',
     };
     return new Date(dateString).toLocaleDateString('en-US', options);
+  };
+
+  // Handle quick actions
+  const handleQuickAction = (action: string) => {
+    switch (action) {
+      case 'add-event':
+        router.push('/dashboard/list-event');
+        break;
+      case 'manage-inventory':
+        router.push('/dashboard/inventory');
+        break;
+      case 'export-data':
+        router.push('/dashboard/export-csv');
+        break;
+      case 'view-all-events':
+        router.push('/dashboard/events');
+        break;
+      default:
+        console.log('Unknown action:', action);
+    }
   };
 
   return (
@@ -206,13 +248,17 @@ export default function DashboardPage() {
                 {stats.loading ? (
                   <div className="w-16 h-8 bg-slate-200 rounded animate-pulse"></div>
                 ) : (
-                  '24'
+                  stats.activeScrapingCount.toLocaleString()
                 )}
               </p>
               <div className="flex items-center mt-2 text-sm">
                 <div className="w-2 h-2 bg-green-500 rounded-full mr-2 animate-pulse"></div>
-                <span className="text-green-600 font-medium">Running</span>
-                <span className="text-slate-500 ml-1">processes</span>
+                <span className="text-green-600 font-medium">
+                  {stats.loading ? 'Loading...' : 'Active'}
+                </span>
+                <span className="text-slate-500 ml-1">
+                  {stats.activeScrapingCount === 1 ? 'event' : 'events'}
+                </span>
               </div>
             </div>
             <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-purple-600 rounded-xl flex items-center justify-center">
@@ -233,6 +279,30 @@ export default function DashboardPage() {
                 <p className="text-sm text-slate-500 mt-1">Events and seats data from past 7 days</p>
               </div>
               <div className="flex items-center space-x-4">
+                <div className="flex items-center space-x-2 bg-slate-100 rounded-lg p-1">
+                  <button
+                    onClick={() => setChartMode('time')}
+                    className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${
+                      chartMode === 'time'
+                        ? 'bg-white text-slate-700 shadow-sm'
+                        : 'text-slate-500 hover:text-slate-700'
+                    }`}
+                  >
+                    <BarChart3 className="w-3 h-3 mr-1 inline" />
+                    Timeline
+                  </button>
+                  <button
+                    onClick={() => setChartMode('scatter')}
+                    className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${
+                      chartMode === 'scatter'
+                        ? 'bg-white text-slate-700 shadow-sm'
+                        : 'text-slate-500 hover:text-slate-700'
+                    }`}
+                  >
+                    <MousePointer2 className="w-3 h-3 mr-1 inline" />
+                    Scatter
+                  </button>
+                </div>
                 <div className="flex items-center space-x-2">
                   <div className="w-3 h-3 bg-gradient-to-r from-blue-500 to-blue-600 rounded-full"></div>
                   <span className="text-sm text-slate-600">Events</span>
@@ -247,59 +317,98 @@ export default function DashboardPage() {
             {stats.loading ? (
               <div className="space-y-4">
                 <div className="animate-pulse">
-                  <div className="flex items-end space-x-3 h-40">
+                  <div className="flex items-end space-x-3 h-64">
                     {[1, 2, 3, 4, 5, 6, 7].map((i) => (
                       <div key={i} className="flex-1 space-y-2">
-                        <div className="bg-slate-200 rounded-t" style={{ height: `${Math.random() * 60 + 20}px` }}></div>
-                        <div className="bg-slate-200 rounded-t" style={{ height: `${Math.random() * 80 + 30}px` }}></div>
+                        <div className="bg-slate-200 rounded-t" style={{ height: `${Math.random() * 100 + 40}px` }}></div>
+                        <div className="bg-slate-200 rounded-t" style={{ height: `${Math.random() * 120 + 60}px` }}></div>
                       </div>
                     ))}
                   </div>
                 </div>
               </div>
-            ) : (
+            ) : chartMode === 'time' ? (
               <div className="space-y-6">
                 <div className="relative">
-                  <div className="flex items-end space-x-3 h-40">
-                    {stats.weeklyEventsData.map((day, index) => {
-                      const maxEvents = Math.max(...stats.weeklyEventsData.map(d => d.count), 1);
-                      const maxSeats = Math.max(...stats.weeklyEventsData.map(d => d.seats), 1);
-                      const eventsHeight = (day.count / maxEvents) * 60;
-                      const seatsHeight = (day.seats / maxSeats) * 80;
-                      
-                      return (
-                        <div key={index} className="flex-1 flex flex-col items-center relative group">
-                          <div className="w-full flex space-x-1 items-end">
-                            {/* Events Bar */}
-                            <div 
-                              className="flex-1 bg-gradient-to-t from-blue-500 to-blue-400 rounded-t-lg transition-all duration-500 hover:from-blue-600 hover:to-blue-500 relative"
-                              style={{ height: `${Math.max(eventsHeight, 8)}px` }}
-                            >
-                              <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 bg-slate-800 text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
-                                {day.count} events
+                  {/* Y-axis labels */}
+                  <div className="absolute left-0 top-0 bottom-16 w-8 flex flex-col justify-between text-xs text-slate-400">
+                    <span>{Math.max(...stats.weeklyEventsData.map(d => Math.max(d.count, d.seats)))}</span>
+                    <span>{Math.floor(Math.max(...stats.weeklyEventsData.map(d => Math.max(d.count, d.seats))) / 2)}</span>
+                    <span>0</span>
+                  </div>
+                  
+                  {/* Chart area */}
+                  <div className="ml-10 border-l border-b border-slate-200">
+                    <div className="flex items-end space-x-3 h-64 px-4 pb-2">
+                      {stats.weeklyEventsData.map((day, index) => {
+                        const maxValue = Math.max(...stats.weeklyEventsData.map(d => Math.max(d.count, d.seats)), 1);
+                        const eventsHeight = (day.count / maxValue) * 240;
+                        const seatsHeight = (day.seats / maxValue) * 240;
+                        const isHovered = hoveredBar === index;
+                        
+                        return (
+                          <div 
+                            key={index} 
+                            className="flex-1 flex flex-col items-center relative group cursor-pointer"
+                            onMouseEnter={() => setHoveredBar(index)}
+                            onMouseLeave={() => setHoveredBar(null)}
+                          >
+                            <div className="w-full flex space-x-1 items-end relative">
+                              {/* Events Bar */}
+                              <div 
+                                className={`flex-1 bg-gradient-to-t from-blue-500 to-blue-400 rounded-t-lg transition-all duration-300 relative ${
+                                  isHovered ? 'from-blue-600 to-blue-500 shadow-lg scale-105' : 'hover:from-blue-600 hover:to-blue-500'
+                                }`}
+                                style={{ height: `${Math.max(eventsHeight, 8)}px` }}
+                              >
+                                {isHovered && (
+                                  <div className="absolute -top-12 left-1/2 transform -translate-x-1/2 bg-slate-800 text-white text-xs px-3 py-2 rounded-lg shadow-lg z-10 whitespace-nowrap">
+                                    <div className="font-semibold">{day.count} Events</div>
+                                    <div className="text-slate-300">{day.day}</div>
+                                    <div className="absolute top-full left-1/2 transform -translate-x-1/2 w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-slate-800"></div>
+                                  </div>
+                                )}
+                              </div>
+                              
+                              {/* Seats Bar */}
+                              <div 
+                                className={`flex-1 bg-gradient-to-t from-emerald-500 to-emerald-400 rounded-t-lg transition-all duration-300 relative ${
+                                  isHovered ? 'from-emerald-600 to-emerald-500 shadow-lg scale-105' : 'hover:from-emerald-600 hover:to-emerald-500'
+                                }`}
+                                style={{ height: `${Math.max(seatsHeight, 8)}px` }}
+                              >
+                                {isHovered && (
+                                  <div className="absolute -top-12 left-1/2 transform -translate-x-1/2 bg-slate-800 text-white text-xs px-3 py-2 rounded-lg shadow-lg z-10 whitespace-nowrap">
+                                    <div className="font-semibold">{day.seats.toLocaleString()} Seats</div>
+                                    <div className="text-slate-300">{day.day}</div>
+                                    <div className="absolute top-full left-1/2 transform -translate-x-1/2 w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-slate-800"></div>
+                                  </div>
+                                )}
                               </div>
                             </div>
                             
-                            {/* Seats Bar */}
-                            <div 
-                              className="flex-1 bg-gradient-to-t from-emerald-500 to-emerald-400 rounded-t-lg transition-all duration-500 hover:from-emerald-600 hover:to-emerald-500 relative"
-                              style={{ height: `${Math.max(seatsHeight, 8)}px` }}
-                            >
-                              <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 bg-slate-800 text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
-                                {day.seats} seats
+                            <div className="mt-3 text-center">
+                              <div className={`text-xs font-medium transition-colors ${isHovered ? 'text-slate-800' : 'text-slate-600'}`}>
+                                {day.day}
+                              </div>
+                              <div className="text-xs text-slate-400 mt-1">
+                                {day.count}E · {day.seats}S
                               </div>
                             </div>
                           </div>
-                          
-                          <div className="mt-3 text-center">
-                            <div className="text-xs font-medium text-slate-600">{day.day}</div>
-                            <div className="text-xs text-slate-400 mt-1">
-                              {day.count}E · {day.seats}S
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
+                        );
+                      })}
+                    </div>
+                    
+                    {/* X-axis label */}
+                    <div className="text-center mt-2 text-xs font-medium text-slate-500">
+                      Days of the Week
+                    </div>
+                  </div>
+                  
+                  {/* Y-axis label */}
+                  <div className="absolute -left-8 top-1/2 transform -translate-y-1/2 -rotate-90 text-xs font-medium text-slate-500 whitespace-nowrap">
+                    Count
                   </div>
                 </div>
                 
@@ -321,6 +430,78 @@ export default function DashboardPage() {
                   </div>
                 </div>
               </div>
+            ) : (
+              // Scatter plot view: Events vs Seats
+              <div className="space-y-6">
+                <div className="relative">
+                  {/* Y-axis labels */}
+                  <div className="absolute left-0 top-0 bottom-16 w-12 flex flex-col justify-between text-xs text-slate-400">
+                    <span>{Math.max(...stats.weeklyEventsData.map(d => d.seats))}</span>
+                    <span>{Math.floor(Math.max(...stats.weeklyEventsData.map(d => d.seats)) / 2)}</span>
+                    <span>0</span>
+                  </div>
+                  
+                  {/* Chart area */}
+                  <div className="ml-14 border-l border-b border-slate-200 relative">
+                    <div className="h-64 p-4 relative">
+                      {stats.weeklyEventsData.map((day, index) => {
+                        const maxEvents = Math.max(...stats.weeklyEventsData.map(d => d.count), 1);
+                        const maxSeats = Math.max(...stats.weeklyEventsData.map(d => d.seats), 1);
+                        const x = (day.count / maxEvents) * 90; // 90% of width for positioning
+                        const y = (day.seats / maxSeats) * 90; // 90% of height for positioning
+                        const isHovered = hoveredBar === index;
+                        
+                        return (
+                          <div
+                            key={index}
+                            className={`absolute w-6 h-6 bg-gradient-to-br from-purple-500 to-purple-600 rounded-full cursor-pointer transition-all duration-300 ${
+                              isHovered ? 'scale-150 shadow-lg from-purple-600 to-purple-700' : 'hover:scale-125'
+                            }`}
+                            style={{
+                              left: `${x}%`,
+                              bottom: `${y}%`,
+                              transform: 'translate(-50%, 50%)'
+                            }}
+                            onMouseEnter={() => setHoveredBar(index)}
+                            onMouseLeave={() => setHoveredBar(null)}
+                          >
+                            {isHovered && (
+                              <div className="absolute -top-16 left-1/2 transform -translate-x-1/2 bg-slate-800 text-white text-xs px-3 py-2 rounded-lg shadow-lg z-10 whitespace-nowrap">
+                                <div className="font-semibold">{day.day}</div>
+                                <div className="text-slate-300">{day.count} Events</div>
+                                <div className="text-slate-300">{day.seats} Seats</div>
+                                <div className="absolute top-full left-1/2 transform -translate-x-1/2 w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-slate-800"></div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    
+                    {/* X-axis label */}
+                    <div className="text-center mt-2 text-xs font-medium text-slate-500">
+                      Number of Events
+                    </div>
+                  </div>
+                  
+                  {/* Y-axis label */}
+                  <div className="absolute -left-10 top-1/2 transform -translate-y-1/2 -rotate-90 text-xs font-medium text-slate-500 whitespace-nowrap">
+                    Number of Seats
+                  </div>
+                </div>
+                
+                {/* Scatter plot explanation */}
+                <div className="bg-gradient-to-r from-purple-50 to-violet-50 rounded-xl p-4">
+                  <div className="text-center">
+                    <div className="text-sm font-medium text-purple-800 mb-2">
+                      Events vs Seats Correlation
+                    </div>
+                    <div className="text-xs text-purple-600">
+                      Each point represents a day of the week. Position shows the relationship between number of events created and total seats added.
+                    </div>
+                  </div>
+                </div>
+              </div>
             )}
           </div>
         </div>
@@ -330,19 +511,25 @@ export default function DashboardPage() {
           <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
             <h3 className="text-lg font-semibold text-slate-800 mb-4">Quick Actions</h3>
             <div className="space-y-3">
-              <button className="w-full flex items-center justify-between p-4 bg-gradient-to-r from-blue-50 to-indigo-50 hover:from-blue-100 hover:to-indigo-100 rounded-xl transition-all duration-200 group">
+              <button 
+                onClick={() => handleQuickAction('add-event')}
+                className="w-full flex items-center justify-between p-4 bg-gradient-to-r from-blue-50 to-indigo-50 hover:from-blue-100 hover:to-indigo-100 rounded-xl transition-all duration-200 group hover:shadow-md"
+              >
                 <div className="flex items-center">
-                  <div className="w-10 h-10 bg-blue-500 rounded-lg flex items-center justify-center mr-3">
-                    <Calendar className="w-5 h-5 text-white" />
+                  <div className="w-10 h-10 bg-blue-500 rounded-lg flex items-center justify-center mr-3 group-hover:bg-blue-600 transition-colors">
+                    <Plus className="w-5 h-5 text-white" />
                   </div>
                   <span className="font-medium text-slate-700">Add New Event</span>
                 </div>
                 <ArrowUpRight className="w-5 h-5 text-blue-500 group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform duration-200" />
               </button>
               
-              <button className="w-full flex items-center justify-between p-4 bg-gradient-to-r from-emerald-50 to-green-50 hover:from-emerald-100 hover:to-green-100 rounded-xl transition-all duration-200 group">
+              <button 
+                onClick={() => handleQuickAction('manage-inventory')}
+                className="w-full flex items-center justify-between p-4 bg-gradient-to-r from-emerald-50 to-green-50 hover:from-emerald-100 hover:to-green-100 rounded-xl transition-all duration-200 group hover:shadow-md"
+              >
                 <div className="flex items-center">
-                  <div className="w-10 h-10 bg-emerald-500 rounded-lg flex items-center justify-center mr-3">
+                  <div className="w-10 h-10 bg-emerald-500 rounded-lg flex items-center justify-center mr-3 group-hover:bg-emerald-600 transition-colors">
                     <Package className="w-5 h-5 text-white" />
                   </div>
                   <span className="font-medium text-slate-700">Manage Inventory</span>
@@ -350,10 +537,13 @@ export default function DashboardPage() {
                 <ArrowUpRight className="w-5 h-5 text-emerald-500 group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform duration-200" />
               </button>
               
-              <button className="w-full flex items-center justify-between p-4 bg-gradient-to-r from-purple-50 to-violet-50 hover:from-purple-100 hover:to-violet-100 rounded-xl transition-all duration-200 group">
+              <button 
+                onClick={() => handleQuickAction('export-data')}
+                className="w-full flex items-center justify-between p-4 bg-gradient-to-r from-purple-50 to-violet-50 hover:from-purple-100 hover:to-violet-100 rounded-xl transition-all duration-200 group hover:shadow-md"
+              >
                 <div className="flex items-center">
-                  <div className="w-10 h-10 bg-purple-500 rounded-lg flex items-center justify-center mr-3">
-                    <Activity className="w-5 h-5 text-white" />
+                  <div className="w-10 h-10 bg-purple-500 rounded-lg flex items-center justify-center mr-3 group-hover:bg-purple-600 transition-colors">
+                    <Download className="w-5 h-5 text-white" />
                   </div>
                   <span className="font-medium text-slate-700">Export Data</span>
                 </div>
@@ -368,7 +558,10 @@ export default function DashboardPage() {
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
         <div className="flex items-center justify-between mb-6">
           <h3 className="text-lg font-semibold text-slate-800">Recent Events</h3>
-          <button className="text-blue-600 hover:text-blue-700 font-medium text-sm flex items-center">
+          <button 
+            onClick={() => handleQuickAction('view-all-events')}
+            className="text-blue-600 hover:text-blue-700 font-medium text-sm flex items-center transition-colors duration-200 hover:bg-blue-50 px-3 py-1 rounded-lg"
+          >
             View All
             <ArrowUpRight className="w-4 h-4 ml-1" />
           </button>

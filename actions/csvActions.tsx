@@ -27,7 +27,7 @@ interface CsvRow {
   taxed_cost: number;
   cost: number;
   hide_seats: 'Y' | 'N';
-  in_hand: 'Y' | 'N';
+  in_hand: 'N';
   in_hand_date: string;
   instant_transfer?: 'Y' | 'N';
   files_available: 'Y' | 'N';
@@ -346,7 +346,7 @@ async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]
       taxed_cost: Number(inventory?.cost || 0),
       cost: Number(inventory?.cost || 0),
       hide_seats: inventory?.hideSeatNumbers ? "Y" : "N",
-      in_hand: inventory?.in_hand ? "Y" : "N",
+      in_hand: "N", // Always set to "N" as per original code
       in_hand_date: inHandDateString,
       instant_transfer: inventory?.instant_transfer ? "Y" : "N",
       files_available: "N",
