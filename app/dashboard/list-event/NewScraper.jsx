@@ -254,7 +254,17 @@ const NewScraper = ({ onCancel, onSuccess, initialData = null, isEdit = false })
 
       let result;
       if (isEdit && initialData?._id) {
-        result = await updateEvent(initialData._id, eventData);
+        // Check if price percentage has changed
+        const originalPercentage = initialData.priceIncreasePercentage || 0;
+        const newPercentage = formData.Percentage_Increase_ListCost;
+        const percentageChanged = originalPercentage !== newPercentage;
+        
+        result = await updateEvent(initialData._id, eventData, percentageChanged);
+        
+        // Log seat deletion if percentage changed
+        if (percentageChanged && result.deletedSeatGroups > 0) {
+          console.log(`Price percentage updated. Deleted ${result.deletedSeatGroups} seat groups.`);
+        }
       } else {
         result = await createEvent(eventData);
       }

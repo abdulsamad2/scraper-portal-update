@@ -237,7 +237,15 @@ export async function getConsecutiveGroupsPaginated(
 export async function deleteConsecutiveGroupsByEventId(eventId: string) {
   await dbConnect();
   try {
+    console.log('Attempting to delete consecutive groups for eventId:', eventId);
+    
+    // First, check how many groups exist for this event
+    const existingCount = await ConsecutiveGroup.countDocuments({ eventId: eventId });
+    console.log(`Found ${existingCount} consecutive groups for eventId: ${eventId}`);
+    
     const deleteResult = await ConsecutiveGroup.deleteMany({ eventId: eventId });
+    console.log('Delete result:', deleteResult);
+    
     revalidatePath('/seat-groups');
     return { 
       message: `Successfully deleted ${deleteResult.deletedCount} consecutive seat groups for event`, 
@@ -247,5 +255,27 @@ export async function deleteConsecutiveGroupsByEventId(eventId: string) {
   } catch (error: unknown) {
     console.error('Error deleting consecutive groups by eventId:', error);
     return { error: error instanceof Error ? error.message : 'Failed to delete consecutive groups for event', success: false };
+  }
+}
+
+/**
+ * Deletes all consecutive groups for multiple events by their eventIds.
+ * @param {string[]} eventIds - Array of eventIds to delete groups for.
+ * @returns {Promise<object>} A success message with count of deleted groups or an error object.
+ */
+export async function deleteConsecutiveGroupsByEventIds(eventIds: string[]) {
+  await dbConnect();
+  try {
+    const deleteResult = await ConsecutiveGroup.deleteMany({ eventId: { $in: eventIds } });
+    revalidatePath('/seat-groups');
+    revalidatePath('/dashboard/inventory');
+    return { 
+      message: `Successfully deleted ${deleteResult.deletedCount} consecutive seat groups for ${eventIds.length} events`, 
+      success: true, 
+      deletedCount: deleteResult.deletedCount 
+    };
+  } catch (error: unknown) {
+    console.error('Error deleting consecutive groups by eventIds:', error);
+    return { error: error instanceof Error ? error.message : 'Failed to delete consecutive groups for events', success: false };
   }
 }

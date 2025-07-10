@@ -149,8 +149,18 @@ export default function EventsPage() {
   // Toggle Skip_Scraping for an event
   const toggleScraping = async (id, skip) => {
     try {
-      await updateEvent(id, { Skip_Scraping: !skip });
+      const result = await updateEvent(id, { Skip_Scraping: !skip });
+      if (result.error) {
+        console.error('Failed to toggle scraping:', result.error);
+        return;
+      }
+      
       setEvents(prev => prev.map(e => e._id === id ? { ...e, Skip_Scraping: !skip } : e));
+      
+      // Log seat deletion if it occurred
+      if (result.deletedSeatGroups > 0) {
+        console.log(`Scraping stopped for event. Deleted ${result.deletedSeatGroups} seat groups.`);
+      }
     } catch (err) {
       console.error('Failed to toggle scraping:', err);
     }
@@ -175,7 +185,12 @@ export default function EventsPage() {
         // Refresh events to reflect the changes
         await fetchEvents(true);
         
-        console.log(`Successfully ${newStatus ? 'stopped' : 'started'} scraping for all events`);
+        // Show more detailed message including seat deletion info
+        let message = `Successfully ${newStatus ? 'stopped' : 'started'} scraping for all events`;
+        if (result.deletedSeatGroups > 0) {
+          message += `. Deleted ${result.deletedSeatGroups} seat groups.`;
+        }
+        console.log(message);
       } else {
         console.error('Failed to update events:', result.error);
       }
@@ -218,18 +233,12 @@ export default function EventsPage() {
           }
           
           // Show success message with seat group deletion info
-          const seatGroupsMessage = result.deletedSeatGroups > 0 
-            ? ` Also deleted ${result.deletedSeatGroups} associated seat groups.`
-            : '';
-          alert(`Event deleted successfully!${seatGroupsMessage}`);
-          console.log('Event deleted successfully', result);
+          console.log(`Event "${eventName}" deleted successfully. Also deleted ${result.deletedSeatGroups || 0} associated seat groups.`);
         } else {
           console.error('Failed to delete event:', result.error || result.message);
-          alert('Failed to delete event. Please try again.');
         }
       } catch (error) {
         console.error('Error deleting event:', error);
-        alert('An error occurred while deleting the event. Please try again.');
       }
     }
   };

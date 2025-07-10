@@ -314,6 +314,57 @@ interface ConsecutiveGroupDocument {
   seats?: Array<{ number: string | number }>;
 }
 
+// Function to determine split configuration based on ticket type and quantity
+function calculateSplitConfiguration(quantity: number, splitType?: string): { 
+  finalSplitType: CsvRow['split_type']; 
+  customSplit: string; 
+} {
+  // If splitType is "DEFAULT", it's a resale ticket
+  const isResale = splitType === 'DEFAULT';
+  
+  if (isResale) {
+    // RESALE logic
+    if (quantity === 3) {
+      return { finalSplitType: 'CUSTOM', customSplit: '3' };
+    } else if (quantity === 5) {
+      return { finalSplitType: 'CUSTOM', customSplit: '3,5' };
+    } else if (quantity === 7) {
+      return { finalSplitType: 'CUSTOM', customSplit: '2,3,4,5,7' };
+    } else if (quantity === 9) {
+      return { finalSplitType: 'CUSTOM', customSplit: '2,3,4,5,6,7,9' };
+    } else if (quantity % 2 === 1 && quantity > 11) {
+      // Odd number over 11
+      return { finalSplitType: 'NEVERLEAVEONE', customSplit: '' };
+    } else {
+      // Default for other resale quantities
+      return { finalSplitType: 'DEFAULT', customSplit: '' };
+    }
+  } else {
+    // STANDARD ticket logic
+    if (quantity % 2 === 1) {
+      // Odd quantities - use NEVERLEAVEONE
+      return { finalSplitType: 'NEVERLEAVEONE', customSplit: '' };
+    } else {
+      // Even quantities
+      if (quantity === 2) {
+        return { finalSplitType: 'CUSTOM', customSplit: '2' };
+      } else if (quantity === 4) {
+        return { finalSplitType: 'CUSTOM', customSplit: '2,4' };
+      } else if (quantity === 6) {
+        return { finalSplitType: 'CUSTOM', customSplit: '2,4,6' };
+      } else if (quantity === 8) {
+        return { finalSplitType: 'CUSTOM', customSplit: '2,4,6,8' };
+      } else if (quantity > 10) {
+        // Even over 10 seats
+        return { finalSplitType: 'NEVERLEAVEONE', customSplit: '' };
+      } else {
+        // Default for other even quantities not specifically handled
+        return { finalSplitType: 'ANY', customSplit: '' };
+      }
+    }
+  }
+}
+
 // Helper function to process batches in parallel
 async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]> {
   return batch.map(doc => {
@@ -327,6 +378,9 @@ async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]
     const inHandDateString = inventory?.inHandDate ? 
       new Date(inventory.inHandDate).toISOString().slice(0, 10) : '';
 
+    // Calculate split configuration based on quantity and split type
+    const { finalSplitType, customSplit } = calculateSplitConfiguration(inventory?.quantity || 0, inventory?.splitType);
+    
     return {
       inventory_id: inventory?.inventoryId || 0,
       event_name: doc.event_name || '',
@@ -350,8 +404,8 @@ async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]
       in_hand_date: inHandDateString,
       instant_transfer: inventory?.instant_transfer ? "Y" : "N",
       files_available: "N",
-      split_type: (inventory?.splitType as CsvRow['split_type']) || "ANY",
-      custom_split: inventory?.custom_split || "",
+      split_type: finalSplitType,
+      custom_split: customSplit,
       stock_type: (inventory?.stockType as CsvRow['stock_type']) || "ELECTRONIC",
       zone: "N",
       shown_quantity: inventory?.shown_quantity || undefined,
