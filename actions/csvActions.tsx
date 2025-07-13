@@ -315,7 +315,7 @@ interface ConsecutiveGroupDocument {
 }
 
 // Function to determine split configuration based on ticket type and quantity
-function calculateSplitConfiguration(quantity: number, splitType?: string): { 
+function calculateSplitConfiguration(quantity: number, splitType?: string, originalCustomSplit?: string): { 
   finalSplitType: CsvRow['split_type']; 
   customSplit: string; 
 } {
@@ -323,7 +323,7 @@ function calculateSplitConfiguration(quantity: number, splitType?: string): {
   const isResale = splitType === 'DEFAULT';
   
   if (isResale) {
-    // RESALE logic
+    // RESALE logic - always use CUSTOM with appropriate custom_split
     if (quantity === 3) {
       return { finalSplitType: 'CUSTOM', customSplit: '3' };
     } else if (quantity === 5) {
@@ -335,17 +335,8 @@ function calculateSplitConfiguration(quantity: number, splitType?: string): {
     } else if (quantity % 2 === 1 && quantity > 11) {
       // Odd number over 11
       return { finalSplitType: 'NEVERLEAVEONE', customSplit: '' };
-    } else {
-      // Default for other resale quantities
-      return { finalSplitType: 'DEFAULT', customSplit: '' };
-    }
-  } else {
-    // STANDARD ticket logic
-    if (quantity % 2 === 1) {
-      // Odd quantities - use NEVERLEAVEONE
-      return { finalSplitType: 'NEVERLEAVEONE', customSplit: '' };
-    } else {
-      // Even quantities
+    } else if (quantity % 2 === 0) {
+      // Even quantities for resale
       if (quantity === 2) {
         return { finalSplitType: 'CUSTOM', customSplit: '2' };
       } else if (quantity === 4) {
@@ -358,10 +349,19 @@ function calculateSplitConfiguration(quantity: number, splitType?: string): {
         // Even over 10 seats
         return { finalSplitType: 'NEVERLEAVEONE', customSplit: '' };
       } else {
-        // Default for other even quantities not specifically handled
-        return { finalSplitType: 'ANY', customSplit: '' };
+        // For other even quantities, use CUSTOM with original custom split or use original split type
+        return {
+          finalSplitType: 'CUSTOM',
+          customSplit: originalCustomSplit || '',
+        };
       }
+    } else {
+      // For other resale quantities, use CUSTOM with original custom split
+      return { finalSplitType: 'CUSTOM', customSplit: originalCustomSplit || '' };
     }
+  } else {
+    // STANDARD ticket logic - all standard tickets use NEVERLEAVEONE
+    return { finalSplitType: 'NEVERLEAVEONE', customSplit: '' };
   }
 }
 
@@ -379,7 +379,11 @@ async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]
       new Date(inventory.inHandDate).toISOString().slice(0, 10) : '';
 
     // Calculate split configuration based on quantity and split type
-    const { finalSplitType, customSplit } = calculateSplitConfiguration(inventory?.quantity || 0, inventory?.splitType);
+    const { finalSplitType, customSplit } = calculateSplitConfiguration(
+      inventory?.quantity || 0, 
+      inventory?.splitType, 
+      inventory?.custom_split
+    );
     
     return {
       inventory_id: inventory?.inventoryId || 0,
