@@ -7,9 +7,42 @@ interface EventDetailsProps {
   params: Promise<{ id: string }>;
 }
 
+interface EventType {
+  _id: string;
+  mapping_id: string;
+  Event_ID: string;
+  Event_Name: string;
+  Event_DateTime: string;
+  Venue?: string;
+  URL: string;
+  Zone?: string;
+  Available_Seats?: number;
+  Skip_Scraping?: boolean;
+  inHandDate?: string;
+  priceIncreasePercentage?: number;
+  Last_Updated?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  metadata?: {
+    lastUpdate?: string;
+    iterationNumber?: number;
+    scrapeStartTime?: string;
+    scrapeEndTime?: string;
+    inHandDate?: string;
+    scrapeDurationSeconds?: number;
+    totalRunningTimeMinutes?: number;
+    ticketStats?: {
+      totalTickets?: number;
+      ticketCountChange?: number;
+      previousTicketCount?: number;
+    };
+  };
+  error?: string;
+}
+
 export default async function EventDetailsPage({ params }: EventDetailsProps) {
   const { id } = await params;
-  const event: any = await getEventById(id);
+  const event: EventType = await getEventById(id) as EventType;
 
   if (!event || event.error) {
     return (
@@ -29,7 +62,7 @@ export default async function EventDetailsPage({ params }: EventDetailsProps) {
               <Calendar className="w-8 h-8 text-red-600" />
             </div>
             <h1 className="text-2xl font-bold text-slate-800 mb-2">Event not found</h1>
-            <p className="text-slate-600">The event you're looking for doesn't exist or has been removed.</p>
+            <p className="text-slate-600">The event you&apos;re looking for doesn&apos;t exist or has been removed.</p>
           </div>
         </div>
       </div>
