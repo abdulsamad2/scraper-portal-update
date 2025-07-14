@@ -3,7 +3,7 @@ import type { NextRequest } from 'next/server';
 
 export function middleware(request: NextRequest) {
   // Temporarily disable authentication for testing
-  return NextResponse.next();
+  // return NextResponse.next();
   
   // Check if the request is for a dashboard route
   if (request.nextUrl.pathname.startsWith('/dashboard')) {

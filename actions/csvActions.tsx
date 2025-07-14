@@ -320,10 +320,10 @@ function calculateSplitConfiguration(quantity: number, splitType?: string, origi
   customSplit: string; 
 } {
   // If splitType is "DEFAULT", it's a resale ticket
-  const isResale = splitType === 'DEFAULT';
+  // const isResale = splitType === 'DEFAULT';
   
-  if (isResale) {
-    // RESALE logic
+  // if (isResale) {
+  //   // RESALE logic
     
     // For quantities over thresholds, use NEVERLEAVEONE
     // Even quantities over 10 = NEVERLEAVEONE
@@ -358,10 +358,10 @@ function calculateSplitConfiguration(quantity: number, splitType?: string, origi
       // For any other quantities (edge cases or quantities > thresholds), use NEVERLEAVEONE
       return { finalSplitType: 'NEVERLEAVEONE', customSplit: '' };
     }
-  } else {
-    // STANDARD ticket logic - all standard tickets use NEVERLEAVEONE
-    return { finalSplitType: 'NEVERLEAVEONE', customSplit: '' };
-  }
+  // } else {
+  //   // STANDARD ticket logic - all standard tickets use NEVERLEAVEONE
+  //   return { finalSplitType: 'NEVERLEAVEONE', customSplit: '' };
+  // }
 }
 
 // Helper function to process batches in parallel

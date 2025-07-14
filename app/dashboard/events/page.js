@@ -1,4 +1,3 @@
-
 "use client"
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
@@ -72,7 +71,7 @@ export default function EventsPage() {
   useEffect(() => {
     const interval = setInterval(() => {
       fetchEvents(true);
-    }, 60000); // 60 seconds
+    }, 15000); // 15 seconds
 
     return () => clearInterval(interval);
   }, []);

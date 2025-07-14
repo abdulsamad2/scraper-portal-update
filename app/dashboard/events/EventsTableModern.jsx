@@ -50,7 +50,7 @@ const EventsTableModern = memo(function EventsTableModern({ data, toggleScraping
     return `${days}d ago`;
   }, []);
 
-  const isFresh = useMemo(() => (d) => Date.now() - new Date(d).getTime() < 3 * 60 * 1000, []);
+  const isFresh = useMemo(() => (d) => Date.now() - new Date(d).getTime() < 4 * 60 * 1000, []);
 
   // Memoize sorted data to prevent unnecessary sorting
   const sortedData = useMemo(() => 

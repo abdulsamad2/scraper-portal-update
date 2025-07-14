@@ -13,7 +13,9 @@ import {
   LogOut,
   ShoppingCart,
   X,
-  Heart
+  Heart,
+  SignalHigh
+  
 } from 'lucide-react';
 
 const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
@@ -67,7 +69,13 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
       icon: <ShoppingCart className="w-5 h-5" />,
       description: 'Manage customer orders'
     },
+     {
+      label: 'Proxies',
+      icon: <SignalHigh className="w-5 h-5" />,
+      description: 'Manage Proxies'
+    },
   ];
+  
 
   return (
     <div className="flex h-screen bg-gradient-to-br from-slate-50 to-slate-100">
