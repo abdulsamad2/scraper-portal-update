@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import moment from 'moment';
 import { Download, Upload } from 'lucide-react';
 import { generateInventoryCsv, uploadCsvToSyncService } from '../../../actions/csvActions';
+import { deleteStaleInventory } from '../../../actions/seatActions';
 
 // Simple toast notification function
 const showMessage = (text: string, type: 'success' | 'error' | 'info' = 'info') => {
@@ -53,6 +54,8 @@ const ExportCsvPage: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [clearStatus, setClearStatus] = useState('');
   const [isClearingInventory, setIsClearingInventory] = useState(false);
+  const [staleCleanupStatus, setStaleCleanupStatus] = useState('');
+  const [isCleaningStaleInventory, setIsCleaningStaleInventory] = useState(false);
 
   // Load settings from database on component mount
   useEffect(() => {
@@ -276,6 +279,39 @@ const ExportCsvPage: React.FC = () => {
     }
   };
 
+  const handleCleanupStaleInventory = async () => {
+    if (!confirm('Are you sure you want to cleanup stale inventory? This will delete consecutive groups for inactive events and orphaned inventory.')) {
+      return;
+    }
+
+    setIsCleaningStaleInventory(true);
+    setStaleCleanupStatus('Cleaning up stale inventory...');
+
+    try {
+      const result = await deleteStaleInventory();
+      
+      if (result.success) {
+        setStaleCleanupStatus(`✅ ${result.message || 'Stale inventory cleaned up successfully'}`);
+        if (result.details) {
+          setStaleCleanupStatus(prev => `${prev}\n📊 Details: ${result.details.join(', ')}`);
+        }
+        if (result.deletedCount) {
+          setStaleCleanupStatus(prev => `${prev}\n🗑️ Total deleted: ${result.deletedCount} groups`);
+        }
+        showMessage(`Stale inventory cleaned up successfully! Deleted ${result.deletedCount} groups`, 'success');
+      } else {
+        setStaleCleanupStatus(`❌ Error: ${result.error || 'Failed to cleanup stale inventory'}`);
+        showMessage(result.error || 'Failed to cleanup stale inventory', 'error');
+      }
+    } catch (error) {
+      setStaleCleanupStatus('❌ Error cleaning up stale inventory.');
+      console.error('Error cleaning up stale inventory:', error);
+      showMessage('Error cleaning up stale inventory', 'error');
+    } finally {
+      setIsCleaningStaleInventory(false);
+    }
+  };
+
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
@@ -484,6 +520,26 @@ const ExportCsvPage: React.FC = () => {
               clearStatus.includes('✅') ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800'
             }`}>
               {clearStatus}
+            </div>
+          )}
+          
+          <div className="border-t pt-4">
+            <p className="text-gray-600 mb-3">
+              Clean up stale inventory from the database. This will remove consecutive groups for inactive events (Skip_Scraping = true) and orphaned inventory where events no longer exist.
+            </p>
+            <button
+              onClick={handleCleanupStaleInventory}
+              disabled={isCleaningStaleInventory}
+              className="bg-orange-500 text-white px-4 py-2 rounded hover:bg-orange-600 disabled:bg-gray-400 disabled:cursor-not-allowed"
+            >
+              {isCleaningStaleInventory ? 'Cleaning...' : 'Clean Up Stale Inventory'}
+            </button>
+          </div>
+          {staleCleanupStatus && (
+            <div className={`p-3 rounded whitespace-pre-line ${
+              staleCleanupStatus.includes('✅') ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800'
+            }`}>
+              {staleCleanupStatus}
             </div>
           )}
         </div>

@@ -2,7 +2,7 @@
 
 import dbConnect from '@/lib/dbConnect';
 import { ConsecutiveGroup } from '@/models/seatModel'; // Assuming models are aliased to @/models
-
+import { Event } from '@/models/eventModel'; // Assuming models are aliased to @/models
 import { UpdateQuery } from 'mongoose';
 import { revalidatePath } from 'next/cache';
 
@@ -277,5 +277,82 @@ export async function deleteConsecutiveGroupsByEventIds(eventIds: string[]) {
   } catch (error: unknown) {
     console.error('Error deleting consecutive groups by eventIds:', error);
     return { error: error instanceof Error ? error.message : 'Failed to delete consecutive groups for events', success: false };
+  }
+}
+
+
+export async function deleteStaleInventory() {
+  await dbConnect();
+  // This function handles two types of stale inventory:
+  // 1. Events with Skip_Scraping = true (inactive events)
+  // 2. Orphaned inventory where the event no longer exists in the database
+  // This is a cleanup operation to remove stale inventory
+  // This should be run periodically or manually by an admin
+  try {
+    console.log('Starting stale inventory cleanup...');
+    
+    let totalDeletedCount = 0;
+    const cleanupResults = [];
+    
+    // PART 1: Find events with Skip_Scraping = true (inactive events)
+    const inactiveEvents = await Event.find({ Skip_Scraping: true }, 'Event_ID');
+    console.log(`Found ${inactiveEvents.length} events with Skip_Scraping = true`);
+    
+    if (inactiveEvents.length > 0) {
+      const inactiveEventIds = inactiveEvents.map(event => event.Event_ID);
+      console.log('Inactive Event IDs to clean up:', inactiveEventIds);
+      
+      // Delete all consecutive groups for inactive events
+      const inactiveDeleteResult = await deleteConsecutiveGroupsByEventIds(inactiveEventIds);
+      totalDeletedCount += inactiveDeleteResult.deletedCount || 0;
+      cleanupResults.push(`Deleted ${inactiveDeleteResult.deletedCount} groups for ${inactiveEventIds.length} inactive events`);
+    }
+    
+    // PART 2: Find orphaned inventory (events that no longer exist)
+    console.log('Checking for orphaned inventory...');
+    
+    // Get all unique eventIds from consecutive groups
+    const distinctEventIds = await ConsecutiveGroup.distinct('eventId');
+    console.log(`Found ${distinctEventIds.length} unique eventIds in consecutive groups`);
+    
+    if (distinctEventIds.length > 0) {
+      // Find which of these eventIds don't exist in the Event collection
+      // Note: eventId in ConsecutiveGroup corresponds to Event_ID in Event collection
+      const existingEventIds = await Event.find({ Event_ID: { $in: distinctEventIds } }, 'Event_ID');
+      const existingEventIdStrings = existingEventIds.map(event => event.Event_ID);
+      
+      // Find orphaned eventIds (exist in consecutive groups but not in events)
+      const orphanedEventIds = distinctEventIds.filter(eventId => 
+        !existingEventIdStrings.includes(eventId)
+      );
+      
+      console.log(`Found ${orphanedEventIds.length} orphaned eventIds:`, orphanedEventIds);
+      
+      if (orphanedEventIds.length > 0) {
+        // Delete consecutive groups for orphaned events
+        const orphanedDeleteResult = await deleteConsecutiveGroupsByEventIds(orphanedEventIds);
+        totalDeletedCount += orphanedDeleteResult.deletedCount || 0;
+        cleanupResults.push(`Deleted ${orphanedDeleteResult.deletedCount} groups for ${orphanedEventIds.length} orphaned events`);
+      }
+    }
+    
+    // SUMMARY
+    if (totalDeletedCount === 0) {
+      console.log('No stale inventory found');
+      return { message: 'No stale inventory found', success: true, deletedCount: 0 };
+    }
+    
+    const summaryMessage = `Successfully cleaned up stale inventory: ${cleanupResults.join(', ')}`;
+    console.log('Cleanup completed:', summaryMessage);
+    
+    return { 
+      message: summaryMessage, 
+      success: true, 
+      deletedCount: totalDeletedCount,
+      details: cleanupResults
+    };
+  } catch (error: unknown) {
+    console.error('Error deleting stale inventory:', error);
+    return { error: error instanceof Error ? error.message : 'Failed to delete stale inventory', success: false };
   }
 }
