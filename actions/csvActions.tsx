@@ -315,15 +315,15 @@ interface ConsecutiveGroupDocument {
 }
 
 // Function to determine split configuration based on ticket type and quantity
-function calculateSplitConfiguration(quantity: number, splitType?: string, originalCustomSplit?: string): { 
+function calculateSplitConfiguration(quantity: number, splitType?: string): {
   finalSplitType: CsvRow['split_type']; 
   customSplit: string; 
 } {
   // If splitType is "DEFAULT", it's a resale ticket
-  // const isResale = splitType === 'DEFAULT';
+  const isResale = splitType === 'DEFAULT';
   
-  // if (isResale) {
-  //   // RESALE logic
+  if (isResale) {
+    // RESALE logic
     
     // For quantities over thresholds, use NEVERLEAVEONE
     // Even quantities over 10 = NEVERLEAVEONE
@@ -358,10 +358,10 @@ function calculateSplitConfiguration(quantity: number, splitType?: string, origi
       // For any other quantities (edge cases or quantities > thresholds), use NEVERLEAVEONE
       return { finalSplitType: 'NEVERLEAVEONE', customSplit: '' };
     }
-  // } else {
-  //   // STANDARD ticket logic - all standard tickets use NEVERLEAVEONE
-  //   return { finalSplitType: 'NEVERLEAVEONE', customSplit: '' };
-  // }
+  } else {
+    // STANDARD ticket logic - all standard tickets use NEVERLEAVEONE
+    return { finalSplitType: 'NEVERLEAVEONE', customSplit: '' };
+  }
 }
 
 // Helper function to process batches in parallel
@@ -380,8 +380,7 @@ async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]
     // Calculate split configuration based on quantity and split type
     const { finalSplitType, customSplit } = calculateSplitConfiguration(
       inventory?.quantity || 0, 
-      inventory?.splitType, 
-      inventory?.custom_split
+      inventory?.splitType
     );
     
     return {
@@ -397,7 +396,7 @@ async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]
       barcodes: inventory?.barcodes || '',
       internal_notes: "-tnow -tmplus",
       public_notes: inventory?.publicNotes || '',
-      tags: inventory?.tags || '',
+      tags: inventory?.splitType ==='NEVERLEAVEONE'? 'STANDARD' : 'RESALE',
       list_price: Number(inventory?.listPrice || 0),
       face_price: Number(inventory?.cost || 0),
       taxed_cost: Number(inventory?.cost || 0),
