@@ -56,6 +56,8 @@ const ExportCsvPage: React.FC = () => {
   const [isClearingInventory, setIsClearingInventory] = useState(false);
   const [staleCleanupStatus, setStaleCleanupStatus] = useState('');
   const [isCleaningStaleInventory, setIsCleaningStaleInventory] = useState(false);
+  const [showClearInventoryDialog, setShowClearInventoryDialog] = useState(false);
+  const [showStaleCleanupDialog, setShowStaleCleanupDialog] = useState(false);
 
   // Load settings from database on component mount
   useEffect(() => {
@@ -233,10 +235,12 @@ const ExportCsvPage: React.FC = () => {
     }
   };
 
-  const handleClearInventory = async () => {
-    if (!confirm('Are you sure you want to clear all inventory from Sync? This action cannot be undone.')) {
-      return;
-    }
+  const handleClearInventory = () => {
+    setShowClearInventoryDialog(true);
+  };
+
+  const confirmClearInventory = async () => {
+    setShowClearInventoryDialog(false);
 
     setIsClearingInventory(true);
     setClearStatus('Clearing inventory...');
@@ -279,10 +283,16 @@ const ExportCsvPage: React.FC = () => {
     }
   };
 
-  const handleCleanupStaleInventory = async () => {
-    if (!confirm('Are you sure you want to cleanup stale inventory? This will delete consecutive groups for inactive events and orphaned inventory.')) {
-      return;
-    }
+  const cancelClearInventory = () => {
+    setShowClearInventoryDialog(false);
+  };
+
+  const handleCleanupStaleInventory = () => {
+    setShowStaleCleanupDialog(true);
+  };
+
+  const confirmStaleCleanup = async () => {
+    setShowStaleCleanupDialog(false);
 
     setIsCleaningStaleInventory(true);
     setStaleCleanupStatus('Cleaning up stale inventory...');
@@ -310,6 +320,10 @@ const ExportCsvPage: React.FC = () => {
     } finally {
       setIsCleaningStaleInventory(false);
     }
+  };
+
+  const cancelStaleCleanup = () => {
+    setShowStaleCleanupDialog(false);
   };
 
   const handleSaveSettings = async (e: React.FormEvent) => {
@@ -577,6 +591,83 @@ const ExportCsvPage: React.FC = () => {
           <div>Current Status: {csvStatus.status}</div>
         </div>
       </div>
+
+      {/* Clear All Inventory Confirmation Dialog */}
+      {showClearInventoryDialog && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50 flex items-center justify-center">
+          <div className="relative bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
+            <div className="p-6">
+              <div className="flex items-center justify-center w-12 h-12 mx-auto bg-red-100 rounded-full mb-4">
+                <svg className="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                </svg>
+              </div>
+              <div className="text-center">
+                <h3 className="text-lg font-medium text-gray-900 mb-2">
+                  Clear All Inventory?
+                </h3>
+                <p className="text-sm text-gray-500 mb-6">
+                  Are you sure you want to clear all inventory from Sync?<br/><br/>
+                  <span className="text-red-600 font-medium">This action cannot be undone.</span>
+                </p>
+                <div className="flex justify-center space-x-3">
+                  <button
+                    onClick={cancelClearInventory}
+                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={confirmClearInventory}
+                    className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+                  >
+                    Clear All Inventory
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Clear Stale Inventory Confirmation Dialog */}
+      {showStaleCleanupDialog && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50 flex items-center justify-center">
+          <div className="relative bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
+            <div className="p-6">
+              <div className="flex items-center justify-center w-12 h-12 mx-auto bg-yellow-100 rounded-full mb-4">
+                <svg className="w-6 h-6 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+              </div>
+              <div className="text-center">
+                <h3 className="text-lg font-medium text-gray-900 mb-2">
+                  Clear Stale Inventory?
+                </h3>
+                <p className="text-sm text-gray-500 mb-6">
+                  Are you sure you want to cleanup stale inventory?<br/><br/>
+                  This will delete consecutive groups for inactive events and orphaned inventory.<br/><br/>
+                  <span className="text-yellow-600 font-medium">This action cannot be undone.</span>
+                </p>
+                <div className="flex justify-center space-x-3">
+                  <button
+                    onClick={cancelStaleCleanup}
+                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={confirmStaleCleanup}
+                    className="px-4 py-2 text-sm font-medium text-white bg-yellow-600 rounded-md hover:bg-yellow-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500"
+                  >
+                    Clear Stale Inventory
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

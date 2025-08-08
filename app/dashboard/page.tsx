@@ -16,6 +16,35 @@ import {
   MousePointer2
 } from 'lucide-react';
 
+// Client-side time component to avoid hydration mismatch
+function ClientTime() {
+  const [time, setTime] = useState('');
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+    const updateTime = () => {
+      setTime(new Date().toLocaleTimeString('en-US', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+      }));
+    };
+    
+    updateTime();
+    const interval = setInterval(updateTime, 1000);
+    
+    return () => clearInterval(interval);
+  }, []);
+
+  if (!mounted) {
+    return <span>--:--:--</span>;
+  }
+
+  return <span>{time}</span>;
+}
+
 interface EventDoc {
   Event_DateTime: string;
   _id: string;
@@ -182,7 +211,7 @@ export default function DashboardPage() {
         </div>
         <div className="mt-4 lg:mt-0">
           <div className="text-sm text-slate-500">
-            Last updated: {new Date().toLocaleTimeString()}
+            Last updated: <ClientTime />
           </div>
         </div>
       </div>
@@ -194,13 +223,13 @@ export default function DashboardPage() {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-slate-500 mb-1">Total Events</p>
-              <p className="text-3xl font-bold text-slate-800">
+              <div className="text-3xl font-bold text-slate-800">
                 {stats.loading ? (
                   <div className="w-16 h-8 bg-slate-200 rounded animate-pulse"></div>
                 ) : (
                   stats.totalEvents.toLocaleString()
                 )}
-              </p>
+              </div>
               <div className="flex items-center mt-2 text-sm">
                 <TrendingUp className="w-4 h-4 text-green-500 mr-1" />
                 <span className="text-green-600 font-medium">
@@ -220,13 +249,13 @@ export default function DashboardPage() {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-slate-500 mb-1">Total Inventory</p>
-              <p className="text-3xl font-bold text-slate-800">
+              <div className="text-3xl font-bold text-slate-800">
                 {stats.loading ? (
                   <div className="w-16 h-8 bg-slate-200 rounded animate-pulse"></div>
                 ) : (
                   stats.totalSeats.toLocaleString()
                 )}
-              </p>
+              </div>
               <div className="flex items-center mt-2 text-sm">
                 <Package className="w-4 h-4 text-emerald-500 mr-1" />
                 <span className="text-emerald-600 font-medium">Seats</span>
@@ -244,13 +273,13 @@ export default function DashboardPage() {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-slate-500 mb-1">Active Scraping</p>
-              <p className="text-3xl font-bold text-slate-800">
+              <div className="text-3xl font-bold text-slate-800">
                 {stats.loading ? (
                   <div className="w-16 h-8 bg-slate-200 rounded animate-pulse"></div>
                 ) : (
                   stats.activeScrapingCount.toLocaleString()
                 )}
-              </p>
+              </div>
               <div className="flex items-center mt-2 text-sm">
                 <div className="w-2 h-2 bg-green-500 rounded-full mr-2 animate-pulse"></div>
                 <span className="text-green-600 font-medium">
@@ -318,12 +347,20 @@ export default function DashboardPage() {
               <div className="space-y-4">
                 <div className="animate-pulse">
                   <div className="flex items-end space-x-3 h-64">
-                    {[1, 2, 3, 4, 5, 6, 7].map((i) => (
-                      <div key={i} className="flex-1 space-y-2">
-                        <div className="bg-slate-200 rounded-t" style={{ height: `${Math.random() * 100 + 40}px` }}></div>
-                        <div className="bg-slate-200 rounded-t" style={{ height: `${Math.random() * 120 + 60}px` }}></div>
-                      </div>
-                    ))}
+                    {[1, 2, 3, 4, 5, 6, 7].map((i) => {
+                      // Fixed heights to prevent hydration mismatch
+                      const heights = [
+                        [80, 120], [95, 140], [70, 100], [110, 160],
+                        [85, 130], [75, 110], [90, 150]
+                      ];
+                      const [height1, height2] = heights[i - 1];
+                      return (
+                        <div key={i} className="flex-1 space-y-2">
+                          <div className="bg-slate-200 rounded-t" style={{ height: `${height1}px` }}></div>
+                          <div className="bg-slate-200 rounded-t" style={{ height: `${height2}px` }}></div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               </div>

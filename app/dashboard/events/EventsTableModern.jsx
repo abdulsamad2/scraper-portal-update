@@ -112,7 +112,7 @@ const EventsTableModern = memo(function EventsTableModern({ data, toggleScraping
       )
     },
     { 
-      name: <Header title="Seats" description="Available seat count" icon={<Users size={14} />} />, 
+      name: <Header title="Rows" description="Available seat count" icon={<Users size={14} />} />, 
       selector: r => seatCounts[r._id] || r.Available_Seats || 0, 
       sortable: true, 
       right: true, 
@@ -196,9 +196,9 @@ const EventsTableModern = memo(function EventsTableModern({ data, toggleScraping
     {
       name: <Header title="Actions" />, 
       button: true, 
-      width: '140px',
+      width: '160px',
       cell: r => (
-        <div className="flex gap-1 justify-end">
+        <div className="flex gap-1 justify-end pr-4">
           <Link 
             href={`/dashboard/events/${r._id}/edit`} 
             className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors duration-200 hover:shadow-sm" 

@@ -119,7 +119,8 @@ export async function updateEvent(eventId: string, updateData: Partial<Event> & 
     let seatDeletionResult = null;
     if (shouldDeleteSeats) {
       console.log('Deleting seat groups for event:', eventId);
-      seatDeletionResult = await deleteConsecutiveGroupsByEventId(eventId);
+      // Use Event_ID (not MongoDB _id) to match the ConsecutiveGroup eventId field
+      seatDeletionResult = await deleteConsecutiveGroupsByEventId(currentEvent.Event_ID);
       console.log('Seat deletion result:', seatDeletionResult);
     }
 
@@ -181,8 +182,8 @@ export async function deleteEvent(eventId: string) {
       return { message: 'Event not found', success: false };
     }
 
-    // Delete all associated consecutive seat groups first
-    const seatDeletionResult = await deleteConsecutiveGroupsByEventId(eventId);
+    // Delete all associated consecutive seat groups first using Event_ID (not MongoDB _id)
+    const seatDeletionResult = await deleteConsecutiveGroupsByEventId(eventToDelete.Event_ID);
     
     // Delete the event
     const deletedEvent = await Event.findByIdAndDelete(eventId);
@@ -207,9 +208,9 @@ export async function updateAllEvents(status: boolean){
   try{
     // If we're stopping scraping (status = true), we need to delete all seat groups
     if (status === true) {
-      // Get all event IDs first
-      const events = await Event.find({}, '_id');
-      const eventIds = events.map(event => event._id.toString());
+      // Get all Event_ID fields (not MongoDB _id) to match ConsecutiveGroup eventId field
+      const events = await Event.find({}, 'Event_ID');
+      const eventIds = events.map(event => event.Event_ID);
       
       // Delete all seat groups for all events efficiently
       const seatDeletionResult = await deleteConsecutiveGroupsByEventIds(eventIds);

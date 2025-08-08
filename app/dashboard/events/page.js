@@ -2,7 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { getAllEvents, updateEvent, updateAllEvents, deleteEvent } from '@/actions/eventActions';
-import { Calendar, Plus, ChevronLeft, ChevronRight, RefreshCw, Search, X, SlidersHorizontal } from 'lucide-react';
+import { Calendar, ChevronLeft, ChevronRight, RefreshCw, Search, X, SlidersHorizontal } from 'lucide-react';
 import EventsTableModern from './EventsTableModern.jsx';
 
 export default function EventsPage() {
@@ -11,8 +11,13 @@ export default function EventsPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [loadingSeatCounts] = useState(false);
-  const [lastRefresh, setLastRefresh] = useState(new Date());
+  const [lastRefresh, setLastRefresh] = useState(null);
   const [showFilters, setShowFilters] = useState(false);
+  const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [eventToDelete, setEventToDelete] = useState(null);
+  const [deleteMessage, setDeleteMessage] = useState('');
+  const [deleteMessageType, setDeleteMessageType] = useState(''); // 'success' or 'error'
   
   // Advanced filter states
   const [filters, setFilters] = useState({
@@ -23,16 +28,16 @@ export default function EventsPage() {
       min: '',
       max: ''
     },
-    scrapingStatus: 'all', // 'all', 'active', 'inactive'
+    scrapingStatus: 'all', // 'all', 'active', 'inactive' - show all events by default
     createdDateFrom: '',
     createdDateTo: '',
     hasAvailableSeats: 'all', // 'all', 'yes', 'no'
-    sortBy: 'newest', // 'newest', 'oldest', 'name', 'date', 'seats'
+    sortBy: 'date', // 'newest', 'oldest', 'name', 'date', 'seats' - default to event date
   });
   
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
-  const [eventsPerPage, setEventsPerPage] = useState(25);
+  const [eventsPerPage, setEventsPerPage] = useState(100); // Show 100 events by default
 
   // Function to fetch events
   const fetchEvents = async (isRefresh = false) => {
@@ -118,8 +123,17 @@ export default function EventsPage() {
              matchesAvailableSeats;
     });
 
-    // Sort the filtered results
+    // Sort the filtered results - Active events first, then inactive events
     filtered.sort((a, b) => {
+      // Primary sort: Active events (Skip_Scraping = false) come first
+      const aActive = !a.Skip_Scraping;
+      const bActive = !b.Skip_Scraping;
+      
+      if (aActive !== bActive) {
+        return bActive - aActive; // Active (true) comes before inactive (false)
+      }
+      
+      // Secondary sort: Apply the selected sorting criteria within each group
       switch (filters.sortBy) {
         case 'oldest':
           return new Date(a.createdAt) - new Date(b.createdAt);
@@ -128,6 +142,7 @@ export default function EventsPage() {
         case 'name':
           return (a.Event_Name || '').localeCompare(b.Event_Name || '');
         case 'date':
+          // Simple ascending order by event date (10, 11, 12, 13, 14...)
           return new Date(a.Event_DateTime) - new Date(b.Event_DateTime);
         case 'seats':
           return (b.Available_Seats || 0) - (a.Available_Seats || 0);
@@ -171,8 +186,13 @@ export default function EventsPage() {
   
   const allActive = filteredEvents.length > 0 && filteredEvents.every(e => !e.Skip_Scraping);
 
-  // Toggle scraping state for ALL filtered events
-  const toggleScrapingAll = async () => {
+  // Show confirmation dialog for scraping all events
+  const toggleScrapingAll = () => {
+    setShowConfirmDialog(true);
+  };
+
+  // Execute the actual scraping toggle after confirmation
+  const confirmToggleScrapingAll = async () => {
     try {
       // If all events are active (not skipping), then stop all (set to true)
       // If not all events are active, then start all (set to false)
@@ -195,7 +215,14 @@ export default function EventsPage() {
       }
     } catch (error) {
       console.error('Error toggling scraping for all events:', error);
+    } finally {
+      setShowConfirmDialog(false);
     }
+  };
+
+  // Cancel confirmation dialog
+  const cancelToggleScrapingAll = () => {
+    setShowConfirmDialog(false);
   };
 
   // Pagination helpers
@@ -211,35 +238,67 @@ export default function EventsPage() {
     setCurrentPage(prev => Math.min(totalPages, prev + 1));
   };
 
-  // Delete event with confirmation
-  const handleDeleteEvent = async (eventId, eventName) => {
-    const isConfirmed = window.confirm(
-      `Are you sure you want to delete the event "${eventName}"?\n\nThis action will also delete all associated inventory seats and consecutive seat groups.\n\nThis action cannot be undone.`
-    );
+  // Show delete confirmation dialog
+  const handleDeleteEvent = (eventId, eventName) => {
+    setEventToDelete({ id: eventId, name: eventName });
+    setShowDeleteDialog(true);
+  };
+
+  // Execute the actual delete after confirmation
+  const confirmDeleteEvent = async () => {
+    if (!eventToDelete) return;
     
-    if (isConfirmed) {
-      try {
-        const result = await deleteEvent(eventId);
+    try {
+      const result = await deleteEvent(eventToDelete.id);
+      
+      if (result.success) {
+        // Remove the deleted event from the state
+        setEvents(prev => prev.filter(event => event._id !== eventToDelete.id));
         
-        if (result.success) {
-          // Remove the deleted event from the state
-          setEvents(prev => prev.filter(event => event._id !== eventId));
-          
-          // Adjust current page if necessary
-          const newTotalPages = Math.ceil((events.length - 1) / eventsPerPage);
-          if (currentPage > newTotalPages && newTotalPages > 0) {
-            setCurrentPage(newTotalPages);
-          }
-          
-          // Show success message with seat group deletion info
-          console.log(`Event "${eventName}" deleted successfully. Also deleted ${result.deletedSeatGroups || 0} associated seat groups.`);
-        } else {
-          console.error('Failed to delete event:', result.error || result.message);
+        // Adjust current page if necessary
+        const newTotalPages = Math.ceil((events.length - 1) / eventsPerPage);
+        if (currentPage > newTotalPages && newTotalPages > 0) {
+          setCurrentPage(newTotalPages);
         }
-      } catch (error) {
-        console.error('Error deleting event:', error);
+        
+        // Show success message with seat group deletion info
+        setDeleteMessage(`Event "${eventToDelete.name}" deleted successfully. Also deleted ${result.deletedSeatGroups || 0} associated seat groups.`);
+        setDeleteMessageType('success');
+        
+        // Clear message after 5 seconds
+        setTimeout(() => {
+          setDeleteMessage('');
+          setDeleteMessageType('');
+        }, 5000);
+      } else {
+        setDeleteMessage(`Failed to delete event: ${result.error || result.message}`);
+        setDeleteMessageType('error');
+        
+        // Clear message after 5 seconds
+        setTimeout(() => {
+          setDeleteMessage('');
+          setDeleteMessageType('');
+        }, 5000);
       }
+    } catch (error) {
+      setDeleteMessage(`Error deleting event: ${error.message || 'Unknown error occurred'}`);
+      setDeleteMessageType('error');
+      
+      // Clear message after 5 seconds
+      setTimeout(() => {
+        setDeleteMessage('');
+        setDeleteMessageType('');
+      }, 5000);
+    } finally {
+      setShowDeleteDialog(false);
+      setEventToDelete(null);
     }
+  };
+
+  // Cancel delete confirmation dialog
+  const cancelDeleteEvent = () => {
+    setShowDeleteDialog(false);
+    setEventToDelete(null);
   };
 
   // Reset to first page when search or filters change
@@ -272,11 +331,11 @@ export default function EventsPage() {
       dateTo: '',
       venue: '',
       seatRange: { min: '', max: '' },
-      scrapingStatus: 'all',
+      scrapingStatus: 'all', // Reset to default all
       createdDateFrom: '',
       createdDateTo: '',
       hasAvailableSeats: 'all',
-      sortBy: 'newest',
+      sortBy: 'date', // Reset to default date sorting
     });
   };
 
@@ -284,10 +343,10 @@ export default function EventsPage() {
     return searchTerm || 
            filters.dateFrom || filters.dateTo || filters.venue ||
            filters.seatRange.min || filters.seatRange.max ||
-           filters.scrapingStatus !== 'all' ||
+           filters.scrapingStatus !== 'all' || // Check against default
            filters.createdDateFrom || filters.createdDateTo ||
            filters.hasAvailableSeats !== 'all' ||
-           filters.sortBy !== 'newest';
+           filters.sortBy !== 'date'; // Check against new default
   };
 
  
@@ -298,7 +357,12 @@ export default function EventsPage() {
             <h1 className="text-2xl font-bold">Events</h1>
             <span className="text-sm text-gray-600">{activeCount} active / {totalCount} total</span>
             <span className="text-xs text-gray-500 flex items-center gap-1">
-              Last updated: {lastRefresh.toLocaleTimeString()}
+              Last updated: {lastRefresh ? lastRefresh.toLocaleTimeString('en-US', {
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: false
+              }) : '--:--:--'}
               {refreshing && (
                 <>
                   <span className="text-blue-500">•</span>
@@ -316,13 +380,7 @@ export default function EventsPage() {
             <RefreshCw className={`w-4 h-4 mr-1 ${refreshing ? 'animate-spin' : ''}`} />
             {refreshing ? 'Refreshing...' : 'Refresh'}
           </button>
-          <Link 
-            href="/dashboard/list-event"
-            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-          >
-            <Plus className="w-4 h-4 mr-1" />
-            Add Event
-          </Link>
+
           <button
             onClick={toggleScrapingAll}
             className={`inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white ${allActive ? 'bg-red-600 hover:bg-red-700 focus:ring-red-500' : 'bg-green-600 hover:bg-green-700 focus:ring-green-500'}`}
@@ -332,6 +390,47 @@ export default function EventsPage() {
         </div>
        
       </div>
+
+      {/* Delete Feedback Message */}
+      {deleteMessage && (
+        <div className={`mb-6 p-4 rounded-lg border ${
+          deleteMessageType === 'success' 
+            ? 'bg-green-50 border-green-200 text-green-800' 
+            : 'bg-red-50 border-red-200 text-red-800'
+        }`}>
+          <div className="flex items-center">
+            <div className={`flex-shrink-0 w-5 h-5 mr-3 ${
+              deleteMessageType === 'success' ? 'text-green-400' : 'text-red-400'
+            }`}>
+              {deleteMessageType === 'success' ? (
+                <svg fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                </svg>
+              ) : (
+                <svg fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                </svg>
+              )}
+            </div>
+            <div className="flex-1">
+              <p className="text-sm font-medium">{deleteMessage}</p>
+            </div>
+            <button
+              onClick={() => {
+                setDeleteMessage('');
+                setDeleteMessageType('');
+              }}
+              className={`ml-3 inline-flex text-sm ${
+                deleteMessageType === 'success' 
+                  ? 'text-green-600 hover:text-green-500' 
+                  : 'text-red-600 hover:text-red-500'
+              }`}
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Modern Search and Filters */}
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
@@ -536,15 +635,7 @@ export default function EventsPage() {
             <p className="mt-1 text-sm text-gray-500">
               {searchTerm ? 'Try adjusting your search criteria.' : 'Get started by creating a new event.'}
             </p>
-            <div className="mt-6">
-              <Link 
-                href="/dashboard/list-event"
-                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-              >
-                <Plus className="w-4 h-4 mr-1" />
-                New Event
-              </Link>
-            </div>
+
           </div>
         ) : (
           <>
@@ -654,6 +745,89 @@ export default function EventsPage() {
           </>
         )}
       </div>
+
+      {/* Confirmation Dialog */}
+      {showConfirmDialog && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50 flex items-center justify-center">
+          <div className="relative bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
+            <div className="p-6">
+              <div className="flex items-center justify-center w-12 h-12 mx-auto bg-yellow-100 rounded-full mb-4">
+                <svg className="w-6 h-6 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                </svg>
+              </div>
+              <div className="text-center">
+                <h3 className="text-lg font-medium text-gray-900 mb-2">
+                  {allActive ? 'Stop All Scraping?' : 'Start All Scraping?'}
+                </h3>
+                <p className="text-sm text-gray-500 mb-6">
+                  {allActive 
+                    ? 'This will stop scraping for all events and may delete associated seat data. This action cannot be undone.'
+                    : 'This will start scraping for all events. Are you sure you want to proceed?'
+                  }
+                </p>
+                <div className="flex justify-center space-x-3">
+                  <button
+                    onClick={cancelToggleScrapingAll}
+                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={confirmToggleScrapingAll}
+                    className={`px-4 py-2 text-sm font-medium text-white rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 ${
+                      allActive 
+                        ? 'bg-red-600 hover:bg-red-700 focus:ring-red-500'
+                        : 'bg-green-600 hover:bg-green-700 focus:ring-green-500'
+                    }`}
+                  >
+                    {allActive ? 'Stop All' : 'Start All'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Event Confirmation Dialog */}
+      {showDeleteDialog && eventToDelete && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50 flex items-center justify-center">
+          <div className="relative bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
+            <div className="p-6">
+              <div className="flex items-center justify-center w-12 h-12 mx-auto bg-red-100 rounded-full mb-4">
+                <svg className="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+              </div>
+              <div className="text-center">
+                <h3 className="text-lg font-medium text-gray-900 mb-2">
+                  Delete Event?
+                </h3>
+                <p className="text-sm text-gray-500 mb-6">
+                  Are you sure you want to delete the event <strong>"{eventToDelete.name}"</strong>?<br/><br/>
+                  This action will also delete all associated inventory seats and consecutive seat groups.<br/><br/>
+                  <span className="text-red-600 font-medium">This action cannot be undone.</span>
+                </p>
+                <div className="flex justify-center space-x-3">
+                  <button
+                    onClick={cancelDeleteEvent}
+                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={confirmDeleteEvent}
+                    className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+                  >
+                    Delete Event
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

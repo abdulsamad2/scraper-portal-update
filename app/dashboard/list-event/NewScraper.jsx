@@ -104,6 +104,126 @@ const NewScraper = ({ onCancel, onSuccess, initialData = null, isEdit = false })
     }
   };
 
+
+
+  // Helper function to extract event data from Ticketmaster URL
+  const extractEventDataFromUrl = (url) => {
+    try {
+      const parsed = new URL(url);
+      if (
+        parsed.hostname.includes("ticketmaster.com") &&
+        parsed.pathname.includes("/event/")
+      ) {
+        // Extract event ID
+        const pathParts = parsed.pathname.split("/");
+        const eventIdIndex = pathParts.findIndex((part) => part === "event") + 1;
+        const eventId = eventIdIndex < pathParts.length ? pathParts[eventIdIndex] : "";
+        
+        // Extract event name and details from URL path
+        // URL format: /artist-name-venue-city-state-date/event/eventId
+        const eventPathPart = pathParts[pathParts.indexOf("event") - 1] || "";
+        
+        let eventName = "";
+        let venue = "";
+        let eventDate = "";
+        
+        if (eventPathPart) {
+          // Split by hyphens and try to extract information
+          const parts = eventPathPart.split("-");
+          
+          // Look for date pattern - try multiple formats
+          // Format 1: MM-DD-YYYY (12-04-2025)
+          // Format 2: DD-MM-YYYY 
+          // Format 3: YYYY-MM-DD
+          let dateIndex = -1;
+          
+          // Try to find date pattern at the end of URL
+          for (let i = parts.length - 1; i >= 2; i--) {
+            const part1 = parts[i-2];
+            const part2 = parts[i-1]; 
+            const part3 = parts[i];
+            
+            // Check if we have 3 numeric parts that could be a date
+            if (/^\d{2,4}$/.test(part1) && /^\d{2}$/.test(part2) && /^\d{2,4}$/.test(part3)) {
+              let year, month, day;
+              
+              // Determine which part is the year (4 digits or > 31)
+              if (part1.length === 4 || parseInt(part1) > 31) {
+                // Format: YYYY-MM-DD
+                year = part1;
+                month = part2.padStart(2, '0');
+                day = part3.padStart(2, '0');
+              } else if (part3.length === 4 || parseInt(part3) > 31) {
+                // Format: MM-DD-YYYY or DD-MM-YYYY
+                year = part3;
+                // Assume MM-DD-YYYY format (US format)
+                month = part1.padStart(2, '0');
+                day = part2.padStart(2, '0');
+              } else {
+                continue; // Skip if we can't determine the year
+              }
+              
+              // Validate month and day ranges
+              const monthNum = parseInt(month);
+              const dayNum = parseInt(day);
+              if (monthNum >= 1 && monthNum <= 12 && dayNum >= 1 && dayNum <= 31) {
+                eventDate = `${year}-${month}-${day}T19:00`; // Default to 7 PM
+                dateIndex = i - 2;
+                break;
+              }
+            }
+          }
+          
+          if (dateIndex >= 0) {
+            // Extract event name (everything before location/date info)
+            const nameParts = parts.slice(0, Math.max(1, dateIndex - 1));
+            eventName = nameParts.map(part => 
+              part.charAt(0).toUpperCase() + part.slice(1).replace(/[^a-zA-Z0-9\s]/g, '')
+            ).join(" ").trim();
+            
+            // Extract venue (parts between name and date)
+            if (dateIndex > 1) {
+              const venueParts = parts.slice(Math.max(1, dateIndex - 1), dateIndex);
+              venue = venueParts.map(part => 
+                part.charAt(0).toUpperCase() + part.slice(1).replace(/[^a-zA-Z0-9\s]/g, '')
+              ).join(" ").trim();
+            }
+          } else {
+            // Fallback: use first few parts as event name
+            eventName = parts.slice(0, Math.min(4, parts.length))
+              .map(part => part.charAt(0).toUpperCase() + part.slice(1).replace(/[^a-zA-Z0-9\s]/g, ''))
+              .join(" ").trim();
+          }
+        }
+        
+        // Calculate in-hand date (1 day before event)
+        let inHandDate = "";
+        if (eventDate) {
+          const eventDateTime = new Date(eventDate);
+          if (!isNaN(eventDateTime.getTime())) {
+            const inHandDateTime = new Date(eventDateTime);
+            inHandDateTime.setDate(inHandDateTime.getDate() - 1);
+            inHandDate = inHandDateTime.toISOString().slice(0, 10); // Only date part for HTML date input
+          }
+        }
+        
+
+        
+        return {
+          eventId,
+          eventName,
+          venue,
+          eventDate,
+          inHandDate
+        };
+      }
+      return null;
+    } catch (error) {
+      console.error('Error parsing URL:', error);
+      return null;
+    }
+  };
+
   const validateUrl = (url) => {
     try {
       const parsed = new URL(url);
@@ -148,20 +268,34 @@ const NewScraper = ({ onCancel, onSuccess, initialData = null, isEdit = false })
   const handleInputChange = (e) => {
     const { name, value } = e.target;
 
-    // Special handling for URL changes - try to extract event ID
-    if (name === "URL" && validateUrl(value) && !formData.Event_ID) {
-      const extractedId = extractEventIdFromUrl(value);
-      if (extractedId) {
+    // Special handling for URL changes - try to extract all event data
+    if (name === "URL" && validateUrl(value)) {
+      const extractedData = extractEventDataFromUrl(value);
+      if (extractedData) {
         setFormData((prev) => ({
           ...prev,
           [name]: value,
-          Event_ID: extractedId,
+          Event_ID: extractedData.eventId || prev.Event_ID,
+          Event_Name: extractedData.eventName || prev.Event_Name,
+          Venue: extractedData.venue || prev.Venue,
+          Event_DateTime: extractedData.eventDate || prev.Event_DateTime,
+          inHandDate: extractedData.inHandDate || prev.inHandDate,
         }));
       } else {
-        setFormData((prev) => ({
-          ...prev,
-          [name]: value,
-        }));
+        // Fallback to just extracting event ID
+        const extractedId = extractEventIdFromUrl(value);
+        if (extractedId && !formData.Event_ID) {
+          setFormData((prev) => ({
+            ...prev,
+            [name]: value,
+            Event_ID: extractedId,
+          }));
+        } else {
+          setFormData((prev) => ({
+            ...prev,
+            [name]: value,
+          }));
+        }
       }
     } else {
       setFormData((prev) => ({
@@ -376,6 +510,7 @@ const NewScraper = ({ onCancel, onSuccess, initialData = null, isEdit = false })
                   Please enter a valid Ticketmaster event URL
                 </p>
               )}
+
             </div>
 
             {/* Event ID Field */}
