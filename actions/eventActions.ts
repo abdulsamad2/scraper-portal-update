@@ -84,12 +84,21 @@ export async function getAllEvents(): Promise<Array<object>> {
  * @returns {Promise<object|null>} The updated event object or null if not found, or an error object.
  */
 export async function updateEvent(eventId: string, updateData: Partial<Event> & { Skip_Scraping?: boolean; priceIncreasePercentage?: number }, deleteSeatGroups: boolean = false) {
+  // Input validation
+  if (!eventId || typeof eventId !== 'string') {
+    return { error: 'Invalid event ID provided' };
+  }
+  
+  if (!updateData || typeof updateData !== 'object') {
+    return { error: 'Invalid update data provided' };
+  }
+
   await dbConnect();
   try {
     // Get current event state to check if we're actually stopping scraping
-    const currentEvent = await Event.findById(eventId);
+    const currentEvent = await Event.findById(eventId).maxTimeMS(5000); // 5 second timeout
     if (!currentEvent) {
-      return null;
+      return { error: 'Event not found' };
     }
 
     // Debug logging
@@ -127,9 +136,10 @@ export async function updateEvent(eventId: string, updateData: Partial<Event> & 
     const updatedEvent = await Event.findByIdAndUpdate(eventId, updateData, {
       new: true, // Return the modified document rather than the original
       runValidators: true, // Ensure schema validations are run
-    });
+    }).maxTimeMS(10000); // 10 second timeout
+    
     if (!updatedEvent) {
-      return null;
+      return { error: 'Failed to update event - event may have been deleted' };
     }
     revalidatePath('/dashboard/events'); // Revalidate events page
     revalidatePath(`/dashboard/events/${eventId}`); // Revalidate specific event page

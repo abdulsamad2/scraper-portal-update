@@ -1,6 +1,5 @@
 "use client"
 import React, { useEffect, useState } from 'react';
-import Link from 'next/link';
 import { getAllEvents, updateEvent, updateAllEvents, deleteEvent } from '@/actions/eventActions';
 import { Calendar, ChevronLeft, ChevronRight, RefreshCw, Search, X, SlidersHorizontal } from 'lucide-react';
 import EventsTableModern from './EventsTableModern.jsx';
@@ -18,6 +17,7 @@ export default function EventsPage() {
   const [eventToDelete, setEventToDelete] = useState(null);
   const [deleteMessage, setDeleteMessage] = useState('');
   const [deleteMessageType, setDeleteMessageType] = useState(''); // 'success' or 'error'
+  const [togglingEvents, setTogglingEvents] = useState(new Set()); // Track events being toggled
   
   // Advanced filter states
   const [filters, setFilters] = useState({
@@ -162,13 +162,26 @@ export default function EventsPage() {
 
   // Toggle Skip_Scraping for an event
   const toggleScraping = async (id, skip) => {
+    // Prevent multiple simultaneous toggles for the same event
+    if (togglingEvents.has(id)) {
+      console.log('Toggle already in progress for event:', id);
+      return;
+    }
+
     try {
+      // Add event to toggling set
+      setTogglingEvents(prev => new Set(prev).add(id));
+      
       const result = await updateEvent(id, { Skip_Scraping: !skip });
+      
       if (result.error) {
         console.error('Failed to toggle scraping:', result.error);
+        // Show user-friendly error message
+        alert(`Failed to ${skip ? 'start' : 'stop'} scraping: ${result.error}`);
         return;
       }
       
+      // Only update state after successful server response
       setEvents(prev => prev.map(e => e._id === id ? { ...e, Skip_Scraping: !skip } : e));
       
       // Log seat deletion if it occurred
@@ -177,6 +190,15 @@ export default function EventsPage() {
       }
     } catch (err) {
       console.error('Failed to toggle scraping:', err);
+      // Show user-friendly error message
+      alert(`Failed to ${skip ? 'start' : 'stop'} scraping. Please try again.`);
+    } finally {
+      // Remove event from toggling set
+      setTogglingEvents(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(id);
+        return newSet;
+      });
     }
   };
 
@@ -644,6 +666,7 @@ export default function EventsPage() {
               toggleScraping={toggleScraping}
               loadingSeatCounts={loadingSeatCounts}
               onDeleteEvent={handleDeleteEvent}
+              togglingEvents={togglingEvents}
             />
             
             {/* Enhanced Pagination */}
@@ -805,7 +828,7 @@ export default function EventsPage() {
                   Delete Event?
                 </h3>
                 <p className="text-sm text-gray-500 mb-6">
-                  Are you sure you want to delete the event <strong>"{eventToDelete.name}"</strong>?<br/><br/>
+                  Are you sure you want to delete the event <strong>&quot;{eventToDelete.name}&quot;</strong>?<br/><br/>
                   This action will also delete all associated inventory seats and consecutive seat groups.<br/><br/>
                   <span className="text-red-600 font-medium">This action cannot be undone.</span>
                 </p>

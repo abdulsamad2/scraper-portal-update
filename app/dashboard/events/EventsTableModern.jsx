@@ -35,7 +35,7 @@ const StatusBadge = ({ active }) => (
   </div>
 );
 
-const EventsTableModern = memo(function EventsTableModern({ data, toggleScraping, seatCounts = {}, loadingSeatCounts = false, onDeleteEvent }) {
+const EventsTableModern = memo(function EventsTableModern({ data, toggleScraping, seatCounts = {}, loadingSeatCounts = false, onDeleteEvent, togglingEvents = new Set() }) {
   // Memoize utility functions to prevent unnecessary re-renders
   const formatDate = useMemo(() => (d) => (d ? new Date(d).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : '—'), []);
   const formatTime = useMemo(() => (d) => (d ? new Date(d).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—'), []);
@@ -215,14 +215,22 @@ const EventsTableModern = memo(function EventsTableModern({ data, toggleScraping
           </button>
           <button
             onClick={() => toggleScraping(r._id, r.Skip_Scraping)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all duration-200 hover:shadow-sm ${
-              r.Skip_Scraping 
+            disabled={togglingEvents.has(r._id)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all duration-200 hover:shadow-sm disabled:opacity-50 disabled:cursor-not-allowed ${
+              togglingEvents.has(r._id)
+                ? 'bg-gray-400 text-white'
+                : r.Skip_Scraping 
                 ? 'bg-gradient-to-r from-blue-500 to-purple-600 text-white hover:from-blue-600 hover:to-purple-700 shadow-blue-200' 
                 : 'bg-red-600 text-white hover:bg-red-700 shadow-red-200'
             }`}
-            title={r.Skip_Scraping ? 'Start Scraping' : 'Stop Scraping'}
+            title={togglingEvents.has(r._id) ? 'Processing...' : (r.Skip_Scraping ? 'Start Scraping' : 'Stop Scraping')}
           >
-            {r.Skip_Scraping ? (
+            {togglingEvents.has(r._id) ? (
+              <>
+                <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                <span>...</span>
+              </>
+            ) : r.Skip_Scraping ? (
               <>
                 <Play size={12} />
                 <span>Start</span>
