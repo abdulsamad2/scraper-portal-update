@@ -357,26 +357,26 @@ function calculateSplitConfiguration(quantity: number, splitType?: string): {
     
     // For quantities at or below thresholds, use CUSTOM with appropriate splits
     // Even quantities 10 and below, Odd quantities 11 and below use CUSTOM
-    if (quantity === 2) {
-      return { finalSplitType: 'CUSTOM', customSplit: '2' };
-    } else if (quantity === 3) {
-      return { finalSplitType: 'CUSTOM', customSplit: '3' };
-    } else if (quantity === 4) {
-      return { finalSplitType: 'CUSTOM', customSplit: '2,4' };
-    } else if (quantity === 5) {
-      return { finalSplitType: 'CUSTOM', customSplit: '3,5' };
-    } else if (quantity === 6) {
-      return { finalSplitType: 'CUSTOM', customSplit: '2,4,6' };
-    } else if (quantity === 7) {
-      return { finalSplitType: 'CUSTOM', customSplit: '2,3,4,5,7' };
-    } else if (quantity === 8) {
-      return { finalSplitType: 'CUSTOM', customSplit: '2,4,6,8' };
-    } else if (quantity === 9) {
-      return { finalSplitType: 'CUSTOM', customSplit: '2,3,4,5,6,7,9' };
-    } else if (quantity === 10) {
-      return { finalSplitType: 'CUSTOM', customSplit: '2,4,6,8,10' };
-    } else if (quantity === 11) {
-      return { finalSplitType: 'CUSTOM', customSplit: '2,3,4,5,6,7,8,9,11' };
+    if (quantity >= 2) {
+      return { finalSplitType: 'CUSTOM', customSplit: '' };
+    // } else if (quantity === 3) {
+    //   return { finalSplitType: 'CUSTOM', customSplit: '3' };
+    // } else if (quantity === 4) {
+    //   return { finalSplitType: 'CUSTOM', customSplit: '2,4' };
+    // } else if (quantity === 5) {
+    //   return { finalSplitType: 'CUSTOM', customSplit: '3,5' };
+    // } else if (quantity === 6) {
+    //   return { finalSplitType: 'CUSTOM', customSplit: '2,4,6' };
+    // } else if (quantity === 7) {
+    //   return { finalSplitType: 'CUSTOM', customSplit: '2,3,4,5,7' };
+    // } else if (quantity === 8) {
+    //   return { finalSplitType: 'CUSTOM', customSplit: '2,4,6,8' };
+    // } else if (quantity === 9) {
+    //   return { finalSplitType: 'CUSTOM', customSplit: '2,3,4,5,6,7,9' };
+    // } else if (quantity === 10) {
+    //   return { finalSplitType: 'CUSTOM', customSplit: '2,4,6,8,10' };
+    // } else if (quantity === 11) {
+    //   return { finalSplitType: 'CUSTOM', customSplit: '2,3,4,5,6,7,8,9,11' };
     } else {
       // For any other quantities (edge cases or quantities > thresholds), use NEVERLEAVEONE
       return { finalSplitType: 'NEVERLEAVEONE', customSplit: '' };
