@@ -422,6 +422,14 @@ async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]
       inventory?.quantity || 0, 
       inventory?.splitType
     );
+
+    // Check if row is SRO and handle public notes accordingly
+    const row = inventory?.row || '';
+    const isSRO = row.toUpperCase() === 'SRO';
+    const existingPublicNotes = inventory?.publicNotes || '';
+    const publicNotes = isSRO 
+      ? (existingPublicNotes ? `${existingPublicNotes} - STANDING ROOM ONLY` : 'STANDING ROOM ONLY')
+      : existingPublicNotes;
     
     return {
       inventory_id: inventory?.inventoryId || 0,
@@ -435,7 +443,7 @@ async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]
       seats: seatsString,
       barcodes: inventory?.barcodes || '',
       internal_notes: doc.event_url ? `-tnow -tmplus ${doc.event_url}` : "-tnow -tmplus",
-      public_notes: inventory?.publicNotes || '',
+      public_notes: publicNotes,
       tags: inventory?.splitType ==='NEVERLEAVEONE'? 'STANDARD' : 'RESALE',
       list_price: Number(inventory?.listPrice || 0),
       face_price: Number(inventory?.cost || 0),
