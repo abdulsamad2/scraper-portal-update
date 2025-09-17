@@ -189,6 +189,7 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
       'event_date': 1,
       'eventId': 1,
       'mapping_id': 1,
+      'event_url': 1, // Include Ticketmaster URL
       'inventory.quantity': 1,
       'inventory.section': 1,
       'inventory.row': 1,
@@ -222,6 +223,21 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
       // Use aggregation pipeline with cache-busting options
       const pipeline = [
         { $match: eventFilter },
+        // Join with Event collection to get the Ticketmaster URL
+        {
+          $lookup: {
+            from: 'events',
+            localField: 'mapping_id',
+            foreignField: 'mapping_id',
+            as: 'eventDetails'
+          }
+        },
+        // Add the event URL field to the document
+        {
+          $addFields: {
+            event_url: { $arrayElemAt: ['$eventDetails.URL', 0] }
+          }
+        },
         { $project: projection },
         { $sort: { _id: 1 } } // Ensure consistent ordering
       ];
@@ -334,6 +350,7 @@ interface ConsecutiveGroupDocument {
   event_date?: Date | string;
   eventId?: string;
   mapping_id?: string;
+  event_url?: string; // Ticketmaster URL from Event collection
   seats?: Array<{ number: string | number }>;
 }
 
@@ -417,7 +434,7 @@ async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]
       row: inventory?.row || '',
       seats: seatsString,
       barcodes: inventory?.barcodes || '',
-      internal_notes: "-tnow -tmplus",
+      internal_notes: doc.event_url ? `-tnow -tmplus ${doc.event_url}` : "-tnow -tmplus",
       public_notes: inventory?.publicNotes || '',
       tags: inventory?.splitType ==='NEVERLEAVEONE'? 'STANDARD' : 'RESALE',
       list_price: Number(inventory?.listPrice || 0),
