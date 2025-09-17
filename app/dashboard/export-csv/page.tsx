@@ -59,6 +59,24 @@ const ExportCsvPage: React.FC = () => {
   const [showClearInventoryDialog, setShowClearInventoryDialog] = useState(false);
   const [showStaleCleanupDialog, setShowStaleCleanupDialog] = useState(false);
 
+  // Auto-delete state
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [autoDeleteSettings, setAutoDeleteSettings] = useState<any>({
+    isEnabled: false,
+    graceHours: 15,
+    scheduleIntervalHours: 24,
+    lastRunAt: null,
+    nextRunAt: null,
+    totalRuns: 0,
+    totalEventsDeleted: 0,
+    lastRunStats: null,
+    schedulerStatus: 'Stopped'
+  });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [autoDeletePreview, setAutoDeletePreview] = useState<any>(null);
+  const [showAutoDeletePreview, setShowAutoDeletePreview] = useState(false);
+  const [isLoadingAutoDelete, setIsLoadingAutoDelete] = useState(false);
+
   // Load settings from database on component mount
   useEffect(() => {
     const loadSettings = async () => {
@@ -90,6 +108,23 @@ const ExportCsvPage: React.FC = () => {
     };
     
     loadSettings();
+  }, []);
+
+  // Load auto-delete settings
+  useEffect(() => {
+    const loadAutoDeleteSettings = async () => {
+      try {
+        const response = await fetch('/api/auto-delete');
+        if (response.ok) {
+          const data = await response.json();
+          setAutoDeleteSettings(data.settings);
+        }
+      } catch (error) {
+        console.error('Failed to load auto-delete settings:', error);
+      }
+    };
+    
+    loadAutoDeleteSettings();
   }, []);
 
 
@@ -326,6 +361,122 @@ const ExportCsvPage: React.FC = () => {
     setShowStaleCleanupDialog(false);
   };
 
+  // Auto-delete functions
+  const handleAutoDeleteToggle = async (enabled: boolean) => {
+    setIsLoadingAutoDelete(true);
+    try {
+      const response = await fetch('/api/auto-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          action: enabled ? 'start' : 'stop',
+          graceHours: autoDeleteSettings.graceHours,
+          scheduleIntervalHours: autoDeleteSettings.scheduleIntervalHours
+        })
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        setAutoDeleteSettings((prev: any) => ({ 
+          ...prev, 
+          isEnabled: enabled,
+          schedulerStatus: enabled ? 'Running' : 'Stopped'
+        }));
+        showMessage(result.message, 'success');
+      } else {
+        showMessage(result.error || 'Failed to update auto-delete', 'error');
+      }
+    } catch (error) {
+      console.error('Error toggling auto-delete:', error);
+      showMessage('Error updating auto-delete settings', 'error');
+    } finally {
+      setIsLoadingAutoDelete(false);
+    }
+  };
+
+  const handleAutoDeleteSettingsUpdate = async (updates: any) => {
+    setIsLoadingAutoDelete(true);
+    try {
+      const response = await fetch('/api/auto-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          action: 'update-settings',
+          ...updates
+        })
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        setAutoDeleteSettings((prev: any) => ({ ...prev, ...updates }));
+        showMessage('Auto-delete settings updated', 'success');
+      } else {
+        showMessage(result.error || 'Failed to update settings', 'error');
+      }
+    } catch (error) {
+      console.error('Error updating auto-delete settings:', error);
+      showMessage('Error updating settings', 'error');
+    } finally {
+      setIsLoadingAutoDelete(false);
+    }
+  };
+
+  const handleAutoDeletePreview = async () => {
+    setIsLoadingAutoDelete(true);
+    try {
+      const response = await fetch('/api/auto-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          action: 'preview',
+          graceHours: autoDeleteSettings.graceHours
+        })
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        setAutoDeletePreview(result);
+        setShowAutoDeletePreview(true);
+      } else {
+        showMessage(result.error || 'Failed to get preview', 'error');
+      }
+    } catch (error) {
+      console.error('Error getting auto-delete preview:', error);
+      showMessage('Error getting preview', 'error');
+    } finally {
+      setIsLoadingAutoDelete(false);
+    }
+  };
+
+  const handleAutoDeleteRunNow = async () => {
+    setIsLoadingAutoDelete(true);
+    try {
+      const response = await fetch('/api/auto-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'run-now' })
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        showMessage(result.message, 'success');
+        // Refresh settings
+        const settingsResponse = await fetch('/api/auto-delete');
+        if (settingsResponse.ok) {
+          const data = await settingsResponse.json();
+          setAutoDeleteSettings(data.settings);
+        }
+      } else {
+        showMessage(result.error || 'Failed to run auto-delete', 'error');
+      }
+    } catch (error) {
+      console.error('Error running auto-delete:', error);
+      showMessage('Error running auto-delete', 'error');
+    } finally {
+      setIsLoadingAutoDelete(false);
+    }
+  };
+
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
@@ -513,6 +664,163 @@ const ExportCsvPage: React.FC = () => {
         </div>
       )}
 
+      {/* Auto-Delete Past Events Section */}
+      <div className="bg-white rounded-lg shadow-md p-6 mb-5">
+        <h3 className="text-lg font-semibold mb-4 border-b pb-2">Auto-Delete Past Events</h3>
+        <div className="space-y-4">
+          <div className="bg-yellow-50 p-4 rounded-lg">
+            <p className="text-yellow-800 text-sm">
+              <strong>Auto-Delete Feature:</strong> Automatically deletes events that have already taken place after a configurable grace period. 
+              Example: An event on September 11th at 9pm EST will be deleted 15 hours later (default) on September 12th at 12pm EST.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Grace Period (Hours)
+              </label>
+              <input
+                type="number"
+                value={autoDeleteSettings.graceHours}
+                onChange={(e) => setAutoDeleteSettings((prev: any) => ({ 
+                  ...prev, 
+                  graceHours: parseInt(e.target.value) || 15 
+                }))}
+                min="1"
+                max="168"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              />
+              <p className="text-xs text-gray-500 mt-1">Hours to wait after event time before deletion (1-168 hours)</p>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Check Interval (Hours)
+              </label>
+              <input
+                type="number"
+                value={autoDeleteSettings.scheduleIntervalHours}
+                onChange={(e) => setAutoDeleteSettings((prev: any) => ({ 
+                  ...prev, 
+                  scheduleIntervalHours: parseInt(e.target.value) || 24 
+                }))}
+                min="1"
+                max="168"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              />
+              <p className="text-xs text-gray-500 mt-1">How often to check for expired events (1-168 hours)</p>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-4">
+              <span className="text-sm font-medium text-gray-700">Auto-Delete Status:</span>
+              <span className={`text-sm font-semibold ${
+                autoDeleteSettings.schedulerStatus === 'Running' ? 'text-green-600' : 'text-red-600'
+              }`}>
+                {autoDeleteSettings.schedulerStatus}
+              </span>
+            </div>
+            
+            <div className="flex space-x-2">
+              <button
+                onClick={() => handleAutoDeleteSettingsUpdate({
+                  graceHours: autoDeleteSettings.graceHours,
+                  scheduleIntervalHours: autoDeleteSettings.scheduleIntervalHours
+                })}
+                disabled={isLoadingAutoDelete}
+                className="bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded-md transition-colors disabled:bg-gray-400"
+              >
+                Update Settings
+              </button>
+
+              {!autoDeleteSettings.isEnabled ? (
+                <button
+                  onClick={() => handleAutoDeleteToggle(true)}
+                  disabled={isLoadingAutoDelete}
+                  className="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-md transition-colors disabled:bg-gray-400"
+                >
+                  {isLoadingAutoDelete ? 'Starting...' : 'Start Auto-Delete'}
+                </button>
+              ) : (
+                <button
+                  onClick={() => handleAutoDeleteToggle(false)}
+                  disabled={isLoadingAutoDelete}
+                  className="bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-md transition-colors disabled:bg-gray-400"
+                >
+                  {isLoadingAutoDelete ? 'Stopping...' : 'Stop Auto-Delete'}
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="flex space-x-2">
+            <button
+              onClick={handleAutoDeletePreview}
+              disabled={isLoadingAutoDelete}
+              className="bg-blue-100 hover:bg-blue-200 text-blue-800 font-medium py-2 px-4 rounded-md transition-colors disabled:bg-gray-100"
+            >
+              Preview Events to Delete
+            </button>
+            
+            <button
+              onClick={handleAutoDeleteRunNow}
+              disabled={isLoadingAutoDelete || !autoDeleteSettings.isEnabled}
+              className="bg-orange-500 hover:bg-orange-600 text-white font-medium py-2 px-4 rounded-md transition-colors disabled:bg-gray-400"
+            >
+              Run Now
+            </button>
+          </div>
+
+          {/* Auto-Delete Statistics */}
+          {autoDeleteSettings.lastRunAt && (
+            <div className="bg-gray-50 p-4 rounded-lg">
+              <h4 className="text-sm font-semibold mb-2">Auto-Delete Statistics</h4>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                <div>
+                  <div className="text-gray-600">Total Runs</div>
+                  <div className="font-medium">{autoDeleteSettings.totalRuns}</div>
+                </div>
+                <div>
+                  <div className="text-gray-600">Events Deleted</div>
+                  <div className="font-medium">{autoDeleteSettings.totalEventsDeleted}</div>
+                </div>
+                <div>
+                  <div className="text-gray-600">Last Run</div>
+                  <div className="font-medium">
+                    {moment(autoDeleteSettings.lastRunAt).format('MM/DD HH:mm')}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-gray-600">Next Run</div>
+                  <div className="font-medium">
+                    {autoDeleteSettings.nextRunAt 
+                      ? moment(autoDeleteSettings.nextRunAt).format('MM/DD HH:mm')
+                      : 'Not scheduled'
+                    }
+                  </div>
+                </div>
+              </div>
+              
+              {autoDeleteSettings.lastRunStats && (
+                <div className="mt-3 pt-3 border-t">
+                  <div className="text-xs text-gray-600">
+                    Last run: Checked {autoDeleteSettings.lastRunStats.eventsChecked} events, 
+                    deleted {autoDeleteSettings.lastRunStats.eventsDeleted} expired events
+                    {autoDeleteSettings.lastRunStats.errors?.length > 0 && (
+                      <span className="text-red-600 ml-2">
+                        ({autoDeleteSettings.lastRunStats.errors.length} errors)
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* Clear Inventory Section */}
       <div className="bg-white rounded-lg shadow-md p-6 mb-5">
         <h3 className="text-lg font-semibold mb-4 border-b pb-2">Inventory Management</h3>
@@ -663,6 +971,97 @@ const ExportCsvPage: React.FC = () => {
                     Clear Stale Inventory
                   </button>
                 </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Auto-Delete Preview Dialog */}
+      {showAutoDeletePreview && autoDeletePreview && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50 flex items-center justify-center">
+          <div className="relative bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto">
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-medium text-gray-900">
+                  Auto-Delete Preview
+                </h3>
+                <button
+                  onClick={() => setShowAutoDeletePreview(false)}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              
+              <div className="mb-4">
+                <p className="text-sm text-gray-600">
+                  Grace period: <strong>{autoDeletePreview.graceHours} hours</strong>
+                  <br />
+                  Cutoff time: <strong>{moment(autoDeletePreview.cutoffTime).format('YYYY-MM-DD HH:mm:ss')}</strong>
+                </p>
+              </div>
+
+              {autoDeletePreview.count === 0 ? (
+                <div className="text-center py-8">
+                  <div className="text-green-600 text-lg font-medium mb-2">
+                    ✅ No events to delete
+                  </div>
+                  <p className="text-gray-500">
+                    All events are still within the grace period or are scheduled for the future.
+                  </p>
+                </div>
+              ) : (
+                <div>
+                  <div className="mb-4">
+                    <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-red-100 text-red-800">
+                      {autoDeletePreview.count} events will be deleted
+                    </span>
+                  </div>
+                  
+                  <div className="max-h-64 overflow-y-auto border rounded-lg">
+                    <table className="min-w-full divide-y divide-gray-200">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Event ID</th>
+                          <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Event Name</th>
+                          <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Date/Time</th>
+                          <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Venue</th>
+                        </tr>
+                      </thead>
+                      <tbody className="bg-white divide-y divide-gray-200">
+                        {autoDeletePreview.events.map((event: any, index: number) => (
+                          <tr key={index} className="hover:bg-gray-50">
+                            <td className="px-4 py-2 text-sm font-medium text-gray-900">{event.id}</td>
+                            <td className="px-4 py-2 text-sm text-gray-900">{event.name}</td>
+                            <td className="px-4 py-2 text-sm text-gray-500">
+                              {moment(event.dateTime).format('YYYY-MM-DD HH:mm')}
+                            </td>
+                            <td className="px-4 py-2 text-sm text-gray-500">{event.venue || 'N/A'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div className="mt-4 p-3 bg-yellow-50 rounded-lg">
+                    <p className="text-yellow-800 text-sm">
+                      <strong>Warning:</strong> These events and all their associated seat inventory will be permanently deleted.
+                      This action cannot be undone.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex justify-end space-x-3 mt-6">
+                <button
+                  onClick={() => setShowAutoDeletePreview(false)}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+                >
+                  Close
+                </button>
               </div>
             </div>
           </div>

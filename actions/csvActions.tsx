@@ -4,8 +4,10 @@ import dbConnect from '../lib/dbConnect';
 import { ConsecutiveGroup } from '../models/seatModel';
 import { Event } from '../models/eventModel';
 import { SchedulerSettings } from '../models/schedulerModel';
+import { AutoDeleteSettings } from '../models/autoDeleteModel';
 import SyncService from '../lib/syncService';
 import { createErrorLog } from './errorLogActions';
+import { deleteExpiredEvents, getExpiredEventsStats } from './autoDeleteActions';
 import { PipelineStage } from 'mongoose';
 
 interface CsvRow {
@@ -670,5 +672,114 @@ export async function updateSchedulerSettings(updates: {
   } catch (error) {
     console.error('Error updating scheduler settings:', error);
     throw error;
+  }
+}
+
+// Auto-Delete Settings functions
+export async function getAutoDeleteSettings() {
+  await dbConnect();
+  try {
+    // Use the statics method properly
+    const settings = await AutoDeleteSettings.findOne();
+    if (!settings) {
+      return await AutoDeleteSettings.create({
+        isEnabled: false,
+        graceHours: 15,
+        scheduleIntervalHours: 24
+      });
+    }
+    return settings;
+  } catch (error) {
+    console.error('Error getting auto-delete settings:', error);
+    throw error;
+  }
+}
+
+export async function updateAutoDeleteSettings(updates: {
+  isEnabled?: boolean;
+  graceHours?: number;
+  scheduleIntervalHours?: number;
+  lastRunAt?: Date;
+  nextRunAt?: Date;
+  totalRuns?: number;
+  totalEventsDeleted?: number;
+  lastRunStats?: {
+    eventsChecked: number;
+    eventsDeleted: number;
+    deletedEventIds: string[];
+    errors: string[];
+  };
+}) {
+  await dbConnect();
+  try {
+    const settings = await getAutoDeleteSettings();
+    Object.assign(settings, updates, { updatedAt: new Date() });
+    return await settings.save();
+  } catch (error) {
+    console.error('Error updating auto-delete settings:', error);
+    throw error;
+  }
+}
+
+// Auto-Delete Functions
+export async function runAutoDelete() {
+  try {
+    const settings = await getAutoDeleteSettings();
+    if (!settings.isEnabled) {
+      return {
+        success: false,
+        message: 'Auto-delete is disabled'
+      };
+    }
+
+    const stats = await deleteExpiredEvents(settings.graceHours);
+    
+    // Update settings with run statistics
+    await updateAutoDeleteSettings({
+      lastRunAt: new Date(),
+      nextRunAt: new Date(Date.now() + settings.scheduleIntervalHours * 60 * 60 * 1000),
+      totalRuns: settings.totalRuns + 1,
+      totalEventsDeleted: settings.totalEventsDeleted + stats.eventsDeleted,
+      lastRunStats: {
+        eventsChecked: stats.totalEventsChecked,
+        eventsDeleted: stats.eventsDeleted,
+        deletedEventIds: stats.deletedEventIds,
+        errors: stats.errors
+      }
+    });
+
+    return {
+      success: true,
+      message: `Auto-delete completed. Deleted ${stats.eventsDeleted} events.`,
+      stats
+    };
+  } catch (error) {
+    console.error('Error running auto-delete:', error);
+    return {
+      success: false,
+      message: `Auto-delete failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    };
+  }
+}
+
+export async function getAutoDeletePreview(graceHours?: number) {
+  try {
+    const settings = await getAutoDeleteSettings();
+    const hours = graceHours ?? settings.graceHours;
+    const preview = await getExpiredEventsStats(hours);
+    
+    return {
+      ...preview,
+      graceHours: hours
+    };
+  } catch (error) {
+    console.error('Error getting auto-delete preview:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+      count: 0,
+      events: []
+    };
   }
 }
