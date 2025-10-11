@@ -6,6 +6,59 @@ import { Download, Upload } from 'lucide-react';
 import { generateInventoryCsv, uploadCsvToSyncService } from '../../../actions/csvActions';
 import { deleteStaleInventory } from '../../../actions/seatActions';
 
+// Type definitions
+interface AutoDeleteSettings {
+  isEnabled: boolean;
+  graceHours: number;
+  scheduleIntervalHours: number;
+  lastRunAt: Date | null;
+  nextRunAt: Date | null;
+  totalRuns: number;
+  totalEventsDeleted: number;
+  lastRunStats: {
+    eventsChecked: number;
+    eventsDeleted: number;
+    deletedEventIds: string[];
+    errors: string[];
+  } | null;
+  schedulerStatus: string;
+}
+
+interface AutoDeletePreview {
+  success: boolean;
+  count: number;
+  cutoffTime: string;
+  events: Array<{
+    id: string;
+    name: string;
+    dateTime: Date;
+    venue: string;
+  }>;
+  graceHours: number;
+  error?: string;
+}
+
+interface PerformanceMetrics {
+  totalRuns?: number;
+  lastGenerated?: string;
+  lastRunTime?: string;
+  nextRunTime?: string;
+  lastRunAt?: string;
+  nextRunAt?: string;
+  lastCsvGenerated?: string;
+  lastUploadAt?: string;
+  lastUploadStatus?: string;
+  lastUploadId?: string;
+  lastUploadError?: string;
+  lastClearAt?: string;
+  lastManualGeneration?: {
+    recordCount: number;
+    generationTime: number;
+    totalTime: number;
+    timestamp: string;
+  };
+}
+
 // Simple toast notification function
 const showMessage = (text: string, type: 'success' | 'error' | 'info' = 'info') => {
   // Create a simple toast notification
@@ -48,8 +101,7 @@ const ExportCsvPage: React.FC = () => {
     status: 'Idle',
   });
   const [loading, setLoading] = useState<boolean>(false);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const [performanceMetrics, setPerformanceMetrics] = useState<any>(null);
+  const [performanceMetrics, setPerformanceMetrics] = useState<PerformanceMetrics | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [isLoading, setIsLoading] = useState(true);
   const [clearStatus, setClearStatus] = useState('');
@@ -60,8 +112,7 @@ const ExportCsvPage: React.FC = () => {
   const [showStaleCleanupDialog, setShowStaleCleanupDialog] = useState(false);
 
   // Auto-delete state
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const [autoDeleteSettings, setAutoDeleteSettings] = useState<any>({
+  const [autoDeleteSettings, setAutoDeleteSettings] = useState<AutoDeleteSettings>({
     isEnabled: false,
     graceHours: 15,
     scheduleIntervalHours: 24,
@@ -72,8 +123,7 @@ const ExportCsvPage: React.FC = () => {
     lastRunStats: null,
     schedulerStatus: 'Stopped'
   });
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const [autoDeletePreview, setAutoDeletePreview] = useState<any>(null);
+  const [autoDeletePreview, setAutoDeletePreview] = useState<AutoDeletePreview | null>(null);
   const [showAutoDeletePreview, setShowAutoDeletePreview] = useState(false);
   const [isLoadingAutoDelete, setIsLoadingAutoDelete] = useState(false);
 
@@ -158,23 +208,7 @@ const ExportCsvPage: React.FC = () => {
         showMessage(`CSV generated and downloaded successfully! ${result.recordCount || 'Records'} processed in ${result.generationTime || totalTime}ms`, 'success');
         
         // Update performance metrics
-        setPerformanceMetrics((prev: {
-          totalRuns?: number;
-          lastRunAt?: string;
-          nextRunAt?: string;
-          lastCsvGenerated?: string;
-          lastUploadAt?: string;
-          lastUploadStatus?: string;
-          lastUploadId?: string;
-          lastUploadError?: string;
-          lastClearAt?: string;
-          lastManualGeneration?: {
-            recordCount: number;
-            generationTime: number;
-            totalTime: number;
-            timestamp: string;
-          };
-        }) => ({
+        setPerformanceMetrics((prev) => ({
           ...prev,
           lastManualGeneration: {
             recordCount: result.recordCount,
@@ -377,7 +411,7 @@ const ExportCsvPage: React.FC = () => {
 
       const result = await response.json();
       if (result.success) {
-        setAutoDeleteSettings((prev: any) => ({ 
+        setAutoDeleteSettings((prev: AutoDeleteSettings) => ({ 
           ...prev, 
           isEnabled: enabled,
           schedulerStatus: enabled ? 'Running' : 'Stopped'
@@ -394,7 +428,7 @@ const ExportCsvPage: React.FC = () => {
     }
   };
 
-  const handleAutoDeleteSettingsUpdate = async (updates: any) => {
+  const handleAutoDeleteSettingsUpdate = async (updates: Partial<AutoDeleteSettings>) => {
     setIsLoadingAutoDelete(true);
     try {
       const response = await fetch('/api/auto-delete', {
@@ -408,7 +442,7 @@ const ExportCsvPage: React.FC = () => {
 
       const result = await response.json();
       if (result.success) {
-        setAutoDeleteSettings((prev: any) => ({ ...prev, ...updates }));
+        setAutoDeleteSettings((prev: AutoDeleteSettings) => ({ ...prev, ...updates }));
         showMessage('Auto-delete settings updated', 'success');
       } else {
         showMessage(result.error || 'Failed to update settings', 'error');
@@ -683,7 +717,7 @@ const ExportCsvPage: React.FC = () => {
               <input
                 type="number"
                 value={autoDeleteSettings.graceHours}
-                onChange={(e) => setAutoDeleteSettings((prev: any) => ({ 
+                onChange={(e) => setAutoDeleteSettings((prev: AutoDeleteSettings) => ({ 
                   ...prev, 
                   graceHours: parseInt(e.target.value) || 15 
                 }))}
@@ -701,7 +735,7 @@ const ExportCsvPage: React.FC = () => {
               <input
                 type="number"
                 value={autoDeleteSettings.scheduleIntervalHours}
-                onChange={(e) => setAutoDeleteSettings((prev: any) => ({ 
+                onChange={(e) => setAutoDeleteSettings((prev: AutoDeleteSettings) => ({ 
                   ...prev, 
                   scheduleIntervalHours: parseInt(e.target.value) || 24 
                 }))}
@@ -1032,7 +1066,7 @@ const ExportCsvPage: React.FC = () => {
                         </tr>
                       </thead>
                       <tbody className="bg-white divide-y divide-gray-200">
-                        {autoDeletePreview.events.map((event: any, index: number) => (
+                        {autoDeletePreview.events.map((event, index: number) => (
                           <tr key={index} className="hover:bg-gray-50">
                             <td className="px-4 py-2 text-sm font-medium text-gray-900">{event.id}</td>
                             <td className="px-4 py-2 text-sm text-gray-900">{event.name}</td>
@@ -1056,6 +1090,75 @@ const ExportCsvPage: React.FC = () => {
               )}
 
               <div className="flex justify-end space-x-3 mt-6">
+                <button
+                  onClick={() => setShowAutoDeletePreview(false)}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Auto-Delete Preview Dialog */}
+      {showAutoDeletePreview && autoDeletePreview && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50 flex items-center justify-center">
+          <div className="relative bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-hidden">
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-medium text-gray-900">
+                  Auto-Delete Preview
+                </h3>
+                <button
+                  onClick={() => setShowAutoDeletePreview(false)}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  ✕
+                </button>
+              </div>
+              
+              <div className="mb-4 p-3 bg-blue-50 rounded-lg">
+                <p className="text-sm text-blue-800">
+                  <strong>Grace Period:</strong> {autoDeletePreview.graceHours} hours<br/>
+                  <strong>Cutoff Time:</strong> {moment(autoDeletePreview.cutoffTime).format('YYYY-MM-DD HH:mm:ss')}<br/>
+                  <strong>Events to Delete:</strong> {autoDeletePreview.count}
+                </p>
+              </div>
+
+              {autoDeletePreview.count > 0 ? (
+                <div className="max-h-96 overflow-y-auto">
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Event ID</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Event Name</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Date/Time</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Venue</th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {autoDeletePreview.events.map((event, index) => (
+                        <tr key={index} className="hover:bg-gray-50">
+                          <td className="px-3 py-2 text-sm text-gray-900">{event.id}</td>
+                          <td className="px-3 py-2 text-sm text-gray-900">{event.name}</td>
+                          <td className="px-3 py-2 text-sm text-gray-900">
+                            {moment(event.dateTime).format('YYYY-MM-DD HH:mm')}
+                          </td>
+                          <td className="px-3 py-2 text-sm text-gray-900">{event.venue || 'N/A'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="text-center py-8">
+                  <p className="text-gray-500">No events found that would be deleted with current settings.</p>
+                </div>
+              )}
+
+              <div className="flex justify-end mt-6">
                 <button
                   onClick={() => setShowAutoDeletePreview(false)}
                   className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
