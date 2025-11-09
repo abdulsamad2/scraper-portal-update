@@ -34,6 +34,32 @@ interface CsvStatus {
   status: string;
 }
 
+interface AutoDeleteSettings {
+  isEnabled: boolean;
+  graceHours: number;
+  scheduleIntervalHours: number;
+  lastRunAt: string | null;
+  nextRunAt: string | null;
+  totalRuns: number;
+  totalEventsDeleted: number;
+  lastRunStats: Record<string, unknown> | null;
+  schedulerStatus: string;
+}
+
+interface EventPreview {
+  id: string;
+  name: string;
+  dateTime: string;
+  venue?: string;
+}
+
+interface AutoDeletePreview {
+  count: number;
+  events: EventPreview[];
+  graceHours: number;
+  cutoffTime: string;
+}
+
 const ExportCsvPage: React.FC = () => {
   const [settings, setSettings] = useState<ExportSettings>({
     uploadToSync: false,
@@ -60,8 +86,7 @@ const ExportCsvPage: React.FC = () => {
   const [showStaleCleanupDialog, setShowStaleCleanupDialog] = useState(false);
 
   // Auto-delete state
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const [autoDeleteSettings, setAutoDeleteSettings] = useState<any>({
+  const [autoDeleteSettings, setAutoDeleteSettings] = useState<AutoDeleteSettings>({
     isEnabled: false,
     graceHours: 15,
     scheduleIntervalHours: 24,
@@ -72,8 +97,7 @@ const ExportCsvPage: React.FC = () => {
     lastRunStats: null,
     schedulerStatus: 'Stopped'
   });
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const [autoDeletePreview, setAutoDeletePreview] = useState<any>(null);
+  const [autoDeletePreview, setAutoDeletePreview] = useState<AutoDeletePreview | null>(null);
   const [showAutoDeletePreview, setShowAutoDeletePreview] = useState(false);
   const [isLoadingAutoDelete, setIsLoadingAutoDelete] = useState(false);
 
@@ -377,7 +401,7 @@ const ExportCsvPage: React.FC = () => {
 
       const result = await response.json();
       if (result.success) {
-        setAutoDeleteSettings((prev: any) => ({ 
+        setAutoDeleteSettings((prev: AutoDeleteSettings) => ({ 
           ...prev, 
           isEnabled: enabled,
           schedulerStatus: enabled ? 'Running' : 'Stopped'
@@ -394,7 +418,7 @@ const ExportCsvPage: React.FC = () => {
     }
   };
 
-  const handleAutoDeleteSettingsUpdate = async (updates: any) => {
+  const handleAutoDeleteSettingsUpdate = async (updates: Partial<AutoDeleteSettings>) => {
     setIsLoadingAutoDelete(true);
     try {
       const response = await fetch('/api/auto-delete', {
@@ -408,7 +432,7 @@ const ExportCsvPage: React.FC = () => {
 
       const result = await response.json();
       if (result.success) {
-        setAutoDeleteSettings((prev: any) => ({ ...prev, ...updates }));
+        setAutoDeleteSettings((prev: AutoDeleteSettings) => ({ ...prev, ...updates }));
         showMessage('Auto-delete settings updated', 'success');
       } else {
         showMessage(result.error || 'Failed to update settings', 'error');
@@ -683,7 +707,7 @@ const ExportCsvPage: React.FC = () => {
               <input
                 type="number"
                 value={autoDeleteSettings.graceHours}
-                onChange={(e) => setAutoDeleteSettings((prev: any) => ({ 
+                onChange={(e) => setAutoDeleteSettings((prev: AutoDeleteSettings) => ({ 
                   ...prev, 
                   graceHours: parseInt(e.target.value) || 15 
                 }))}
@@ -701,7 +725,7 @@ const ExportCsvPage: React.FC = () => {
               <input
                 type="number"
                 value={autoDeleteSettings.scheduleIntervalHours}
-                onChange={(e) => setAutoDeleteSettings((prev: any) => ({ 
+                onChange={(e) => setAutoDeleteSettings((prev: AutoDeleteSettings) => ({ 
                   ...prev, 
                   scheduleIntervalHours: parseInt(e.target.value) || 24 
                 }))}
@@ -1032,7 +1056,7 @@ const ExportCsvPage: React.FC = () => {
                         </tr>
                       </thead>
                       <tbody className="bg-white divide-y divide-gray-200">
-                        {autoDeletePreview.events.map((event: any, index: number) => (
+                        {autoDeletePreview.events.map((event: EventPreview, index: number) => (
                           <tr key={index} className="hover:bg-gray-50">
                             <td className="px-4 py-2 text-sm font-medium text-gray-900">{event.id}</td>
                             <td className="px-4 py-2 text-sm text-gray-900">{event.name}</td>
