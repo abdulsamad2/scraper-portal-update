@@ -42,7 +42,7 @@ interface AutoDeleteSettings {
   nextRunAt: string | null;
   totalRuns: number;
   totalEventsDeleted: number;
-  lastRunStats: Record<string, unknown> | null;
+  lastRunStats: LastRunStats | null;
   schedulerStatus: string;
 }
 
@@ -58,6 +58,12 @@ interface AutoDeletePreview {
   events: EventPreview[];
   graceHours: number;
   cutoffTime: string;
+}
+
+interface LastRunStats {
+  eventsChecked: number;
+  eventsDeleted: number;
+  errors?: string[];
 }
 
 const ExportCsvPage: React.FC = () => {
@@ -832,7 +838,7 @@ const ExportCsvPage: React.FC = () => {
                   <div className="text-xs text-gray-600">
                     Last run: Checked {autoDeleteSettings.lastRunStats.eventsChecked} events, 
                     deleted {autoDeleteSettings.lastRunStats.eventsDeleted} expired events
-                    {autoDeleteSettings.lastRunStats.errors?.length > 0 && (
+                    {autoDeleteSettings.lastRunStats.errors && autoDeleteSettings.lastRunStats.errors.length > 0 && (
                       <span className="text-red-600 ml-2">
                         ({autoDeleteSettings.lastRunStats.errors.length} errors)
                       </span>
