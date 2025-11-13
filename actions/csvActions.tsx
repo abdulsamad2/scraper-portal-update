@@ -444,7 +444,7 @@ async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]
       row: inventory?.row || '',
       seats: seatsString,
       barcodes: inventory?.barcodes || '',
-      internal_notes: "-tnow -tmplus",
+      internal_notes: "",
       public_notes: publicNotes,
       tags: inventory?.splitType ==='NEVERLEAVEONE'? 'STANDARD' : 'RESALE',
       list_price: Number((inventory?.listPrice || 0).toFixed(2)),
