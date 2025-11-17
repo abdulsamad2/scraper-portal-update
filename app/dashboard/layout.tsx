@@ -163,12 +163,9 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
             </button>
             
             {/* Made with Love Footer */}
-            <div className="mt-4 pt-4 border-t border-slate-100">
-              <div className="flex items-center justify-center gap-2 text-xs text-slate-400">
-                <span>Made with</span>
-                <Heart className="w-3 h-3 text-red-400 fill-current animate-pulse" />
-                <span>by Abdul Samad</span>
-              </div>
+            <div className="mt-4 pt-4 border-t border-slate-100 text-center">
+              <p className="text-xs text-slate-400">Made by a hidden programmer in dark mode 🌙</p>
+              <p className="text-xs text-slate-400">Light mode not supported.</p>
             </div>
           </div>
         </div>
