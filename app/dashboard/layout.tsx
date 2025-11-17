@@ -13,7 +13,6 @@ import {
   LogOut,
   ShoppingCart,
   X,
-  Heart,
   SignalHigh
   
 } from 'lucide-react';
