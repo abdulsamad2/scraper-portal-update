@@ -82,12 +82,44 @@ const NewScraper = ({ onCancel, onSuccess, initialData = null, isEdit = false })
     Percentage_Increase_ListCost: false,
   });
 
+  // Helper function to check if hostname is a Ticketmaster domain
+  const isTicketmasterDomain = (hostname) => {
+    const ticketmasterDomains = [
+      'ticketmaster.com',
+      'ticketmaster.co.uk',
+      'ticketmaster.ca',
+      'ticketmaster.com.au',
+      'ticketmaster.ie',
+      'ticketmaster.de',
+      'ticketmaster.fr',
+      'ticketmaster.nl',
+      'ticketmaster.be',
+      'ticketmaster.dk',
+      'ticketmaster.fi',
+      'ticketmaster.no',
+      'ticketmaster.se',
+      'ticketmaster.pl',
+      'ticketmaster.cz',
+      'ticketmaster.at',
+      'ticketmaster.ch',
+      'ticketmaster.mx',
+      'ticketmaster.es',
+      'livenation.com'
+    ];
+    
+    return ticketmasterDomains.some(domain => 
+      hostname === domain || 
+      hostname.endsWith(`.${domain}`) ||
+      hostname.includes(`${domain.split('.')[0]}`)
+    );
+  };
+
   // Helper function to extract Event ID from URL
   const extractEventIdFromUrl = (url) => {
     try {
       const parsed = new URL(url);
       if (
-        parsed.hostname.includes("ticketmaster.com") &&
+        isTicketmasterDomain(parsed.hostname) &&
         parsed.pathname.includes("/event/")
       ) {
         // Try to extract event ID from pathname
@@ -111,7 +143,7 @@ const NewScraper = ({ onCancel, onSuccess, initialData = null, isEdit = false })
     try {
       const parsed = new URL(url);
       if (
-        parsed.hostname.includes("ticketmaster.com") &&
+        isTicketmasterDomain(parsed.hostname) &&
         parsed.pathname.includes("/event/")
       ) {
         // Extract event ID
@@ -228,7 +260,7 @@ const NewScraper = ({ onCancel, onSuccess, initialData = null, isEdit = false })
     try {
       const parsed = new URL(url);
       return (
-        parsed.hostname.includes("ticketmaster.com") &&
+        isTicketmasterDomain(parsed.hostname) &&
         parsed.pathname.includes("/event/")
       );
     } catch {
@@ -483,7 +515,7 @@ const NewScraper = ({ onCancel, onSuccess, initialData = null, isEdit = false })
                   value={formData.URL}
                   onChange={handleInputChange}
                   onBlur={handleBlur}
-                  placeholder="https://www.ticketmaster.com/event/..."
+                  placeholder="https://www.ticketmaster.com/event/... (supports .com, .co.uk, .ca, etc.)"
                   className={`w-full pl-10 pr-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-colors ${
                     !validationState.URL && touchedFields.URL
                       ? "border-red-500 bg-red-50"
