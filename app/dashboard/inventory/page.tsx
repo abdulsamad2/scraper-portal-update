@@ -80,7 +80,16 @@ export default function InventoryPage() {
           section: filters.section || undefined,
           row: filters.row || undefined
         };
+        console.log('Fetching inventory with:', { 
+          itemsPerPage, 
+          currentPage, 
+          search: search || '', 
+          filterOptions 
+        });
+        
         const resp = await getConsecutiveGroupsPaginated(itemsPerPage, currentPage, search || '', filterOptions);
+        
+        console.log('Inventory response:', resp);
         
         if ('error' in resp) {
           console.error('Error fetching inventory:', resp.error);
@@ -108,6 +117,13 @@ export default function InventoryPage() {
     setShowFilters(false);
   };
 
+  // Function to clear search only
+  const clearSearch = () => {
+    setPendingSearch('');
+    setSearch('');
+    setCurrentPage(1);
+  };
+
   // Function to clear all filters
   const clearFilters = () => {
     setPendingSearch('');
@@ -121,9 +137,15 @@ export default function InventoryPage() {
   // Handle Enter key press in search input
   const handleSearchKeyPress = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
-      setSearch(pendingSearch);
-      setCurrentPage(1);
+      e.preventDefault();
+      applySearch();
     }
+  };
+
+  // Function to apply search
+  const applySearch = () => {
+    setSearch(pendingSearch);
+    setCurrentPage(1);
   };
 
   const totalPages = Math.ceil(totalGroups / itemsPerPage);
@@ -264,12 +286,26 @@ export default function InventoryPage() {
         <div className="relative flex gap-2 items-center">
           <input
             type="text"
-            placeholder="Quick search... (Press Enter to search)"
+            placeholder="Quick search... (Press Enter or click Search)"
             value={pendingSearch}
             onChange={(e) => setPendingSearch(e.target.value)}
             onKeyPress={handleSearchKeyPress}
             className="border rounded-md px-3 py-2 w-64"
           />
+          <button
+            onClick={applySearch}
+            className="bg-blue-600 text-white px-3 py-2 rounded-md text-sm hover:bg-blue-700 transition-colors"
+          >
+            Search
+          </button>
+          {(search || pendingSearch) && (
+            <button
+              onClick={clearSearch}
+              className="bg-gray-500 text-white px-3 py-2 rounded-md text-sm hover:bg-gray-600 transition-colors"
+            >
+              Clear
+            </button>
+          )}
           <button
             onClick={() => setShowFilters((f) => !f)}
             className="border px-3 py-2 rounded-md text-sm"

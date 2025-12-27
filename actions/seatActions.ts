@@ -170,15 +170,33 @@ export async function getConsecutiveGroupsPaginated(
     // Handle general search term
     if (searchTerm) {
       const regex = new RegExp(searchTerm, 'i');
-      conditions.push({
-        $or: [
-          { section: regex },
-          { row: regex },
-          { mapping_id: regex },
-          { event_name: regex },
-          { venue_name: regex },
-        ]
-      });
+      const orConditions: Record<string, unknown>[] = [
+        { section: regex },
+        { row: regex },
+        { mapping_id: regex },
+        { event_name: regex },
+        { venue_name: regex },
+      ];
+
+      // Handle inventory ID search - check if searchTerm is numeric
+      const numericSearchTerm = parseInt(searchTerm, 10);
+      if (!isNaN(numericSearchTerm)) {
+        // Exact match for numeric inventory ID
+        orConditions.push({ 'inventory.inventoryId': numericSearchTerm });
+      } else if (searchTerm.match(/^\d+/)) {
+        // Partial numeric match - convert inventory ID to string for regex
+        orConditions.push({
+          $expr: {
+            $regexMatch: {
+              input: { $toString: "$inventory.inventoryId" },
+              regex: searchTerm,
+              options: "i"
+            }
+          }
+        });
+      }
+
+      conditions.push({ $or: orConditions });
     }
     
     // Handle specific filters

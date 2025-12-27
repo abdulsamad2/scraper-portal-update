@@ -411,9 +411,40 @@ async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]
   return batch.map(doc => {
     const inventory = doc.inventory;
     
+    // Check if venue is in Minnesota (ends with "MN")
+    const isMNVenue = doc.venue_name && doc.venue_name.toLowerCase().trim().endsWith('mn');
+    
     // Pre-compute expensive operations with null safety
+    // Handle Minnesota venue seat number transformation (X + 99)
     const seatsString = doc.seats && doc.seats.length > 0 ?
-      doc.seats.map((seat: { number: string | number }) => seat.number).join(',') : '';
+      doc.seats.map((seat: { number: string | number }) => {
+        let seatNumber = seat.number;
+        
+        if (isMNVenue) {
+          // Handle seat number transformation more carefully
+          const seatStr = String(seatNumber);
+          
+          // Check if it's a pure number
+          const pureNumber = parseInt(seatStr, 10);
+          if (!isNaN(pureNumber) && String(pureNumber) === seatStr) {
+            // Pure number case: 3 -> 102
+            seatNumber = pureNumber + 99;
+          } else {
+            // Handle alphanumeric or mixed cases: A3 -> A102
+            const numericMatch = seatStr.match(/(\D*)(\d+)(.*)/);
+            if (numericMatch) {
+              const [, prefix, numberPart, suffix] = numericMatch;
+              const originalSeat = parseInt(numberPart, 10);
+              if (!isNaN(originalSeat)) {
+                const transformedSeat = originalSeat + 99;
+                seatNumber = prefix + transformedSeat + suffix;
+              }
+            }
+          }
+        }
+        
+        return String(seatNumber);
+      }).join(',') : '';
     const eventDateString = doc.event_date ? 
       new Date(doc.event_date).toISOString() : '';
     const inHandDateString = inventory?.inHandDate ? 
@@ -435,33 +466,34 @@ async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]
     
     return {
       inventory_id: inventory?.inventoryId || 0,
-      event_name: doc.event_name || '',
-      venue_name: doc.venue_name || '',
+      event_name: doc.event_name || "",
+      venue_name: doc.venue_name || "",
       event_date: eventDateString,
-      event_id: doc.mapping_id || '',
+      event_id: doc.mapping_id || "",
       quantity: inventory?.quantity || 0,
-      section: inventory?.section || '',
-      row: inventory?.row || '',
+      section: inventory?.section || "",
+      row: inventory?.row || "",
       seats: seatsString,
-      barcodes: inventory?.barcodes || '',
-      internal_notes: "",
+      barcodes: inventory?.barcodes || "",
+      internal_notes: "-tnow -tmplus",
       public_notes: publicNotes,
-      tags: inventory?.splitType ==='NEVERLEAVEONE'? 'STANDARD' : 'RESALE',
+      tags: inventory?.splitType === "NEVERLEAVEONE" ? "STANDARD" : "RESALE",
       list_price: Number((inventory?.listPrice || 0).toFixed(2)),
       face_price: Number((inventory?.cost || 0).toFixed(2)),
       taxed_cost: Number((inventory?.cost || 0).toFixed(2)),
       cost: Number((inventory?.cost || 0).toFixed(2)),
-      hide_seats: inventory?.hideSeatNumbers ? "Y" : "N",
+      hide_seats: isMNVenue ? "N" : (inventory?.hideSeatNumbers ? "Y" : "N"),
       in_hand: "N", // Always set to "N" as per original code
       in_hand_date: inHandDateString,
       instant_transfer: inventory?.instant_transfer ? "Y" : "N",
       files_available: "N",
       split_type: finalSplitType,
       custom_split: customSplit,
-      stock_type: (inventory?.stockType as CsvRow['stock_type']) || "ELECTRONIC",
+      stock_type:
+        (inventory?.stockType as CsvRow["stock_type"]) || "ELECTRONIC",
       zone: "N",
       shown_quantity: inventory?.shown_quantity || undefined,
-      passthrough: inventory?.passthrough || ''
+      passthrough: inventory?.passthrough || "",
     } as CsvRow;
   });
 }
