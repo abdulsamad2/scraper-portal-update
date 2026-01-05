@@ -14,7 +14,7 @@ export default function LoginPage() {
     setError('');
 
     // Hardcoded credentials for demonstration
-    if (username === 'helpdesk' && password === 'strongPassword@123') {
+    if (username === 'helpdesk' && password === 'NewSecurePassword2026!') {
       // Set authentication cookie
       document.cookie = 'authenticated=true; path=/; max-age=86400'; // 24 hours
       // Redirect to the dashboard
