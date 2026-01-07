@@ -92,6 +92,25 @@ function calculateDelay(attempt: number, config: RetryConfig): number {
   return exponentialDelay + jitter;
 }
 
+// Get price increase percentage from environment variables
+function getPriceIncreasePercentage(): number {
+  const priceIncreaseEnv = process.env.PRICE_INCREASE_PERCENTAGE;
+  if (!priceIncreaseEnv) {
+    return 0; // Default: no price increase
+  }
+  const percentage = parseFloat(priceIncreaseEnv);
+  return isNaN(percentage) ? 0 : percentage;
+}
+
+// Apply price increase to a price value
+function applyPriceIncrease(originalPrice: number): number {
+  const increasePercentage = getPriceIncreasePercentage();
+  if (increasePercentage <= 0) {
+    return originalPrice;
+  }
+  return originalPrice * (1 + increasePercentage / 100);
+}
+
 // Generic retry wrapper
 async function withRetry<T>(
   operation: () => Promise<T>,
@@ -447,7 +466,7 @@ async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]
       internal_notes: "",
       public_notes: publicNotes,
       tags: inventory?.splitType ==='NEVERLEAVEONE'? 'STANDARD' : 'RESALE',
-      list_price: Number((inventory?.listPrice || 0).toFixed(2)),
+      list_price: Number(applyPriceIncrease(inventory?.listPrice || 0).toFixed(2)),
       face_price: Number((inventory?.cost || 0).toFixed(2)),
       taxed_cost: Number((inventory?.cost || 0).toFixed(2)),
       cost: Number((inventory?.cost || 0).toFixed(2)),
