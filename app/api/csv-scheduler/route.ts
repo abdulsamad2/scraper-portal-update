@@ -138,15 +138,13 @@ async function startScheduler(intervalMinutes: number, uploadToSync: boolean, ev
             schedulerMetrics.lastError = uploadResult.message;
             
             // Log error to database
-            await createErrorLog(
-              'CSV_SCHEDULER_UPLOAD',
-              'DATABASE_ERROR',
-              uploadResult.message || 'Unknown upload error',
-              {
-                operation: 'scheduled_csv_upload',
-                timestamp: new Date()
-              }
-            );
+            await createErrorLog({
+              source: 'CSV_SCHEDULER_UPLOAD',
+              type: 'DATABASE_ERROR',
+              message: uploadResult.message || 'Unknown upload error',
+              operation: 'scheduled_csv_upload',
+              timestamp: new Date()
+            });
           }
         } else {
           schedulerMetrics.successfulRuns++;
@@ -166,15 +164,13 @@ async function startScheduler(intervalMinutes: number, uploadToSync: boolean, ev
         schedulerMetrics.lastError = result.message;
         
         // Log error to database
-        await createErrorLog(
-          'CSV_SCHEDULER_GENERATION',
-          'DATABASE_ERROR',
-          result.message || 'Unknown generation error',
-          {
-            operation: 'scheduled_csv_generation',
-            timestamp: new Date()
-          }
-        );
+        await createErrorLog({
+          source: 'CSV_SCHEDULER_GENERATION',
+          type: 'DATABASE_ERROR',
+          message: result.message || 'Unknown generation error',
+          operation: 'scheduled_csv_generation',
+          timestamp: new Date()
+        });
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -183,16 +179,14 @@ async function startScheduler(intervalMinutes: number, uploadToSync: boolean, ev
       schedulerMetrics.lastError = errorMessage;
       
       // Log error to database
-      await createErrorLog(
-        'CSV_SCHEDULER_TASK',
-        'DATABASE_ERROR',
-        errorMessage,
-        {
-          stack: error instanceof Error ? error.stack : undefined,
-          operation: 'scheduled_csv_task',
-          timestamp: new Date()
-        }
-      );
+      await createErrorLog({
+        source: 'CSV_SCHEDULER_TASK',
+        type: 'DATABASE_ERROR',
+        message: errorMessage,
+        stack: error instanceof Error ? error.stack : undefined,
+        operation: 'scheduled_csv_task',
+        timestamp: new Date()
+      });
     }
   };
   
