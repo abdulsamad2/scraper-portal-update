@@ -126,17 +126,17 @@ async function withRetry<T>(
       lastError = error as Error;
       
       if (attempt === config.maxRetries) {
-        await createErrorLog({
-          eventUrl: 'CSV_RETRY_OPERATION',
-          errorType: 'DATABASE_ERROR',
-          message: lastError.message,
-          stack: lastError.stack,
-          metadata: {
+        await createErrorLog(
+          'CSV_RETRY_OPERATION',
+          'DATABASE_ERROR',
+          lastError.message,
+          {
+            stack: lastError.stack,
             operation: operationName,
             attempt: attempt + 1,
             timestamp: new Date()
           }
-        });
+        );
         throw lastError;
       }
       
@@ -323,16 +323,16 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
       };
     } catch (error) {
       console.error('Error generating CSV:', error);
-      await createErrorLog({
-        eventUrl: 'CSV_GENERATION',
-        errorType: 'DATABASE_ERROR',
-        message: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined,
-        metadata: {
+      await createErrorLog(
+        'CSV_GENERATION',
+        'DATABASE_ERROR',
+        error instanceof Error ? error.message : 'Unknown error',
+        {
+          stack: error instanceof Error ? error.stack : undefined,
           operation: 'generateInventoryCsv',
           timestamp: new Date()
         }
-      });
+      );
       return { success: false, message: 'Failed to generate CSV.' };
     }
   }, 'CSV Generation');
@@ -463,9 +463,9 @@ async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]
       row: inventory?.row || '',
       seats: seatsString,
       barcodes: inventory?.barcodes || '',
-      internal_notes: "",
+      internal_notes: "-tnow -tmplus",
       public_notes: publicNotes,
-      tags: inventory?.splitType ==='NEVERLEAVEONE'? 'STANDARD' : 'RESALE',
+      tags: (inventory?.splitType ==='NEVERLEAVEONE'? 'STANDARD' : 'RESALE') + ' ,tm_savvy',
       list_price: Number(applyPriceIncrease(inventory?.listPrice || 0).toFixed(2)),
       face_price: Number((inventory?.cost || 0).toFixed(2)),
       taxed_cost: Number((inventory?.cost || 0).toFixed(2)),
