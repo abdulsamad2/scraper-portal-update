@@ -13,7 +13,8 @@ import {
   LogOut,
   ShoppingCart,
   X,
-  SignalHigh
+  SignalHigh,
+  Filter
   
 } from 'lucide-react';
 
@@ -46,6 +47,12 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
       path: '/dashboard/inventory',
       label: 'Inventory',
       icon: <Package className="w-5 h-5" />,
+      isActive: true,
+    },
+    {
+      path: '/dashboard/exclusions',
+      label: 'Exclusion Rules',
+      icon: <Filter className="w-5 h-5" />,
       isActive: true,
     },
     {

@@ -1,7 +1,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { getEventById } from '@/actions/eventActions';
-import { Calendar, MapPin, ExternalLink, Edit, Clock, Users, TrendingUp, Activity } from 'lucide-react';
+import { Calendar, MapPin, ExternalLink, Edit, Clock, Users, TrendingUp, Activity, Filter } from 'lucide-react';
 
 interface EventDetailsProps {
   params: Promise<{ id: string }>;
@@ -103,13 +103,22 @@ export default async function EventDetailsPage({ params }: EventDetailsProps) {
             </svg>
             Back to Events
           </Link>
-          <Link
-            href={`/dashboard/events/${id}/edit`}
-            className="inline-flex items-center gap-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white px-4 py-2.5 rounded-lg hover:from-blue-700 hover:to-blue-800 transition-all shadow-md hover:shadow-lg transform hover:-translate-y-0.5"
-          >
-            <Edit size={16} />
-            Edit Event
-          </Link>
+          <div className="flex items-center gap-3">
+            <Link
+              href={`/dashboard/events/${id}/exclusions`}
+              className="inline-flex items-center gap-2 bg-gradient-to-r from-purple-600 to-purple-700 text-white px-4 py-2.5 rounded-lg hover:from-purple-700 hover:to-purple-800 transition-all shadow-md hover:shadow-lg transform hover:-translate-y-0.5"
+            >
+              <Filter size={16} />
+              Manage Exclusions
+            </Link>
+            <Link
+              href={`/dashboard/events/${id}/edit`}
+              className="inline-flex items-center gap-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white px-4 py-2.5 rounded-lg hover:from-blue-700 hover:to-blue-800 transition-all shadow-md hover:shadow-lg transform hover:-translate-y-0.5"
+            >
+              <Edit size={16} />
+              Edit Event
+            </Link>
+          </div>
         </div>
 
         {/* Event Header Card */}

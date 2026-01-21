@@ -13,7 +13,8 @@ import {
   Plus,
   Download,
   BarChart3,
-  MousePointer2
+  MousePointer2,
+  Filter
 } from 'lucide-react';
 
 // Client-side time component to avoid hydration mismatch
@@ -188,6 +189,9 @@ export default function DashboardPage() {
         break;
       case 'export-data':
         router.push('/dashboard/export-csv');
+        break;
+      case 'manage-exclusions':
+        router.push('/dashboard/exclusions');
         break;
       case 'view-all-events':
         router.push('/dashboard/events');
@@ -585,6 +589,19 @@ export default function DashboardPage() {
                   <span className="font-medium text-slate-700">Export Data</span>
                 </div>
                 <ArrowUpRight className="w-5 h-5 text-purple-500 group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform duration-200" />
+              </button>
+              
+              <button 
+                onClick={() => handleQuickAction('manage-exclusions')}
+                className="w-full flex items-center justify-between p-4 bg-gradient-to-r from-orange-50 to-red-50 hover:from-orange-100 hover:to-red-100 rounded-xl transition-all duration-200 group hover:shadow-md"
+              >
+                <div className="flex items-center">
+                  <div className="w-10 h-10 bg-orange-500 rounded-lg flex items-center justify-center mr-3 group-hover:bg-orange-600 transition-colors">
+                    <Filter className="w-5 h-5 text-white" />
+                  </div>
+                  <span className="font-medium text-slate-700">Exclusion Rules</span>
+                </div>
+                <ArrowUpRight className="w-5 h-5 text-orange-500 group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform duration-200" />
               </button>
             </div>
           </div>
