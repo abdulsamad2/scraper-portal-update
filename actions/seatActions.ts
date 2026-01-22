@@ -5,6 +5,7 @@ import { ConsecutiveGroup } from '@/models/seatModel'; // Assuming models are al
 import { Event } from '@/models/eventModel'; // Assuming models are aliased to @/models
 import { UpdateQuery } from 'mongoose';
 import { revalidatePath } from 'next/cache';
+import { deleteExternalInventory } from './csvActions';
 
 /**
  * Creates a new consecutive seat group.
@@ -230,7 +231,7 @@ export async function getConsecutiveGroupsPaginated(
 }
 
 /**
- * Deletes all consecutive groups by eventId.
+ * Deletes all consecutive groups by eventId and also deletes corresponding inventory from external service.
  * @param {string} eventId - The eventId to delete groups for.
  * @returns {Promise<object>} A success message with count of deleted groups or an error object.
  */
@@ -243,14 +244,46 @@ export async function deleteConsecutiveGroupsByEventId(eventId: string) {
     const existingCount = await ConsecutiveGroup.countDocuments({ eventId: eventId });
     console.log(`Found ${existingCount} consecutive groups for eventId: ${eventId}`);
     
+    // Get the groups to extract inventory IDs before deletion
+    const groupsToDelete = await ConsecutiveGroup.find({ eventId: eventId }, 'inventory.inventoryId');
+    const inventoryIds = groupsToDelete
+      .map(group => group.inventory?.inventoryId)
+      .filter(id => id !== undefined && id !== null);
+    
+    console.log(`Extracted ${inventoryIds.length} inventory IDs for external deletion:`, inventoryIds);
+    
+    // Delete from external service first
+    let externalDeletionResult = null;
+    if (inventoryIds.length > 0) {
+      try {
+        externalDeletionResult = await deleteExternalInventory(inventoryIds);
+        console.log('External inventory deletion result:', externalDeletionResult);
+      } catch (externalError) {
+        const errorMessage = externalError instanceof Error ? externalError.message : 'Unknown external API error';
+        console.error('Failed to delete external inventory, continuing with local deletion:', errorMessage);
+        externalDeletionResult = {
+          successful: [],
+          failed: inventoryIds.map(id => ({
+            id: String(id),
+            error: errorMessage,
+            status: 'EXTERNAL_API_ERROR'
+          })),
+          total: inventoryIds.length,
+          error: errorMessage
+        };
+      }
+    }
+    
+    // Delete from local database
     const deleteResult = await ConsecutiveGroup.deleteMany({ eventId: eventId });
-    console.log('Delete result:', deleteResult);
+    console.log('Local delete result:', deleteResult);
     
     revalidatePath('/seat-groups');
     return { 
       message: `Successfully deleted ${deleteResult.deletedCount} consecutive seat groups for event`, 
       success: true, 
-      deletedCount: deleteResult.deletedCount 
+      deletedCount: deleteResult.deletedCount,
+      externalInventoryDeletion: externalDeletionResult
     };
   } catch (error: unknown) {
     console.error('Error deleting consecutive groups by eventId:', error);
@@ -259,20 +292,53 @@ export async function deleteConsecutiveGroupsByEventId(eventId: string) {
 }
 
 /**
- * Deletes all consecutive groups for multiple events by their eventIds.
+ * Deletes all consecutive groups for multiple events by their eventIds and also deletes corresponding inventory from external service.
  * @param {string[]} eventIds - Array of eventIds to delete groups for.
  * @returns {Promise<object>} A success message with count of deleted groups or an error object.
  */
 export async function deleteConsecutiveGroupsByEventIds(eventIds: string[]) {
   await dbConnect();
   try {
+    // Get all groups to extract inventory IDs before deletion
+    const groupsToDelete = await ConsecutiveGroup.find({ eventId: { $in: eventIds } }, 'inventory.inventoryId eventId');
+    const inventoryIds = groupsToDelete
+      .map(group => group.inventory?.inventoryId)
+      .filter(id => id !== undefined && id !== null);
+    
+    console.log(`Found ${groupsToDelete.length} groups across ${eventIds.length} events`);
+    console.log(`Extracted ${inventoryIds.length} inventory IDs for external deletion:`, inventoryIds);
+    
+    // Delete from external service first
+    let externalDeletionResult = null;
+    if (inventoryIds.length > 0) {
+      try {
+        externalDeletionResult = await deleteExternalInventory(inventoryIds);
+        console.log('External inventory deletion result:', externalDeletionResult);
+      } catch (externalError) {
+        const errorMessage = externalError instanceof Error ? externalError.message : 'Unknown external API error';
+        console.error('Failed to delete external inventory, continuing with local deletion:', errorMessage);
+        externalDeletionResult = {
+          successful: [],
+          failed: inventoryIds.map(id => ({
+            id: String(id),
+            error: errorMessage,
+            status: 'EXTERNAL_API_ERROR'
+          })),
+          total: inventoryIds.length,
+          error: errorMessage
+        };
+      }
+    }
+    
+    // Delete from local database
     const deleteResult = await ConsecutiveGroup.deleteMany({ eventId: { $in: eventIds } });
     revalidatePath('/seat-groups');
     revalidatePath('/dashboard/inventory');
     return { 
       message: `Successfully deleted ${deleteResult.deletedCount} consecutive seat groups for ${eventIds.length} events`, 
       success: true, 
-      deletedCount: deleteResult.deletedCount 
+      deletedCount: deleteResult.deletedCount,
+      externalInventoryDeletion: externalDeletionResult
     };
   } catch (error: unknown) {
     console.error('Error deleting consecutive groups by eventIds:', error);

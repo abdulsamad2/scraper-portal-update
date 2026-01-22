@@ -10,6 +10,172 @@ import { createErrorLog } from './errorLogActions';
 import { deleteExpiredEvents, getExpiredEventsStats } from './autoDeleteActions';
 import { PipelineStage } from 'mongoose';
 
+// Types for external inventory deletion
+interface InventoryDeletionResult {
+  successful: string[];
+  failed: InventoryDeletionError[];
+  total: number;
+  apiResponse?: any;
+  skipped?: boolean;
+  error?: string;
+}
+
+interface InventoryDeletionError {
+  id: string;
+  error: string;
+  status: string;
+}
+
+/**
+ * Utility class for SeatScouts inventory API operations
+ */
+class InventoryApi {
+  private baseURL: string;
+  private headers: Record<string, string | undefined>;
+
+  constructor() {
+    this.baseURL = 'https://app.seatscouts.com/sync/api';
+    this.headers = {
+      'X-Company-Id': process.env.SYNC_COMPANY_ID,
+      'X-Api-Token': process.env.SYNC_API_TOKEN,
+      'Content-Type': 'application/json',
+      'Accept': 'application/json'
+    };
+  }
+
+  /**
+   * Delete inventory item by inventory ID (uses batch method)
+   * @param {string} inventoryId - The inventory ID to delete
+   * @returns {Promise<InventoryDeletionResult>} API response
+   */
+  async deleteInventoryItem(inventoryId: string): Promise<InventoryDeletionResult> {
+    return this.deleteInventoryBatch([inventoryId]);
+  }
+
+  /**
+   * Delete multiple inventory items in batch
+   * @param {Array<string>} inventoryIds - Array of inventory IDs to delete
+   * @returns {Promise<InventoryDeletionResult>} Batch deletion results
+   */
+  async deleteInventoryBatch(inventoryIds: string[]): Promise<InventoryDeletionResult> {
+    try {
+      // Skip if no credentials are configured
+      if (!this.headers['X-Company-Id'] || !this.headers['X-Api-Token']) {
+        console.warn('[SEATSCOUTS] API credentials not configured - skipping external inventory deletion');
+        return {
+          successful: [],
+          failed: inventoryIds.map((id: string) => ({
+            id: id,
+            error: 'API credentials not configured',
+            status: 'SKIPPED'
+          })),
+          total: inventoryIds.length,
+          skipped: true
+        };
+      }
+
+      // Debug logging for API request
+      console.log(`[SEATSCOUTS API] Attempting to delete inventory batch:`, {
+        url: `${this.baseURL}/inventories/delete`,
+        inventoryIds: inventoryIds,
+        count: inventoryIds.length,
+        headers: {
+          'X-Company-Id': this.headers['X-Company-Id'],
+          'X-Api-Token': this.headers['X-Api-Token'],
+          'Content-Type': this.headers['Content-Type']
+        }
+      });
+
+      const response = await fetch(`${this.baseURL}/inventories/delete`, {
+        method: 'POST',
+        headers: this.headers as Record<string, string>,
+        body: JSON.stringify({
+          inventory_ids: inventoryIds
+        }),
+        signal: AbortSignal.timeout(15000) // 15 second timeout for batch operations
+      });
+
+      if (!response.ok) {
+        const errorData = await response.text();
+        throw new Error(`HTTP ${response.status}: ${errorData}`);
+      }
+
+      const responseData = await response.json();
+      console.log(`[SEATSCOUTS API] Batch deletion successful:`, response.status, responseData);
+
+      return {
+        successful: inventoryIds, // Assume all successful if no error
+        failed: [],
+        total: inventoryIds.length,
+        apiResponse: responseData
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      const errorName = error instanceof Error ? error.name : 'Unknown';
+      console.error(`[SEATSCOUTS API] Failed to delete inventory batch:`, errorMessage);
+      
+      // Return failed result for all inventory IDs since batch deletion failed
+      return {
+        successful: [],
+        failed: inventoryIds.map((id: string) => ({
+          id: id,
+          error: errorMessage,
+          status: errorName === 'TimeoutError' ? 'TIMEOUT' : 'NETWORK_ERROR'
+        })),
+        total: inventoryIds.length
+      };
+    }
+  }
+}
+
+// Create a singleton instance
+const seatScoutsApi = new InventoryApi();
+
+/**
+ * Delete inventory from external SeatScouts service using inventory IDs
+ * @param {Array<number>} inventoryIds - Array of inventory IDs to delete from external service
+ * @returns {Promise<InventoryDeletionResult>} Deletion results from external service
+ */
+export async function deleteExternalInventory(inventoryIds: number[]): Promise<InventoryDeletionResult> {
+  if (!inventoryIds || inventoryIds.length === 0) {
+    console.log('[SEATSCOUTS API] No inventory IDs provided for external deletion');
+    return {
+      successful: [],
+      failed: [],
+      total: 0
+    };
+  }
+
+  try {
+    // Convert to strings as the API expects string IDs
+    const stringIds = inventoryIds.map((id: number) => String(id));
+    
+    console.log(`[SEATSCOUTS API] Deleting ${stringIds.length} inventory items from external service:`, stringIds);
+    
+    const result = await seatScoutsApi.deleteInventoryBatch(stringIds);
+    
+    console.log('[SEATSCOUTS API] External deletion result:', {
+      successful: result.successful?.length || 0,
+      failed: result.failed?.length || 0,
+      total: result.total
+    });
+    
+    return result;
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error('[SEATSCOUTS API] Error in deleteExternalInventory:', errorMessage);
+    return {
+      successful: [],
+      failed: inventoryIds.map((id: number) => ({
+        id: String(id),
+        error: errorMessage,
+        status: 'FUNCTION_ERROR'
+      })),
+      total: inventoryIds.length
+    };
+  }
+}
+
 interface CsvRow {
   inventory_id: number;
   event_name: string;
@@ -118,41 +284,43 @@ async function withRetry<T>(
   config: RetryConfig = DEFAULT_RETRY_CONFIG
 ): Promise<T> {
   let lastError: Error;
-  
+
   for (let attempt = 0; attempt <= config.maxRetries; attempt++) {
     try {
       return await operation();
     } catch (error) {
       lastError = error as Error;
-      
+
       if (attempt === config.maxRetries) {
         //ts-ignore
-        await createErrorLog({
-          eventUrl: 'CSV_RETRY_OPERATION',
-          errorType: 'DATABASE_ERROR',
-          message: lastError.message,
-          stack: lastError.stack,
-          operation: operationName,
-          attempt: attempt + 1,
-          timestamp: new Date()
-        });
+        await createErrorLog(
+          'CSV_RETRY_OPERATION',
+          'DATABASE_ERROR',
+          lastError.message,
+          {
+            stack: lastError.stack,
+            operation: operationName,
+            attempt: attempt + 1,
+            timestamp: new Date()
+          }
+        );
         throw lastError;
       }
-      
+
       const delay = calculateDelay(attempt, config);
       console.warn(`${operationName} failed (attempt ${attempt + 1}/${config.maxRetries + 1}): ${lastError.message}. Retrying in ${delay}ms...`);
-      
+
       await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
-  
+
   throw lastError!;
 }
 
 export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0) {
   return withRetry(async () => {
     await dbConnect();
-    
+
     // Force fresh database connection and disable query caching
     // Cache-busting mechanisms implemented:
     // 1. planCacheClear command to clear MongoDB query plans
@@ -163,83 +331,83 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
     const mongoose = await import('mongoose');
     if (mongoose.connection.readyState === 1) {
       // Clear any cached query plans to ensure fresh data
-      mongoose.connection.db?.admin().command({ planCacheClear: '*' }).catch(() => {});
+      mongoose.connection.db?.admin().command({ planCacheClear: '*' }).catch(() => { });
     }
-    
+
     const startTime = Date.now();
 
     try {
       let eventFilter = {};
-      
+
       // If eventUpdateFilterMinutes is provided, filter by recently updated events
       if (eventUpdateFilterMinutes > 0) {
         const cutoffTime = new Date(Date.now() - eventUpdateFilterMinutes * 60 * 1000);
-        
+
         // Get recently updated events with optimized query
         // Force fresh data by removing caching optimizations
         const recentlyUpdatedEvents = await Event.find(
           { updatedAt: { $gte: cutoffTime } },
           { mapping_id: 1 }
         )
-        .read('primary') // Force read from primary to avoid replica lag
-        .hint({ $natural: 1 }) // Force natural order to bypass query cache
-        .maxTimeMS(30000); // Set timeout to prevent hanging
-        
+          .read('primary') // Force read from primary to avoid replica lag
+          .hint({ $natural: 1 }) // Force natural order to bypass query cache
+          .maxTimeMS(30000); // Set timeout to prevent hanging
+
         console.log(`Filter: Events updated within last ${eventUpdateFilterMinutes} minutes since ${cutoffTime.toISOString()}`);
         console.log(`Found ${recentlyUpdatedEvents.length} events matching filter criteria`);
-        
+
         if (recentlyUpdatedEvents.length === 0) {
           return { success: false, message: `No events updated within the last ${eventUpdateFilterMinutes} minutes. Try setting filter to 0 to include all events.` };
         }
-        
+
         // Create filter for ConsecutiveGroup query
         const eventMappingIds = recentlyUpdatedEvents.map(event => event.mapping_id);
         eventFilter = { mapping_id: { $in: eventMappingIds } };
-        
+
         console.log(`Using event filter for ${recentlyUpdatedEvents.length} events`);
       } else {
         console.log('No event filter applied - including all events');
       }
 
-    // Optimized query with projection to fetch only required fields
-    const projection = {
-      'inventory.inventoryId': 1,
-      'event_name': 1,
-      'venue_name': 1,
-      'event_date': 1,
-      'eventId': 1,
-      'mapping_id': 1,
-      'event_url': 1, // Include Ticketmaster URL
-      'inventory.quantity': 1,
-      'inventory.section': 1,
-      'inventory.row': 1,
-      'seats.number': 1,
-      'inventory.barcodes': 1,
-      'inventory.tags': 1,
-      'inventory.notes': 1,
-      'inventory.publicNotes': 1,
-      'inventory.listPrice': 1,
-      'inventory.face_price': 1,
-      'inventory.taxed_cost': 1,
-      'inventory.cost': 1,
-      'inventory.hideSeatNumbers': 1,
-      'inventory.in_hand': 1,
-      'inventory.inHandDate': 1,
-      'inventory.instant_transfer': 1,
-      'inventory.files_available': 1,
-      'inventory.splitType': 1,
-      'inventory.custom_split': 1,
-      'inventory.stockType': 1,
-      'inventory.zone': 1,
-      'inventory.shown_quantity': 1,
-      'inventory.passthrough': 1,
-    };
+      // Optimized query with projection to fetch only required fields
+      const projection = {
+        'inventory.inventoryId': 1,
+        'event_name': 1,
+        'venue_name': 1,
+        'event_date': 1,
+        'eventId': 1,
+        'mapping_id': 1,
+        'event_url': 1, // Include Ticketmaster URL
+        'inventory.quantity': 1,
+        'inventory.section': 1,
+        'inventory.row': 1,
+        'seats.number': 1,
+        'inventory.barcodes': 1,
+        'inventory.tags': 1,
+        'inventory.notes': 1,
+        'inventory.publicNotes': 1,
+        'inventory.listPrice': 1,
+        'inventory.face_price': 1,
+        'inventory.taxed_cost': 1,
+        'inventory.cost': 1,
+        'inventory.hideSeatNumbers': 1,
+        'inventory.in_hand': 1,
+        'inventory.inHandDate': 1,
+        'inventory.instant_transfer': 1,
+        'inventory.files_available': 1,
+        'inventory.splitType': 1,
+        'inventory.custom_split': 1,
+        'inventory.stockType': 1,
+        'inventory.zone': 1,
+        'inventory.shown_quantity': 1,
+        'inventory.passthrough': 1,
+      };
 
       // Enhanced cursor with better memory management and parallel processing
       const BATCH_SIZE = 500; // Reduced batch size for better memory usage
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const PARALLEL_BATCHES = 3; // Process multiple batches in parallel
-      
+
       // Use aggregation pipeline with cache-busting options
       const pipeline = [
         { $match: eventFilter },
@@ -261,7 +429,7 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
         { $project: projection },
         { $sort: { _id: 1 } } // Ensure consistent ordering
       ];
-      
+
       const cursor = ConsecutiveGroup.aggregate(pipeline as PipelineStage[], {
         allowDiskUse: true,
         readPreference: 'primary', // Force read from primary to avoid replica lag
@@ -272,25 +440,25 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
       const records: CsvRow[] = [];
       let processedCount = 0;
       let batch: ConsecutiveGroupDocument[] = [];
-      
+
       // Process documents in optimized batches
       for await (const doc of cursor) {
         batch.push(doc);
-        
+
         if (batch.length >= BATCH_SIZE) {
           const processedBatch = await processBatch(batch);
           records.push(...processedBatch);
           processedCount += batch.length;
-          
+
           console.log(`Processed ${processedCount} records... (Memory usage: ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB)`);
-          
+
           batch = []; // Clear batch to free memory
-          
+
           // Yield control to event loop to prevent blocking
           await new Promise(resolve => setImmediate(resolve));
         }
       }
-      
+
       // Process remaining documents
       if (batch.length > 0) {
         const processedBatch = await processBatch(batch);
@@ -299,22 +467,22 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
       }
 
       console.log(`Total records found: ${records.length}`);
-      
+
       if (records.length === 0) {
         return { success: false, message: 'No inventory data found. Check if events exist and have inventory data.' };
       }
 
       // Optimized CSV generation using streaming approach
       const csvString = await generateCsvString(records);
-    
+
       const endTime = Date.now();
       const duration = endTime - startTime;
       const memoryUsage = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
-      
+
       console.log(`CSV generation completed in ${duration}ms for ${records.length} records (Peak memory: ${memoryUsage}MB)`);
 
-      return { 
-        success: true, 
+      return {
+        success: true,
         csv: csvString,
         recordCount: records.length,
         generationTime: duration,
@@ -322,14 +490,16 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
       };
     } catch (error) {
       console.error('Error generating CSV:', error);
-      await createErrorLog({
-        eventUrl: 'CSV_GENERATION',
-        errorType: 'DATABASE_ERROR',
-        message: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined,
-        operation: 'generateInventoryCsv',
-        timestamp: new Date()
-      });
+      await createErrorLog(
+        'CSV_GENERATION',
+        'DATABASE_ERROR',
+        error instanceof Error ? error.message : 'Unknown error',
+        {
+          stack: error instanceof Error ? error.stack : undefined,
+          operation: 'generateInventoryCsv',
+          timestamp: new Date()
+        }
+      );
       return { success: false, message: 'Failed to generate CSV.' };
     }
   }, 'CSV Generation');
@@ -374,22 +544,22 @@ interface ConsecutiveGroupDocument {
 
 // Function to determine split configuration based on ticket type and quantity
 function calculateSplitConfiguration(quantity: number, splitType?: string): {
-  finalSplitType: CsvRow['split_type']; 
-  customSplit: string; 
+  finalSplitType: CsvRow['split_type'];
+  customSplit: string;
 } {
   // If splitType is "DEFAULT", it's a resale ticket
   const isResale = splitType === 'DEFAULT';
-  
+
   if (isResale) {
     // RESALE logic
-    
+
     // For quantities over thresholds, use NEVERLEAVEONE
     // Even quantities over 10 = NEVERLEAVEONE
     // Odd quantities over 11 = NEVERLEAVEONE
     if ((quantity % 2 === 0 && quantity >= 10) || (quantity % 2 === 1 && quantity >= 11)) {
       return { finalSplitType: 'NEVERLEAVEONE', customSplit: '' };
     }
-    
+
     // For quantities at or below thresholds, use CUSTOM with appropriate splits
     // Even quantities 10 and below, Odd quantities 11 and below use CUSTOM
     if (quantity === 2) {
@@ -426,18 +596,18 @@ function calculateSplitConfiguration(quantity: number, splitType?: string): {
 async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]> {
   return batch.map(doc => {
     const inventory = doc.inventory;
-    
+
     // Pre-compute expensive operations with null safety
     const seatsString = doc.seats && doc.seats.length > 0 ?
       doc.seats.map((seat: { number: string | number }) => seat.number).join(',') : '';
-    const eventDateString = doc.event_date ? 
+    const eventDateString = doc.event_date ?
       new Date(doc.event_date).toISOString() : '';
-    const inHandDateString = inventory?.inHandDate ? 
+    const inHandDateString = inventory?.inHandDate ?
       new Date(inventory.inHandDate).toISOString().slice(0, 10) : '';
 
     // Calculate split configuration based on quantity and split type
     const { finalSplitType, customSplit } = calculateSplitConfiguration(
-      inventory?.quantity || 0, 
+      inventory?.quantity || 0,
       inventory?.splitType
     );
 
@@ -445,10 +615,10 @@ async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]
     const row = inventory?.row || '';
     const isSRO = row.toUpperCase() === 'SRO';
     const existingPublicNotes = inventory?.publicNotes || '';
-    const publicNotes = isSRO 
+    const publicNotes = isSRO
       ? (existingPublicNotes ? `${existingPublicNotes} - STANDING ROOM ONLY` : 'STANDING ROOM ONLY')
       : existingPublicNotes;
-    
+
     return {
       inventory_id: inventory?.inventoryId || 0,
       event_name: doc.event_name || '',
@@ -462,7 +632,7 @@ async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]
       barcodes: inventory?.barcodes || '',
       internal_notes: "-tnow -tmplus",
       public_notes: publicNotes,
-      tags: (inventory?.splitType ==='NEVERLEAVEONE'? 'STANDARD' : 'RESALE') + ' ,tm_savvy',
+      tags: (inventory?.splitType === 'NEVERLEAVEONE' ? 'STANDARD' : 'RESALE'),
       list_price: Number(applyPriceIncrease(inventory?.listPrice || 0).toFixed(2)),
       face_price: Number((inventory?.cost || 0).toFixed(2)),
       taxed_cost: Number((inventory?.cost || 0).toFixed(2)),
@@ -485,10 +655,10 @@ async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]
 // Optimized CSV string generation
 async function generateCsvString(records: CsvRow[]): Promise<string> {
   const chunks: string[] = [];
-  
+
   // Add headers
   chunks.push(csvColumns.map(col => col.title).join(','));
-  
+
   // Process records in chunks to avoid string concatenation performance issues
   const CHUNK_SIZE = 1000;
   for (let i = 0; i < records.length; i += CHUNK_SIZE) {
@@ -507,15 +677,15 @@ async function generateCsvString(records: CsvRow[]): Promise<string> {
         return stringValue;
       }).join(',');
     }).join('\n');
-    
+
     chunks.push(csvChunk);
-    
+
     // Yield control periodically
     if (i % (CHUNK_SIZE * 5) === 0) {
       await new Promise(resolve => setImmediate(resolve));
     }
   }
-  
+
   return chunks.join('\n');
 }
 
@@ -525,19 +695,19 @@ export async function uploadCsvToSyncService(csvContent: string): Promise<{ succ
       // Get sync service credentials from environment variables
       const companyId = process.env.SYNC_COMPANY_ID;
       const apiToken = process.env.SYNC_API_TOKEN;
-      
+
       if (!companyId || !apiToken) {
         throw new Error('Sync service credentials not configured. Please set SYNC_COMPANY_ID and SYNC_API_TOKEN environment variables.');
       }
-      
+
       // Validate CSV content
       if (!csvContent || csvContent.trim().length === 0) {
         throw new Error('CSV content is empty or invalid');
       }
-      
+
       // Initialize sync service
       const syncService = new SyncService(companyId, apiToken);
-      
+
       // Upload CSV content to sync service with timeout
       const uploadPromise = syncService.uploadCsvContentToSync(csvContent);
       const timeoutPromise = new Promise((_, reject) => {
@@ -545,14 +715,14 @@ export async function uploadCsvToSyncService(csvContent: string): Promise<{ succ
       });
       // eslint-disable-next-line @typescript-eslint/ban-ts-comment
       const result = await Promise.race([uploadPromise, timeoutPromise]) as any;
-      
+
       // Log detailed server response for debugging
       console.log('=== SERVER UPLOAD RESPONSE ===');
       console.log('Full server response:', JSON.stringify(result, null, 2));
       console.log('Response type:', typeof result);
       console.log('Response keys:', Object.keys(result || {}));
       console.log('==============================');
-      
+
       if ('success' in result && result.success) {
         // Update database with upload status
         await updateSchedulerSettings({
@@ -560,10 +730,10 @@ export async function uploadCsvToSyncService(csvContent: string): Promise<{ succ
           lastUploadStatus: 'success',
           lastUploadId: (result as { uploadId?: string })?.uploadId
         });
-        
+
         console.log('✅ CSV content uploaded to sync service successfully');
         console.log('Upload ID:', (result as { uploadId?: string })?.uploadId);
-        
+
         return {
           success: true,
           message: 'CSV uploaded to sync service successfully',
@@ -576,7 +746,7 @@ export async function uploadCsvToSyncService(csvContent: string): Promise<{ succ
       }
     } catch (error) {
       console.error('Error uploading to sync service:', error);
-      
+
       // Update database with error status
       try {
         await updateSchedulerSettings({
@@ -587,7 +757,7 @@ export async function uploadCsvToSyncService(csvContent: string): Promise<{ succ
       } catch (dbError) {
         console.error('Error updating database with upload status:', dbError);
       }
-      
+
       throw error; // Re-throw for retry mechanism
     }
   }, 'CSV Upload', {
@@ -607,17 +777,17 @@ export async function clearInventoryFromSync(): Promise<{ success: boolean; mess
     // Get sync service credentials from environment variables
     const companyId = process.env.SYNC_COMPANY_ID;
     const apiToken = process.env.SYNC_API_TOKEN;
-    
+
     if (!companyId || !apiToken) {
       throw new Error('Sync service credentials not configured. Please set SYNC_COMPANY_ID and SYNC_API_TOKEN environment variables.');
     }
-    
+
     // Initialize sync service
     const syncService = new SyncService(companyId, apiToken);
-    
+
     // Clear all inventory
     const result = await syncService.clearAllInventory();
-    
+
     if ('success' in result && result.success) {
       // Update database with clear inventory status
       await updateSchedulerSettings({
@@ -626,9 +796,9 @@ export async function clearInventoryFromSync(): Promise<{ success: boolean; mess
         lastUploadId: (result as { uploadId?: string })?.uploadId,
         lastClearAt: new Date()
       });
-      
+
       console.log('Inventory cleared from sync service successfully');
-      
+
       return {
         success: true,
         message: 'Inventory cleared from sync service successfully',
@@ -639,7 +809,7 @@ export async function clearInventoryFromSync(): Promise<{ success: boolean; mess
     }
   } catch (error) {
     console.error('Error clearing inventory from sync service:', error);
-    
+
     // Update database with error status
     try {
       await updateSchedulerSettings({
@@ -650,7 +820,7 @@ export async function clearInventoryFromSync(): Promise<{ success: boolean; mess
     } catch (dbError) {
       console.error('Error updating database with clear inventory status:', dbError);
     }
-    
+
     return {
       success: false,
       message: `Failed to clear inventory from sync service: ${error instanceof Error ? error.message : 'Unknown error'}`
@@ -749,7 +919,7 @@ export async function runAutoDelete() {
     }
 
     const stats = await deleteExpiredEvents(settings.graceHours);
-    
+
     // Update settings with run statistics
     await updateAutoDeleteSettings({
       lastRunAt: new Date(),
@@ -784,7 +954,7 @@ export async function getAutoDeletePreview(graceHours?: number) {
     const settings = await getAutoDeleteSettings();
     const hours = graceHours ?? settings.graceHours;
     const preview = await getExpiredEventsStats(hours);
-    
+
     return {
       ...preview,
       graceHours: hours
