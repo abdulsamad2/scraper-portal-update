@@ -9,6 +9,16 @@ import { generateInventoryCsv, uploadCsvToSyncService } from '@/actions/csvActio
 import { createErrorLog } from '@/actions/errorLogActions';
 import { NextRequest, NextResponse } from 'next/server';
 
+// Force dynamic rendering - no caching
+export const dynamic = 'force-dynamic';
+
+// No-cache headers
+const NO_CACHE_HEADERS = {
+  'Cache-Control': 'no-store, no-cache, must-revalidate',
+  'Pragma': 'no-cache',
+  'Expires': '0'
+};
+
 // Scheduler metrics for monitoring
 interface SchedulerMetrics {
   totalRuns: number;
@@ -138,15 +148,15 @@ async function startScheduler(intervalMinutes: number, uploadToSync: boolean, ev
             schedulerMetrics.lastError = uploadResult.message;
             
             // Log error to database
-            await createErrorLog(
-              'CSV_SCHEDULER_UPLOAD',
-              'DATABASE_ERROR',
-              uploadResult.message || 'Unknown upload error',
-              {
+            await createErrorLog({
+              errorType: 'CSV_SCHEDULER_UPLOAD',
+              category: 'DATABASE_ERROR',
+              errorMessage: uploadResult.message || 'Unknown upload error',
+              metadata: {
                 operation: 'scheduled_csv_upload',
                 timestamp: new Date()
               }
-            );
+            });
           }
         } else {
           schedulerMetrics.successfulRuns++;
@@ -166,15 +176,15 @@ async function startScheduler(intervalMinutes: number, uploadToSync: boolean, ev
         schedulerMetrics.lastError = result.message;
         
         // Log error to database
-        await createErrorLog(
-          'CSV_SCHEDULER_GENERATION',
-          'DATABASE_ERROR',
-          result.message || 'Unknown generation error',
-          {
+        await createErrorLog({
+          errorType: 'CSV_SCHEDULER_GENERATION',
+          category: 'DATABASE_ERROR',
+          errorMessage: result.message || 'Unknown generation error',
+          metadata: {
             operation: 'scheduled_csv_generation',
             timestamp: new Date()
           }
-        );
+        });
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -183,16 +193,16 @@ async function startScheduler(intervalMinutes: number, uploadToSync: boolean, ev
       schedulerMetrics.lastError = errorMessage;
       
       // Log error to database
-      await createErrorLog(
-        'CSV_SCHEDULER_TASK',
-        'DATABASE_ERROR',
-        errorMessage,
-        {
+      await createErrorLog({
+        errorType: 'CSV_SCHEDULER_ERROR', 
+        category: 'DATABASE_ERROR',
+        errorMessage: errorMessage,
+        metadata: {
           stack: error instanceof Error ? error.stack : undefined,
           operation: 'scheduled_csv_task',
           timestamp: new Date()
         }
-      );
+      });
     }
   };
   

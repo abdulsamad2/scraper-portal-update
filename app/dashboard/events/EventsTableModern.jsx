@@ -1,9 +1,18 @@
 'use client';
 
-import React, { memo, useMemo } from 'react';
-import DataTable from 'react-data-table-component';
+import React, { memo, useMemo, useCallback } from 'react';
+import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { Eye, Edit, Trash2, Play, Square, Info, AlertCircle, Calendar, MapPin, Users } from 'lucide-react';
+
+// Dynamic import for heavy DataTable component (bundle-dynamic-imports)
+const DataTable = dynamic(() => import('react-data-table-component'), {
+  loading: () => (
+    <div className="flex items-center justify-center p-8">
+      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+    </div>
+  ),
+});
 
 // Modern tooltip header component
 const Header = ({ title, description, icon }) => (
@@ -22,7 +31,7 @@ const Header = ({ title, description, icon }) => (
   </div>
 );
 
-const StatusBadge = ({ active }) => (
+const StatusBadge = memo(({ active }) => (
   <div className="flex items-center">
     <div className={`w-2 h-2 rounded-full mr-2 ${active ? 'bg-blue-500' : 'bg-slate-400'}`}></div>
     <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
@@ -33,13 +42,25 @@ const StatusBadge = ({ active }) => (
       {active ? 'Active' : 'Inactive'}
     </span>
   </div>
-);
+));
 
-const EventsTableModern = memo(function EventsTableModern({ data, toggleScraping, seatCounts = {}, loadingSeatCounts = false, onDeleteEvent, togglingEvents = new Set() }) {
-  // Memoize utility functions to prevent unnecessary re-renders
-  const formatDate = useMemo(() => (d) => (d ? new Date(d).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : '—'), []);
-  const formatTime = useMemo(() => (d) => (d ? new Date(d).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—'), []);
-  const timeAgo = useMemo(() => (d) => {
+// Static header elements (rendering-hoist-jsx)
+const STATUS_HEADER = <Header title="Status" description="Current scraping status" />;
+const EVENT_DETAILS_HEADER = <Header title="Event Details" description="Event name and information" icon={<Calendar size={16} />} />;
+const EVENT_DATE_HEADER = <Header title="Event Date" description="Scheduled event date" icon={<Calendar size={14} />} />;
+
+const EventsTableModern = memo(function EventsTableModern({ 
+  data, 
+  toggleScraping, 
+  seatCounts = {}, 
+  loadingSeatCounts = false, 
+  onDeleteEvent, 
+  togglingEvents = new Set() 
+}) {
+  // Create stable utility functions (rerender-memo)
+  const formatDate = useCallback((d) => d ? new Date(d).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : '—', []);
+  const formatTime = useCallback((d) => d ? new Date(d).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—', []);
+  const timeAgo = useCallback((d) => {
     if (!d) return 'Never';
     const diff = Date.now() - new Date(d).getTime();
     const mins = Math.floor(diff / 60000);
@@ -50,7 +71,7 @@ const EventsTableModern = memo(function EventsTableModern({ data, toggleScraping
     return `${days}d ago`;
   }, []);
 
-  const isFresh = useMemo(() => (d) => Date.now() - new Date(d).getTime() < 4 * 60 * 1000, []);
+  const isFresh = useCallback((d) => Date.now() - new Date(d).getTime() < 4 * 60 * 1000, []);
 
   // Memoize sorted data to prevent unnecessary sorting
   const sortedData = useMemo(() => 
@@ -58,17 +79,17 @@ const EventsTableModern = memo(function EventsTableModern({ data, toggleScraping
     [data]
   );
 
-  // Memoize columns to prevent recreation on every render
+  // Memoize columns with primitive dependencies (rerender-dependencies)
   const columns = useMemo(() => [
     {
-      name: <Header title="Status" description="Current scraping status" />, 
+      name: STATUS_HEADER, 
       selector: r => !r.Skip_Scraping, 
       width: '120px',
       cell: r => <StatusBadge active={!r.Skip_Scraping} />,
       sortable: true,
     },
     {
-      name: <Header title="Event Details" description="Event name and information" icon={<Calendar size={16} />} />, 
+      name: EVENT_DETAILS_HEADER, 
       selector: r => r.Event_Name, 
       grow: 2, 
       sortable: true,

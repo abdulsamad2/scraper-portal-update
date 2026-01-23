@@ -60,6 +60,12 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
       icon: <Download className="w-5 h-5" />,
       isActive: true,
     },
+    {
+      path: '/dashboard/proxies',
+      label: 'Proxies',
+      icon: <SignalHigh className="w-5 h-5" />,
+      isActive: true,
+    },
   ];
 
   const comingSoonItems = [
@@ -67,11 +73,6 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
       label: 'Orders',
       icon: <ShoppingCart className="w-5 h-5" />,
       description: 'Manage customer orders'
-    },
-     {
-      label: 'Proxies',
-      icon: <SignalHigh className="w-5 h-5" />,
-      description: 'Manage Proxies'
     },
   ];
   

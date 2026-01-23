@@ -15,8 +15,17 @@ export function middleware(request: NextRequest) {
       return NextResponse.redirect(new URL('/login', request.url));
     }
   }
+
+  // Add no-cache headers to all responses to ensure fresh data
+  const response = NextResponse.next();
   
-  return NextResponse.next();
+  // Disable all caching
+  response.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  response.headers.set('Pragma', 'no-cache');
+  response.headers.set('Expires', '0');
+  response.headers.set('Surrogate-Control', 'no-store');
+  
+  return response;
 }
 
 export const config = {

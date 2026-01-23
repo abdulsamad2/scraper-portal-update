@@ -4,6 +4,9 @@ import { getAllEvents, updateEvent, updateAllEvents, deleteEvent } from '@/actio
 import { Calendar, ChevronLeft, ChevronRight, RefreshCw, Search, X, SlidersHorizontal } from 'lucide-react';
 import EventsTableModern from './EventsTableModern.jsx';
 
+// Force dynamic rendering to ensure fresh data
+export const dynamic = 'force-dynamic';
+
 export default function EventsPage() {
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);

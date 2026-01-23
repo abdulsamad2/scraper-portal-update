@@ -7,6 +7,16 @@ import {
 } from '@/actions/csvActions';
 import { createErrorLog } from '@/actions/errorLogActions';
 
+// Force dynamic rendering - no caching
+export const dynamic = 'force-dynamic';
+
+// No-cache headers
+const NO_CACHE_HEADERS = {
+  'Cache-Control': 'no-store, no-cache, must-revalidate',
+  'Pragma': 'no-cache',
+  'Expires': '0'
+};
+
 // Store the interval instance for auto-delete scheduler
 let autoDeleteInterval: NodeJS.Timeout | null = null;
 let isAutoDeleteInitialized = false;
@@ -94,13 +104,13 @@ export async function GET() {
         lastRunStats: settings.lastRunStats,
         schedulerStatus: autoDeleteInterval ? 'Running' : 'Stopped'
       }
-    });
+    }, { headers: NO_CACHE_HEADERS });
   } catch (error) {
     console.error('Error getting auto-delete settings:', error);
     return NextResponse.json({
       success: false,
       error: 'Failed to get auto-delete settings'
-    }, { status: 500 });
+    }, { status: 500, headers: NO_CACHE_HEADERS });
   }
 }
 

@@ -4,7 +4,6 @@ import dbConnect from '@/lib/dbConnect';
 import { ConsecutiveGroup } from '@/models/seatModel'; // Assuming models are aliased to @/models
 import { Event } from '@/models/eventModel'; // Assuming models are aliased to @/models
 import { UpdateQuery } from 'mongoose';
-import { revalidatePath } from 'next/cache';
 import { deleteExternalInventory } from './csvActions';
 
 /**
@@ -28,8 +27,6 @@ export async function createConsecutiveGroup(groupData: {
   try {
     const newGroup = new ConsecutiveGroup(groupData);
     const savedGroup = await newGroup.save();
-    revalidatePath('/seat-groups'); // Adjust path as needed
-    revalidatePath(`/seat-groups/${savedGroup._id}`);
     return JSON.parse(JSON.stringify(savedGroup));
   } catch (error: unknown) {
     console.error('Error creating consecutive group:', error);
@@ -102,8 +99,6 @@ export async function updateConsecutiveGroup(groupId: string, updateData: Update
     if (!updatedGroup) {
       return null;
     }
-    revalidatePath('/seat-groups');
-    revalidatePath(`/seat-groups/${groupId}`);
     return JSON.parse(JSON.stringify(updatedGroup));
   } catch (error: unknown) {
     console.error('Error updating consecutive group:', error);
@@ -123,7 +118,6 @@ export async function deleteConsecutiveGroup(groupId: string) {
     if (!deletedGroup) {
       return { message: 'Consecutive group not found', success: false };
     }
-    revalidatePath('/seat-groups');
     return { message: 'Consecutive group deleted successfully', success: true, deletedGroup: JSON.parse(JSON.stringify(deletedGroup)) };
   } catch (error: unknown) {
     console.error('Error deleting consecutive group:', error);
@@ -278,7 +272,6 @@ export async function deleteConsecutiveGroupsByEventId(eventId: string) {
     const deleteResult = await ConsecutiveGroup.deleteMany({ eventId: eventId });
     console.log('Local delete result:', deleteResult);
     
-    revalidatePath('/seat-groups');
     return { 
       message: `Successfully deleted ${deleteResult.deletedCount} consecutive seat groups for event`, 
       success: true, 
@@ -332,8 +325,6 @@ export async function deleteConsecutiveGroupsByEventIds(eventIds: string[]) {
     
     // Delete from local database
     const deleteResult = await ConsecutiveGroup.deleteMany({ eventId: { $in: eventIds } });
-    revalidatePath('/seat-groups');
-    revalidatePath('/dashboard/inventory');
     return { 
       message: `Successfully deleted ${deleteResult.deletedCount} consecutive seat groups for ${eventIds.length} events`, 
       success: true, 

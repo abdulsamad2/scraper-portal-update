@@ -16,13 +16,23 @@ import {
   MousePointer2
 } from 'lucide-react';
 
-// Client-side time component to avoid hydration mismatch
+// Force dynamic rendering to ensure fresh data
+export const dynamic = 'force-dynamic';
+
+// Client-side time component to avoid hydration mismatch (rendering-hydration-no-flicker)
 function ClientTime() {
-  const [time, setTime] = useState('');
-  const [mounted, setMounted] = useState(false);
+  const [time, setTime] = useState(() => {
+    // Lazy initialization to avoid computation on every render (rerender-lazy-state-init)
+    if (typeof window === 'undefined') return '--:--:--';
+    return new Date().toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit', 
+      second: '2-digit',
+      hour12: false
+    });
+  });
 
   useEffect(() => {
-    setMounted(true);
     const updateTime = () => {
       setTime(new Date().toLocaleTimeString('en-US', {
         hour: '2-digit',
@@ -32,15 +42,10 @@ function ClientTime() {
       }));
     };
     
-    updateTime();
     const interval = setInterval(updateTime, 1000);
     
     return () => clearInterval(interval);
-  }, []);
-
-  if (!mounted) {
-    return <span>--:--:--</span>;
-  }
+  }, []); // Empty dependency array as per rerender-dependencies rule
 
   return <span>{time}</span>;
 }
@@ -67,14 +72,15 @@ interface DashboardStats {
 
 export default function DashboardPage() {
   const router = useRouter();
-  const [stats, setStats] = useState<DashboardStats>({
+  // Lazy state initialization to avoid expensive computation on every render (rerender-lazy-state-init)
+  const [stats, setStats] = useState<DashboardStats>(() => ({
     totalEvents: 0,
     totalSeats: 0,
-    activeScrapingCount: 0, // Initialize the new field
+    activeScrapingCount: 0,
     recentEvents: [],
     weeklyEventsData: [],
     loading: true,
-  });
+  }));
 
   const [chartMode, setChartMode] = useState<'time' | 'scatter'>('time');
   const [hoveredBar, setHoveredBar] = useState<number | null>(null);
@@ -82,9 +88,11 @@ export default function DashboardPage() {
   useEffect(() => {
     async function fetchData() {
       try {
-        // Fetch summary data
-        const eventsData = await getAllEvents();
-        const seatsData = await getConsecutiveGroupsPaginated(1000, 1, '', {}); // Get first 1000 records to get total
+        // Use Promise.all for parallel data fetching (async-parallel)
+        const [eventsData, seatsData] = await Promise.all([
+          getAllEvents(),
+          getConsecutiveGroupsPaginated(1000, 1, '', {}) // Get first 1000 records to get total
+        ]);
 
         // Check if any of these returned an error
         if (!Array.isArray(eventsData) || 'error' in seatsData) {

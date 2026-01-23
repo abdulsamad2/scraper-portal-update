@@ -3,6 +3,9 @@
 import { useEffect, useState } from 'react';
 import { getConsecutiveGroupsPaginated } from '@/actions/seatActions';
 
+// Force dynamic rendering to ensure fresh data
+export const dynamic = 'force-dynamic';
+
 // Define FilterOptions interface to match server action
 interface FilterOptions {
   event?: string;
