@@ -12,7 +12,7 @@ import {
   Globe,
   RefreshCw
 } from 'lucide-react';
-import { BulkActions, ProxyRow, ProxyTable } from './ProxyClientComponents';
+import { BulkActions, ProxyRow, ProxyTableWithControls } from './ProxyClientComponents';
 import { revalidatePath } from 'next/cache';
 
 // Force dynamic rendering to ensure fresh data
@@ -62,9 +62,9 @@ export default async function ProxyManagement({
   // Await searchParams to resolve the Promise
   const params = await searchParams;
 
-  // Load data on server
+  // Load data on server - fetch all proxies instead of limiting to 50
   const [proxiesResult, statsResult] = await Promise.all([
-    getAllProxies(50, 0, {}),
+    getAllProxies(10000, 0, {}), // Fetch up to 10k proxies to show all data
     getProxyStats()
   ]);
 
@@ -113,162 +113,117 @@ export default async function ProxyManagement({
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-white p-6">
-      <div className="max-w-7xl mx-auto space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold bg-gradient-to-r from-slate-900 to-slate-600 bg-clip-text text-transparent">
-              Proxy Management
-            </h1>
-            <p className="text-slate-600 mt-1">Manage and monitor your proxy infrastructure</p>
+    <div className="space-y-6">
+      {/* Header */}
+      <header>
+        <h1 className="text-2xl font-bold flex items-center gap-2" style={{ textWrap: 'balance' }}>
+          <Globe className="w-6 h-6" aria-hidden="true" />
+          Proxy Management
+        </h1>
+        <p className="text-slate-600 mt-2">Manage and monitor your proxy infrastructure</p>
+      </header>
+
+      {/* Error Display */}
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3">
+          <div className="w-5 h-5 text-red-500 mt-0.5 flex-shrink-0">⚠️</div>
+          <div className="flex-1">
+            <h4 className="text-red-800 font-medium">Error</h4>
+            <p className="text-red-700 text-sm mt-1">{error}</p>
           </div>
         </div>
+      )}
 
-        {/* Error Display */}
-        {error && (
-          <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3">
-            <div className="w-5 h-5 text-red-500 mt-0.5 flex-shrink-0">⚠️</div>
-            <div className="flex-1">
-              <h4 className="text-red-800 font-medium">Error</h4>
-              <p className="text-red-700 text-sm mt-1">{error}</p>
+      {/* Stats Cards */}
+      {stats && (
+        <section aria-labelledby="proxy-stats">
+          <h2 id="proxy-stats" className="sr-only">Proxy Statistics</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+            <div className="bg-white shadow-sm rounded-lg p-4 flex items-center gap-4 hover:shadow-md transition-shadow">
+              <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                <Database className="w-6 h-6 text-blue-600" />
+              </div>
+              <div>
+                <p className="text-xs text-gray-500 font-medium">Total Proxies</p>
+                <p className="text-2xl font-bold text-blue-600" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                  {new Intl.NumberFormat('en-US').format(stats.total || 0)}
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-white shadow-sm rounded-lg p-4 flex items-center gap-4 hover:shadow-md transition-shadow">
+              <div className="w-12 h-12 bg-emerald-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                <CheckCircle2 className="w-6 h-6 text-emerald-600" />
+              </div>
+              <div>
+                <p className="text-xs text-gray-500 font-medium">Active</p>
+                <p className="text-2xl font-bold text-emerald-600" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                  {new Intl.NumberFormat('en-US').format(stats.active || 0)}
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-white shadow-sm rounded-lg p-4 flex items-center gap-4 hover:shadow-md transition-shadow">
+              <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                <Activity className="w-6 h-6 text-blue-600" />
+              </div>
+              <div>
+                <p className="text-xs text-gray-500 font-medium">Working</p>
+                <p className="text-2xl font-bold text-blue-600" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                  {new Intl.NumberFormat('en-US').format(stats.working || 0)}
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-white shadow-sm rounded-lg p-4 flex items-center gap-4 hover:shadow-md transition-shadow">
+              <div className="w-12 h-12 bg-orange-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                <RefreshCw className="w-6 h-6 text-orange-600" />
+              </div>
+              <div>
+                <p className="text-xs text-gray-500 font-medium">Total Requests</p>
+                <p className="text-2xl font-bold text-orange-600" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                  {new Intl.NumberFormat('en-US').format(stats.totalRequests || 0)}
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-white shadow-sm rounded-lg p-4 flex items-center gap-4 hover:shadow-md transition-shadow">
+              <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                <TrendingUp className="w-6 h-6 text-purple-600" />
+              </div>
+              <div>
+                <p className="text-xs text-gray-500 font-medium">Success Rate</p>
+                <p className="text-2xl font-bold text-purple-600" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                  {stats.totalRequests && stats.totalRequests > 0 ? 
+                    (((stats.totalRequests - (stats.totalFailures || 0)) / stats.totalRequests) * 100).toFixed(1) 
+                    : '0.0'}%
+                </p>
+              </div>
             </div>
           </div>
-        )}
+        </section>
+      )}
 
-        {/* Stats Cards */}
-        {stats && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            <div className="bg-white rounded-xl p-6 shadow-sm border border-slate-200">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-slate-600">Total Proxies</p>
-                  <p className="text-2xl font-bold text-slate-900">{stats.total || 0}</p>
-                </div>
-                <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
-                  <Database className="w-6 h-6 text-blue-600" />
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-white rounded-xl p-6 shadow-sm border border-slate-200">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-slate-600">Active</p>
-                  <p className="text-2xl font-bold text-emerald-600">{stats.active || 0}</p>
-                </div>
-                <div className="w-12 h-12 bg-emerald-100 rounded-lg flex items-center justify-center">
-                  <CheckCircle2 className="w-6 h-6 text-emerald-600" />
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-white rounded-xl p-6 shadow-sm border border-slate-200">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-slate-600">Working</p>
-                  <p className="text-2xl font-bold text-blue-600">{stats.working || 0}</p>
-                </div>
-                <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
-                  <Activity className="w-6 h-6 text-blue-600" />
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-white rounded-xl p-6 shadow-sm border border-slate-200">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-slate-600">Success Rate</p>
-                  <p className="text-2xl font-bold text-purple-600">{(stats.avgSuccessRate || 0).toFixed(1)}%</p>
-                </div>
-                <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center">
-                  <TrendingUp className="w-6 h-6 text-purple-600" />
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Actions Bar */}
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-          <div className="flex flex-col lg:flex-row gap-4 justify-between">
-            <BulkActions onRefresh={refreshProxies} />
-
-            {/* Search */}
-            <form className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400 w-4 h-4" />
-              <input
-                type="text"
-                name="search"
-                placeholder="Search proxies..."
-                defaultValue={params.search || ''}
-                className="pl-10 pr-4 py-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm min-w-[250px] bg-white"
-              />
-            </form>
-          </div>
+      {/* Actions and Search */}
+      <section className="flex flex-col lg:flex-row lg:justify-between items-start lg:items-center gap-4">
+        <div>
+          <BulkActions onRefresh={refreshProxies} />
         </div>
-
-        {/* Proxies Table */}
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-          <div className="px-6 py-4 border-b border-slate-200 bg-slate-50">
-            <h3 className="text-lg font-semibold text-slate-900">
-              Proxies ({filteredProxies.length})
-            </h3>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-slate-200">
-                  <th className="w-12 px-6 py-3 text-left">
-                    <input
-                      type="checkbox"
-                      className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-                    // TODO: Add select all functionality
-                    />
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
-                    Proxy Details
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
-                    Status
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
-                    Performance
-                  </th>
-                  <th className="w-32 px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-200">
-                {filteredProxies.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="px-6 py-16 text-center">
-                      <div className="flex flex-col items-center gap-4">
-                        <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center">
-                          <Database className="h-8 w-8 text-slate-400" />
-                        </div>
-                        <div className="space-y-2">
-                          <h3 className="text-lg font-semibold text-slate-900">No proxies found</h3>
-                          <p className="text-slate-500">
-                            {params.search || params.status || params.provider
-                              ? 'Try adjusting your filters or search terms'
-                              : 'Add your first proxy to get started'
-                            }
-                          </p>
-                        </div>
-                      </div>
-                    </td>
-                  </tr>
-                ) : (
-                  <ProxyTable proxies={filteredProxies} onRefresh={refreshProxies} />
-                )}
-              </tbody>
-            </table>
-          </div>
+        
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400 w-4 h-4" />
+          <input
+            type="text"
+            name="search"
+            placeholder="Search proxies..."
+            defaultValue={params.search || ''}
+            className="pl-10 pr-4 py-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm min-w-[250px] bg-white"
+          />
         </div>
-      </div>
+      </section>
+
+      {/* Proxy Table */}
+      <ProxyTableWithControls proxies={filteredProxies} onRefresh={refreshProxies} />
     </div>
   );
 }

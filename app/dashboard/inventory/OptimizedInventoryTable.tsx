@@ -98,6 +98,15 @@ const CustomHeader = ({
         sortable ? 'cursor-pointer hover:text-blue-600 hover:bg-blue-50 -mx-2 px-2 py-1 rounded-md' : ''
       }`}
       onClick={sortable && field && onSort ? () => onSort(field) : undefined}
+      onKeyDown={sortable && field && onSort ? (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onSort(field);
+        }
+      } : undefined}
+      role={sortable ? 'button' : undefined}
+      tabIndex={sortable ? 0 : undefined}
+      aria-label={sortable ? `Sort by ${title}` : undefined}
     >
       <div className="flex items-center">
         <span className="font-bold text-xs uppercase tracking-wider text-gray-700 group-hover:text-blue-700">{title}</span>

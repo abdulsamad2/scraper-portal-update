@@ -24,22 +24,22 @@ function ClientTime() {
   const [time, setTime] = useState(() => {
     // Lazy initialization to avoid computation on every render (rerender-lazy-state-init)
     if (typeof window === 'undefined') return '--:--:--';
-    return new Date().toLocaleTimeString('en-US', {
+    return new Intl.DateTimeFormat('en-US', {
       hour: '2-digit',
       minute: '2-digit', 
       second: '2-digit',
       hour12: false
-    });
+    }).format(new Date());
   });
 
   useEffect(() => {
     const updateTime = () => {
-      setTime(new Date().toLocaleTimeString('en-US', {
+      setTime(new Intl.DateTimeFormat('en-US', {
         hour: '2-digit',
         minute: '2-digit',
         second: '2-digit',
         hour12: false
-      }));
+      }).format(new Date()));
     };
     
     const interval = setInterval(updateTime, 1000);

@@ -161,6 +161,7 @@ const InventoryTable: React.FC<InventoryTableProps> = ({ data }) => {
     setStartX(e.pageX - tableRef.current.offsetLeft);
     setScrollLeft(tableRef.current.scrollLeft);
     tableRef.current.style.cursor = 'grabbing';
+    tableRef.current.style.touchAction = 'manipulation';
   };
 
   const handleMouseLeave = () => {

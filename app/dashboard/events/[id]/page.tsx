@@ -70,19 +70,19 @@ export default async function EventDetailsPage({ params }: EventDetailsProps) {
   }
 
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
+    return new Intl.DateTimeFormat('en-US', {
       weekday: 'long',
       year: 'numeric',
       month: 'long',
       day: 'numeric'
-    });
+    }).format(new Date(dateString));
   };
 
   const formatTime = (dateString: string) => {
-    return new Date(dateString).toLocaleTimeString('en-US', {
+    return new Intl.DateTimeFormat('en-US', {
       hour: '2-digit',
       minute: '2-digit'
-    });
+    }).format(new Date(dateString));
   };
 
   const isStale = event.Last_Updated 

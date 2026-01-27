@@ -14,6 +14,8 @@ const showMessage = (text: string, type: 'success' | 'error' | 'info' = 'info') 
     type === 'success' ? 'bg-green-500' : 
     type === 'error' ? 'bg-red-500' : 'bg-blue-500'
   }`;
+  toast.setAttribute('aria-live', 'polite');
+  toast.setAttribute('role', 'status');
   toast.textContent = text;
   document.body.appendChild(toast);
   setTimeout(() => {

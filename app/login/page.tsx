@@ -36,9 +36,10 @@ export default function LoginPage() {
             <input
               type="text"
               id="username"
-              className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
+              className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline focus-visible:ring-2 focus-visible:ring-blue-500"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
+              autoComplete="username"
               required
             />
           </div>
@@ -49,9 +50,10 @@ export default function LoginPage() {
             <input
               type="password"
               id="password"
-              className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 mb-3 leading-tight focus:outline-none focus:shadow-outline"
+              className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 mb-3 leading-tight focus:outline-none focus:shadow-outline focus-visible:ring-2 focus-visible:ring-blue-500"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              autoComplete="current-password"
               required
             />
           </div>
@@ -59,7 +61,7 @@ export default function LoginPage() {
           <div className="flex items-center justify-between">
             <button
               type="submit"
-              className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline"
+              className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
             >
               Sign In
             </button>

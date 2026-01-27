@@ -244,43 +244,66 @@ export default function InventoryPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold flex items-center gap-2">
-        <Package className="w-6 h-6" /> Inventory
-      </h1>
+      <header>
+        <h1 className="text-2xl font-bold flex items-center gap-2 text-wrap: balance">
+          <Package className="w-6 h-6" aria-hidden="true" /> 
+          Inventory Management
+        </h1>
+        <p className="text-slate-600 mt-2">Track and manage ticket inventory across all events</p>
+      </header>
       {/* Summary cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="bg-white shadow-sm rounded-lg p-4 flex flex-col items-center">
-          <span className="text-xs text-gray-500">Total Rows</span>
-          <span className="text-2xl font-bold text-blue-600">
-            {totalGroups.toLocaleString()}
-          </span>
+      <section aria-labelledby="inventory-summary">
+        <h2 id="inventory-summary" className="sr-only">Inventory Summary</h2>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="bg-white shadow-sm rounded-lg p-4 flex flex-col items-center hover:shadow-md transition-shadow">
+            <span className="text-xs text-gray-500 font-medium">Total Rows</span>
+            <span className="text-2xl font-bold text-blue-600 font-variant-numeric: tabular-nums" aria-label={`${totalGroups.toLocaleString()} total rows`}>
+              {new Intl.NumberFormat('en-US').format(totalGroups)}
+            </span>
+          </div>
+          <div className="bg-white shadow-sm rounded-lg p-4 flex flex-col items-center hover:shadow-md transition-shadow">
+            <span className="text-xs text-gray-500 font-medium">Total Seats</span>
+            <span className="text-2xl font-bold text-green-600 font-variant-numeric: tabular-nums" aria-label={`${totalQty.toLocaleString()} total seats`}>
+              {new Intl.NumberFormat('en-US').format(totalQty)}
+            </span>
+          </div>
         </div>
-        <div className="bg-white shadow-sm rounded-lg p-4 flex flex-col items-center">
-          <span className="text-xs text-gray-500">Total Seats</span>
-          <span className="text-2xl font-bold text-green-600">
-            {totalQty.toLocaleString()}
-          </span>
-        </div>
-      </div>
+      </section>
 
-      <div className="flex flex-col md:flex-row md:justify-between items-start md:items-center gap-3">
+      <section className="flex flex-col md:flex-row md:justify-between items-start md:items-center gap-3">
         <div className="relative flex gap-2 items-center">
-          <input
-            type="text"
-            placeholder="Quick search... (Press Enter to search)"
-            value={pendingSearch}
-            onChange={(e) => setPendingSearch(e.target.value)}
-            onKeyPress={handleSearchKeyPress}
-            className="border rounded-md px-3 py-2 w-64"
-          />
+          <div className="relative">
+            <label htmlFor="inventory-search" className="sr-only">Search inventory</label>
+            <input
+              id="inventory-search"
+              type="search"
+              placeholder="Quick search… (Press Enter to search)"
+              value={pendingSearch}
+              onChange={(e) => setPendingSearch(e.target.value)}
+              onKeyPress={handleSearchKeyPress}
+              autoComplete="off"
+              className="border rounded-md px-3 py-2 w-64 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:border-blue-500"
+              aria-describedby="search-help"
+            />
+            <div id="search-help" className="sr-only">Press Enter to search or use filters for advanced search</div>
+          </div>
           <button
             onClick={() => setShowFilters((f) => !f)}
-            className="border px-3 py-2 rounded-md text-sm"
+            className="border px-3 py-2 rounded-md text-sm hover:bg-gray-50 focus-visible:ring-2 focus-visible:ring-blue-500"
+            aria-expanded={showFilters}
+            aria-controls="filter-panel"
+            aria-label={showFilters ? "Hide filters" : "Show filters"}
           >
             {showFilters ? "Hide Filters" : "Filters"}
           </button>
           {showFilters && (
-            <div className="absolute right-0 top-full mt-2 w-80 bg-white shadow-lg rounded-lg border p-4 text-sm z-10">
+            <div 
+              id="filter-panel"
+              className="absolute right-0 top-full mt-2 w-80 bg-white shadow-lg rounded-lg border p-4 text-sm z-10"
+              role="region"
+              aria-labelledby="filter-panel-title"
+            >
+              <h3 id="filter-panel-title" className="font-semibold mb-3">Filter Options</h3>
               {([
                 { label: "Event Name", key: "event" },
                 { label: "Mapping ID", key: "mapping" },
@@ -288,39 +311,59 @@ export default function InventoryPage() {
                 { label: "Row", key: "row" },
               ] as FilterField[]).map((f) => (
                 <div key={f.key} className="mb-3">
-                  <label className="block text-gray-500 mb-1">{f.label}</label>
+                  <label htmlFor={`filter-${f.key}`} className="block text-gray-700 mb-1 font-medium">{f.label}</label>
                   <input
+                    id={`filter-${f.key}`}
                     type="text"
                     value={pendingFilters[f.key]}
                     onChange={(e) =>
                       setPendingFilters({ ...pendingFilters, [f.key]: e.target.value })
                     }
-                    className="border rounded-md px-2 py-1 w-full"
+                    autoComplete="off"
+                    className="border rounded-md px-2 py-1 w-full focus-visible:ring-2 focus-visible:ring-blue-500"
                   />
                 </div>
               ))}
-              <div className="flex gap-2 justify-end">
+              <div className="flex gap-2 justify-end pt-2 border-t">
                 <button
                   onClick={applyFilters}
-                  className="bg-blue-600 text-white px-4 py-2 rounded-md text-sm"
+                  className="bg-blue-600 text-white px-4 py-2 rounded-md text-sm hover:bg-blue-700 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
                 >
-                  Apply
+                  Apply Filters
                 </button>
                 <button
                   onClick={clearFilters}
-                  className="border px-4 py-2 rounded-md text-sm"
+                  className="border px-4 py-2 rounded-md text-sm hover:bg-gray-50 focus-visible:ring-2 focus-visible:ring-blue-500"
                 >
-                  Clear
+                  Clear All
                 </button>
               </div>
             </div>
           )}
         </div>
-      </div>
+      </section>
 
       <div className="bg-white shadow-md rounded-lg overflow-hidden">
         {totalGroups === 0 ? (
-          <div className="p-8 text-center text-gray-500">No records found.</div>
+          <div className="p-12 text-center">
+            <div className="w-16 h-16 mx-auto mb-4 bg-gray-100 rounded-full flex items-center justify-center">
+              <Package className="w-8 h-8 text-gray-400" aria-hidden="true" />
+            </div>
+            <h3 className="text-lg font-semibold text-gray-700 mb-2">No Inventory Found</h3>
+            <p className="text-gray-500 max-w-md mx-auto">
+              {search || Object.values(filters).some(f => f) 
+                ? "No inventory matches your current search criteria. Try adjusting your filters or search terms." 
+                : "No inventory data available. Check back once events are scraped and inventory is populated."}
+            </p>
+            {(search || Object.values(filters).some(f => f)) && (
+              <button 
+                onClick={clearFilters}
+                className="mt-4 text-blue-600 hover:text-blue-700 text-sm font-medium"
+              >
+                Clear all filters
+              </button>
+            )}
+          </div>
         ) : (
           <>
             <OptimizedInventoryTable 
@@ -331,18 +374,20 @@ export default function InventoryPage() {
             />
             
             {/* Pagination Controls */}
-            <div className="px-6 py-4 border-t border-gray-200 bg-gray-50">
+            <nav aria-label="Inventory pagination" className="px-6 py-4 border-t border-gray-200 bg-gray-50">
               <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
                 <div className="flex items-center gap-4">
                   <span className="text-sm text-gray-700">
-                    Showing {((currentPage - 1) * itemsPerPage) + 1} to {Math.min(currentPage * itemsPerPage, totalGroups)} of {totalGroups} entries
+                    Showing {new Intl.NumberFormat('en-US').format(((currentPage - 1) * itemsPerPage) + 1)} to {new Intl.NumberFormat('en-US').format(Math.min(currentPage * itemsPerPage, totalGroups))} of {new Intl.NumberFormat('en-US').format(totalGroups)} entries
                   </span>
                   <div className="flex items-center gap-2">
-                    <label className="text-sm text-gray-700">Show:</label>
+                    <label htmlFor="items-per-page" className="text-sm text-gray-700">Show:</label>
                     <select 
+                      id="items-per-page"
                       value={itemsPerPage} 
                       onChange={(e) => handleItemsPerPageChange(Number(e.target.value))}
-                      className="border rounded px-2 py-1 text-sm"
+                      className="border rounded px-2 py-1 text-sm focus-visible:ring-2 focus-visible:ring-blue-500"
+                      aria-label="Items per page"
                     >
                       <option value={25}>25</option>
                       <option value={50}>50</option>
@@ -354,18 +399,20 @@ export default function InventoryPage() {
                   </div>
                 </div>
                 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2" role="group" aria-label="Pagination controls">
                   <button
                     onClick={() => handlePageChange(1)}
                     disabled={currentPage === 1}
-                    className="px-3 py-1 text-sm border rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100"
+                    className="px-3 py-2 text-sm border rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100 focus-visible:ring-2 focus-visible:ring-blue-500 touch-action: manipulation"
+                    aria-label="Go to first page"
                   >
                     First
                   </button>
                   <button
                     onClick={() => handlePageChange(currentPage - 1)}
                     disabled={currentPage === 1}
-                    className="px-3 py-1 text-sm border rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100"
+                    className="px-3 py-2 text-sm border rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100 focus-visible:ring-2 focus-visible:ring-blue-500 touch-action: manipulation"
+                    aria-label="Go to previous page"
                   >
                     Previous
                   </button>
@@ -388,11 +435,13 @@ export default function InventoryPage() {
                         <button
                           key={pageNum}
                           onClick={() => handlePageChange(pageNum)}
-                          className={`px-3 py-1 text-sm border rounded ${
+                          className={`px-3 py-2 text-sm border rounded touch-action: manipulation focus-visible:ring-2 focus-visible:ring-blue-500 ${
                             currentPage === pageNum
                               ? 'bg-blue-600 text-white border-blue-600'
                               : 'hover:bg-gray-100'
                           }`}
+                          aria-label={`Go to page ${pageNum}`}
+                          aria-current={currentPage === pageNum ? 'page' : undefined}
                         >
                           {pageNum}
                         </button>
@@ -403,20 +452,22 @@ export default function InventoryPage() {
                   <button
                     onClick={() => handlePageChange(currentPage + 1)}
                     disabled={currentPage === totalPages}
-                    className="px-3 py-1 text-sm border rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100"
+                    className="px-3 py-2 text-sm border rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100 focus-visible:ring-2 focus-visible:ring-blue-500 touch-action: manipulation"
+                    aria-label="Go to next page"
                   >
                     Next
                   </button>
                   <button
                     onClick={() => handlePageChange(totalPages)}
                     disabled={currentPage === totalPages}
-                    className="px-3 py-1 text-sm border rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100"
+                    className="px-3 py-2 text-sm border rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100 focus-visible:ring-2 focus-visible:ring-blue-500 touch-action: manipulation"
+                    aria-label="Go to last page"
                   >
                     Last
                   </button>
                 </div>
               </div>
-            </div>
+            </nav>
           </>
         )}
       </div>

@@ -8,6 +8,7 @@ import {
   bulkDeleteProxies,
   bulkImportProxies,
   testProxy,
+  deleteAllProxies,
   type ProxyData,
   type BulkImportResult
 } from '@/actions/proxyActions';
@@ -70,8 +71,9 @@ export function BulkActions({ onRefresh }: { onRefresh: () => void }) {
   const [bulkImportLoading, setBulkImportLoading] = useState(false);
   const [bulkValidationErrors, setBulkValidationErrors] = useState<string[]>([]);
   const [validProxies, setValidProxies] = useState<string[]>([]);
-  const [bulkImportStep, setBulkImportStep] = useState<'input' | 'preview' | 'results'>('input');
+  const [bulkImportStep, setBulkImportStep] = useState<'input' | 'preview' | 'progress' | 'results'>('input');
   const [replaceExisting, setReplaceExisting] = useState(false);
+  const [importProgress, setImportProgress] = useState({ processed: 0, total: 0, startTime: 0 });
 
   const validateBulkProxies = (text: string) => {
     const lines = text.split('\n').map(line => line.trim()).filter(line => line.length > 0);
@@ -108,43 +110,74 @@ export function BulkActions({ onRefresh }: { onRefresh: () => void }) {
     return { errors, valid };
   };
 
+  // Remove client-side validation - let server handle formatting and validation
   const handleBulkImportTextChange = (text: string) => {
     setBulkProxiesText(text);
-    if (text.trim()) {
-      validateBulkProxies(text);
-    } else {
-      setBulkValidationErrors([]);
-      setValidProxies([]);
-    }
+    // Clear previous validation state
+    setBulkValidationErrors([]);
+    setValidProxies([]);
   };
 
   const handleBulkImportPreview = () => {
-    const { errors, valid } = validateBulkProxies(bulkProxiesText);
-
-    if (errors.length === 0 && valid.length > 0) {
+    const lines = bulkProxiesText.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+    
+    if (lines.length > 0) {
       setBulkImportStep('preview');
-    } else if (valid.length === 0) {
-      setMessage({ type: 'error', text: 'No valid proxies found. Please check your input format.' });
+    } else {
+      setMessage({ type: 'error', text: 'Please enter some proxies to import.' });
     }
   };
 
   const handleBulkImport = async () => {
     try {
       setBulkImportLoading(true);
+      setBulkImportStep('progress');
+      const startTime = Date.now();
+      
+      // Split raw text into lines
+      const lines = bulkProxiesText.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+      setImportProgress({ processed: 0, total: lines.length, startTime });
+
+      // Process in chunks of 100 for better progress tracking
+      const chunkSize = 100;
+      const chunks = [];
+      for (let i = 0; i < lines.length; i += chunkSize) {
+        chunks.push(lines.slice(i, i + chunkSize));
+      }
+
+      let totalSuccess = 0;
+      let totalFailed = 0;
+      let processed = 0;
+
+      // Replace all existing first if needed
+      if (replaceExisting && chunks.length > 0) {
+        await bulkImportProxies('', {}, true); // Clear existing proxies
+      }
+
+      // Process chunks sequentially for reliable progress tracking
+      for (const chunk of chunks) {
+        const chunkText = chunk.join('\n');
+        const result = await bulkImportProxies(chunkText, {
+          provider: newProxyData.provider,
+          region: newProxyData.region,
+          status: 'active'
+        }, false);
+
+        totalSuccess += result.success;
+        totalFailed += result.failed;
+        processed += chunk.length;
+
+        // Update progress after each chunk
+        setImportProgress({ processed, total: lines.length, startTime });
+      }
+
+      setBulkImportResult({ success: totalSuccess, failed: totalFailed, errors: [], imported: [] });
       setBulkImportStep('results');
 
-      const result = await bulkImportProxies(bulkProxiesText, {
-        provider: newProxyData.provider,
-        region: newProxyData.region,
-        status: 'active'
-      }, replaceExisting);
-
-      setBulkImportResult(result);
-
-      if (result.success > 0) {
+      if (totalSuccess > 0) {
         setMessage({
           type: 'success',
-          text: `Successfully imported ${result.success} proxies${result.failed > 0 ? `, ${result.failed} failed` : ''}`
+          text: `Successfully imported ${totalSuccess} proxies${totalFailed > 0 ? `, ${totalFailed} failed` : ''}`
         });
         startTransition(() => {
           onRefresh();
@@ -209,6 +242,36 @@ export function BulkActions({ onRefresh }: { onRefresh: () => void }) {
     }
   };
 
+  const handleDeleteAll = async () => {
+    const confirmMessage = 'Are you sure you want to DELETE ALL PROXIES? This action cannot be undone!';
+    
+    if (!confirm(confirmMessage)) return;
+
+    // Double confirmation for safety
+    const doubleConfirm = prompt('Type "DELETE ALL" to confirm you want to delete all proxies:');
+    if (doubleConfirm !== 'DELETE ALL') {
+      setMessage({ type: 'error', text: 'Deletion cancelled - confirmation text did not match' });
+      return;
+    }
+
+    try {
+      const result = await deleteAllProxies();
+
+      if ('error' in result) {
+        setMessage({ type: 'error', text: result.error || 'Failed to delete all proxies' });
+      } else {
+        setMessage({ type: 'success', text: `Successfully deleted all proxies (${result.deletedCount} removed)` });
+        setSelectedProxies([]);
+        startTransition(() => {
+          onRefresh();
+        });
+      }
+    } catch (err) {
+      setMessage({ type: 'error', text: 'Failed to delete all proxies' });
+      console.error(err);
+    }
+  };
+
   const resetBulkImport = () => {
     setBulkProxiesText('');
     setBulkImportResult(null);
@@ -217,6 +280,7 @@ export function BulkActions({ onRefresh }: { onRefresh: () => void }) {
     setBulkImportStep('input');
     setBulkImportLoading(false);
     setReplaceExisting(false);
+    setImportProgress({ processed: 0, total: 0, startTime: 0 });
   };
 
   const closeBulkModal = () => {
@@ -256,6 +320,15 @@ export function BulkActions({ onRefresh }: { onRefresh: () => void }) {
             Delete Selected ({selectedProxies.length})
           </button>
         )}
+
+        <button
+          onClick={handleDeleteAll}
+          className="inline-flex items-center gap-2 bg-red-800 hover:bg-red-900 text-white px-4 py-2.5 rounded-lg font-medium transition-colors border-2 border-red-600"
+          disabled={isPending}
+        >
+          <Trash2 className="w-4 h-4" />
+          Delete All Proxies
+        </button>
 
         <button
           onClick={onRefresh}
@@ -355,249 +428,212 @@ export function BulkActions({ onRefresh }: { onRefresh: () => void }) {
           role="dialog"
           aria-modal="true"
         >
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden">
-            <div className="flex items-center justify-between p-6 border-b border-slate-200">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[85vh] overflow-hidden">
+            <div className="flex items-center justify-between p-4 border-b border-slate-200">
               <div>
-                <h2 className="text-2xl font-bold text-slate-900">Bulk Import Proxies</h2>
-                <p className="text-slate-600 text-sm mt-1">
-                  Import multiple proxies in format: ip:port:username:password (one per line)
-                </p>
+                <h2 className="text-xl font-bold text-slate-900">Bulk Import Proxies</h2>
+                <p className="text-slate-600 text-xs">Format: ip:port:username:password</p>
               </div>
               <button
                 onClick={closeBulkModal}
                 className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
                 disabled={bulkImportLoading}
               >
-                <XCircle className="w-6 h-6 text-slate-400" />
+                <XCircle className="w-5 h-5 text-slate-400" />
               </button>
             </div>
 
-            <div className="p-6 overflow-y-auto max-h-[calc(90vh-140px)]">
+            <div className="p-4 overflow-y-auto max-h-[calc(85vh-120px)]">
               {/* Step 1: Input */}
               {bulkImportStep === 'input' && (
-                <div className="space-y-6">
-                  {/* Replace Existing Option */}
-                  <div className="bg-orange-50 border border-orange-200 rounded-lg p-4">
-                    <div className="flex items-center gap-3 mb-3">
+                <div className="space-y-4">
+                  {/* Replace Option */}
+                  <div className="bg-orange-50 border border-orange-200 rounded-lg p-3">
+                    <label className="flex items-center gap-2 cursor-pointer">
                       <input
                         type="checkbox"
-                        id="replace-existing"
                         checked={replaceExisting}
                         onChange={(e) => setReplaceExisting(e.target.checked)}
-                        className="w-4 h-4 text-orange-600 border-gray-300 rounded focus:ring-orange-500"
+                        className="w-4 h-4 text-orange-600"
                       />
-                      <label htmlFor="replace-existing" className="font-semibold text-orange-900">
-                        Replace All Existing Proxies
-                      </label>
-                    </div>
-                    <p className="text-orange-800 text-sm">
-                      {replaceExisting
-                        ? "⚠️ This will delete all current proxies and replace them with the imported ones."
-                        : "New proxies will be added alongside existing ones. Duplicates will be skipped."
-                      }
+                      <span className="font-medium text-orange-900 text-sm">Replace all existing proxies</span>
+                    </label>
+                    <p className="text-orange-700 text-xs mt-1">
+                      {replaceExisting ? "⚠️ Will delete all current proxies" : "Will add alongside existing"}
                     </p>
                   </div>
 
-                  {/* Instructions */}
-                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                    <h3 className="font-semibold text-blue-900 mb-2">Import Instructions</h3>
-                    <ul className="text-blue-800 text-sm space-y-1">
-                      <li>• One proxy per line</li>
-                      <li>• Format: ip:port:username:password</li>
-                      <li>• Example: 139.171.128.91:5091:V6t6WYtx0m:pDdstBA9NM</li>
-                      <li>• Duplicate proxies will be skipped</li>
-                    </ul>
-                  </div>
-
-                  {/* Input Area */}
+                  {/* Input */}
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-2">
-                      Proxy List
-                    </label>
                     <textarea
                       value={bulkProxiesText}
                       onChange={(e) => handleBulkImportTextChange(e.target.value)}
-                      placeholder="139.171.128.91:5091:V6t6WYtx0m:pDdstBA9NM&#10;192.168.1.1:8080:user:pass&#10;203.0.113.1:3128:admin:secret"
-                      className="w-full h-64 border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none"
-                      style={{ lineHeight: '1.5' }}
+                      placeholder="139.171.128.91:5091:username:password&#10;192.168.1.1:8080:user:pass"
+                      className="w-full h-48 border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none"
                       autoFocus
                     />
-                    <div className="flex justify-between items-center mt-2 text-sm text-slate-600">
-                      <span>
-                        {bulkProxiesText.split('\n').filter(line => line.trim()).length} lines entered
-                      </span>
-                      <span>
-                        {validProxies.length} valid proxies detected
-                      </span>
+                    <div className="flex justify-between text-xs text-slate-600 mt-1">
+                      <span>{bulkProxiesText.split('\n').filter(line => line.trim()).length} lines</span>
+                      <span className="text-blue-600">Ready for server validation</span>
                     </div>
                   </div>
 
-                  {/* Default Values */}
-                  <div className="bg-slate-50 rounded-lg p-4">
-                    <h4 className="text-sm font-medium text-slate-900 mb-3">Default Values (Optional)</h4>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-1">Provider</label>
-                        <input
-                          type="text"
-                          placeholder="e.g., ProxyProvider"
-                          value={newProxyData.provider || ''}
-                          onChange={(e) => setNewProxyData(prev => ({ ...prev, provider: e.target.value }))}
-                          className="block w-full border border-slate-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                          disabled={bulkImportLoading}
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-1">Region</label>
-                        <input
-                          type="text"
-                          placeholder="e.g., US-East"
-                          value={newProxyData.region || ''}
-                          onChange={(e) => setNewProxyData(prev => ({ ...prev, region: e.target.value }))}
-                          className="block w-full border border-slate-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                          disabled={bulkImportLoading}
-                        />
-                      </div>
-                    </div>
+                  {/* Optional Fields */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <input
+                      type="text"
+                      placeholder="Provider (optional)"
+                      value={newProxyData.provider || ''}
+                      onChange={(e) => setNewProxyData(prev => ({ ...prev, provider: e.target.value }))}
+                      className="border border-slate-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Region (optional)"
+                      value={newProxyData.region || ''}
+                      onChange={(e) => setNewProxyData(prev => ({ ...prev, region: e.target.value }))}
+                      className="border border-slate-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
+                    />
                   </div>
 
-                  {/* Validation Results */}
+                  {/* Ready indicator */}
                   {bulkProxiesText.trim() && (
-                    <div className="space-y-3">
-                      {validProxies.length > 0 && (
-                        <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4">
-                          <div className="flex items-center gap-2 mb-2">
-                            <CheckCircle2 className="w-5 h-5 text-emerald-600" />
-                            <span className="font-semibold text-emerald-900">
-                              {validProxies.length} Valid Proxies
-                            </span>
-                          </div>
-                          <div className="max-h-32 overflow-y-auto">
-                            <div className="grid gap-1 text-sm text-emerald-800 font-mono">
-                              {validProxies.slice(0, 5).map((proxy, index) => (
-                                <div key={index} className="truncate">
-                                  {proxy}
-                                </div>
-                              ))}
-                              {validProxies.length > 5 && (
-                                <div className="text-emerald-600 font-normal">
-                                  ... and {validProxies.length - 5} more
-                                </div>
-                              )}
-                            </div>
-                          </div>
+                    <div className="space-y-2">
+                      <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                        <div className="flex items-center gap-2 text-blue-800">
+                          <CheckCircle2 className="w-4 h-4" />
+                          <span className="text-sm font-medium">{bulkProxiesText.split('\n').filter(line => line.trim()).length} lines ready for import</span>
                         </div>
-                      )}
-
-                      {bulkValidationErrors.length > 0 && (
-                        <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-                          <div className="flex items-center gap-2 mb-2">
-                            <AlertTriangle className="w-5 h-5 text-red-600" />
-                            <span className="font-semibold text-red-900">
-                              {bulkValidationErrors.length} Validation Errors
-                            </span>
-                          </div>
-                          <div className="max-h-32 overflow-y-auto">
-                            <div className="space-y-1 text-sm text-red-800">
-                              {bulkValidationErrors.slice(0, 5).map((error, index) => (
-                                <div key={index}>{error}</div>
-                              ))}
-                              {bulkValidationErrors.length > 5 && (
-                                <div className="text-red-600 font-medium">
-                                  ... and {bulkValidationErrors.length - 5} more errors
-                                </div>
-                              )}
-                            </div>
-                          </div>
+                        <div className="text-xs text-blue-700 mt-1">
+                          Server will validate and format proxies during import
                         </div>
-                      )}
+                      </div>
                     </div>
                   )}
                 </div>
               )}
 
-              {/* Other steps remain the same as original implementation */}
+              {/* Step 2: Preview */}
               {bulkImportStep === 'preview' && (
-                <div className="space-y-6">
-                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                    <h3 className="font-semibold text-blue-900 mb-2">Import Preview</h3>
-                    <p className="text-blue-800 text-sm">
-                      Ready to import {validProxies.length} proxies.
-                      {replaceExisting && <span className="text-orange-800 font-medium"> This will replace ALL existing proxies.</span>}
-                    </p>
+                <div className="space-y-4">
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                    <h3 className="font-medium text-blue-900 text-sm">Ready to import {bulkProxiesText.split('\n').filter(line => line.trim()).length} lines</h3>
+                    {replaceExisting && <p className="text-orange-700 text-xs mt-1">⚠️ Will replace all existing proxies</p>}
+                    <p className="text-blue-700 text-xs mt-1">Server will validate and format during import</p>
                   </div>
 
-                  <div className="bg-white border border-slate-200 rounded-lg">
-                    <div className="px-4 py-3 border-b border-slate-200 bg-slate-50">
-                      <h4 className="font-semibold text-slate-900">
-                        Proxies to Import ({validProxies.length})
-                      </h4>
+                  <div className="border border-slate-200 rounded-lg max-h-60 overflow-y-auto">
+                    <div className="bg-slate-50 px-3 py-2 border-b border-slate-200">
+                      <h4 className="font-medium text-slate-900 text-sm">Raw Proxy Lines ({bulkProxiesText.split('\n').filter(line => line.trim()).length})</h4>
                     </div>
-                    <div className="max-h-96 overflow-y-auto">
-                      <div className="p-4 space-y-2">
-                        {validProxies.map((proxy, index) => (
-                          <div
-                            key={index}
-                            className="flex items-center gap-3 p-3 bg-slate-50 rounded-lg text-sm font-mono"
-                          >
-                            <div className="w-6 h-6 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center text-xs font-semibold">
-                              {index + 1}
-                            </div>
-                            <span className="flex-1">{proxy}</span>
-                            <CheckCircle2 className="w-4 h-4 text-emerald-500" />
-                          </div>
-                        ))}
-                      </div>
+                    <div className="p-3 space-y-2">
+                      {bulkProxiesText.split('\n').filter(line => line.trim()).map((line, i) => (
+                        <div key={i} className="flex items-center gap-2 p-2 bg-slate-50 rounded text-xs font-mono">
+                          <span className="w-5 h-5 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center text-xs font-bold">
+                            {i + 1}
+                          </span>
+                          <span className="flex-1 truncate">{line}</span>
+                          <CheckCircle2 className="w-3 h-3 text-blue-500" />
+                        </div>
+                      )).slice(0, 50)}
+                      {bulkProxiesText.split('\n').filter(line => line.trim()).length > 50 && (
+                        <div className="text-xs text-slate-500 text-center py-2">
+                          ... and {bulkProxiesText.split('\n').filter(line => line.trim()).length - 50} more lines
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
               )}
 
-              {/* Results step similar to original */}
+              {/* Step 3: Progress */}
+              {bulkImportStep === 'progress' && (
+                <div className="space-y-4">
+                  <div className="text-center py-4">
+                    <h3 className="font-semibold text-slate-900 text-lg mb-2">
+                      {replaceExisting ? 'Replacing Proxies' : 'Importing Proxies'}
+                    </h3>
+                    <p className="text-slate-600 text-sm mb-6">
+                      Processing {importProgress.processed} of {importProgress.total} proxies...
+                    </p>
+                    
+                    {/* Progress Bar */}
+                    <div className="w-full bg-gray-200 rounded-full h-3 mb-4">
+                      <div 
+                        className="bg-blue-500 h-3 rounded-full transition-all duration-300 ease-out"
+                        style={{ width: `${(importProgress.processed / importProgress.total) * 100}%` }}
+                      ></div>
+                    </div>
+                    
+                    <div className="flex justify-between text-sm text-slate-600">
+                      <span>{Math.round((importProgress.processed / importProgress.total) * 100)}% complete</span>
+                      <span>
+                        {importProgress.processed > 0 && (() => {
+                          const elapsed = Date.now() - importProgress.startTime;
+                          const rate = importProgress.processed / elapsed * 1000; // per second
+                          const remaining = importProgress.total - importProgress.processed;
+                          const estimatedSeconds = Math.ceil(remaining / rate);
+                          return `~${estimatedSeconds}s remaining`;
+                        })()}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Real-time stats */}
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-center">
+                      <p className="text-blue-600 text-sm font-medium">Processing</p>
+                      <p className="text-blue-900 text-lg font-bold">{importProgress.processed}</p>
+                    </div>
+                    <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-center">
+                      <p className="text-gray-600 text-sm font-medium">Remaining</p>
+                      <p className="text-gray-900 text-lg font-bold">{importProgress.total - importProgress.processed}</p>
+                    </div>
+                    <div className="bg-green-50 border border-green-200 rounded-lg p-3 text-center">
+                      <p className="text-green-600 text-sm font-medium">Rate</p>
+                      <p className="text-green-900 text-lg font-bold">
+                        {importProgress.processed > 0 ? 
+                          Math.round(importProgress.processed / ((Date.now() - importProgress.startTime) / 1000)) : 0}/s
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Step 4: Results */}
               {bulkImportStep === 'results' && (
-                <div className="space-y-6">
+                <div className="space-y-4">
                   {bulkImportLoading ? (
-                    <div className="text-center py-12">
-                      <div className="relative">
-                        <div className="animate-spin h-16 w-16 border-4 border-blue-500 border-t-transparent rounded-full mx-auto"></div>
-                        <div className="absolute inset-0 flex items-center justify-center">
-                          <Upload className="w-6 h-6 text-blue-600" />
-                        </div>
+                    <div className="text-center py-8">
+                      <div className="relative mx-auto w-12 h-12 mb-4">
+                        <div className="animate-spin h-12 w-12 border-3 border-blue-500 border-t-transparent rounded-full"></div>
+                        <Upload className="absolute inset-0 w-5 h-5 m-auto text-blue-600" />
                       </div>
-                      <h3 className="text-lg font-semibold text-slate-900 mt-4">
-                        {replaceExisting ? 'Replacing All Proxies' : 'Importing Proxies'}
-                      </h3>
-                      <p className="text-slate-600">Please wait while we process your proxies...</p>
+                      <h3 className="font-semibold text-slate-900">{replaceExisting ? 'Replacing' : 'Importing'} Proxies</h3>
+                      <p className="text-slate-600 text-sm">Please wait...</p>
                     </div>
                   ) : bulkImportResult && (
-                    <div className="space-y-4">
-                      {/* Summary Cards */}
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4">
-                          <div className="flex items-center gap-3">
-                            <div className="w-12 h-12 bg-emerald-100 rounded-lg flex items-center justify-center">
-                              <CheckCircle2 className="w-6 h-6 text-emerald-600" />
-                            </div>
-                            <div>
-                              <h3 className="text-2xl font-bold text-emerald-900">
-                                {bulkImportResult.success}
-                              </h3>
-                              <p className="text-emerald-700 font-medium">Successfully Imported</p>
-                            </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 bg-emerald-100 rounded-lg flex items-center justify-center">
+                            <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                          </div>
+                          <div>
+                            <h3 className="text-xl font-bold text-emerald-900">{bulkImportResult.success}</h3>
+                            <p className="text-emerald-700 text-xs font-medium">Imported</p>
                           </div>
                         </div>
+                      </div>
 
-                        <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-                          <div className="flex items-center gap-3">
-                            <div className="w-12 h-12 bg-red-100 rounded-lg flex items-center justify-center">
-                              <XCircle className="w-6 h-6 text-red-600" />
-                            </div>
-                            <div>
-                              <h3 className="text-2xl font-bold text-red-900">
-                                {bulkImportResult.failed}
-                              </h3>
-                              <p className="text-red-700 font-medium">Failed to Import</p>
-                            </div>
+                      <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 bg-red-100 rounded-lg flex items-center justify-center">
+                            <XCircle className="w-5 h-5 text-red-600" />
+                          </div>
+                          <div>
+                            <h3 className="text-xl font-bold text-red-900">{bulkImportResult.failed}</h3>
+                            <p className="text-red-700 text-xs font-medium">Failed</p>
                           </div>
                         </div>
                       </div>
@@ -607,45 +643,47 @@ export function BulkActions({ onRefresh }: { onRefresh: () => void }) {
               )}
             </div>
 
-            {/* Modal Footer */}
-            <div className="border-t border-slate-200 px-6 py-4 bg-slate-50">
+            {/* Footer */}
+            <div className="border-t border-slate-200 px-4 py-3 bg-slate-50">
               <div className="flex items-center justify-between">
-                {/* Step Indicator */}
-                <div className="flex items-center gap-2">
-                  <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold ${bulkImportStep === 'input' ? 'bg-blue-600 text-white' :
-                    bulkImportStep === 'preview' || bulkImportStep === 'results' ? 'bg-emerald-600 text-white' : 'bg-slate-300 text-slate-600'
-                    }`}>
-                    1
-                  </div>
-                  <div className={`w-6 h-0.5 ${bulkImportStep === 'preview' || bulkImportStep === 'results' ? 'bg-emerald-600' : 'bg-slate-300'}`} />
-                  <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold ${bulkImportStep === 'preview' ? 'bg-blue-600 text-white' :
-                    bulkImportStep === 'results' ? 'bg-emerald-600 text-white' : 'bg-slate-300 text-slate-600'
-                    }`}>
-                    2
-                  </div>
-                  <div className={`w-6 h-0.5 ${bulkImportStep === 'results' ? 'bg-emerald-600' : 'bg-slate-300'}`} />
-                  <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold ${bulkImportStep === 'results' ? 'bg-blue-600 text-white' : 'bg-slate-300 text-slate-600'
-                    }`}>
-                    3
-                  </div>
+                {/* Progress */}
+                <div className="flex items-center gap-1">
+                  {[1, 2, 3, 4].map((step) => (
+                    <div key={step} className="flex items-center">
+                      <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
+                        (step === 1 && bulkImportStep === 'input') || 
+                        (step === 2 && bulkImportStep === 'preview') || 
+                        (step === 3 && bulkImportStep === 'progress') ||
+                        (step === 4 && bulkImportStep === 'results')
+                          ? 'bg-blue-600 text-white' 
+                          : step < (['input', 'preview', 'progress', 'results'].indexOf(bulkImportStep) + 1)
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-slate-300 text-slate-600'
+                      }`}>
+                        {step}
+                      </div>
+                      {step < 4 && (
+                        <div className={`w-4 h-0.5 ${
+                          step < (['input', 'preview', 'progress', 'results'].indexOf(bulkImportStep) + 1) ? 'bg-emerald-600' : 'bg-slate-300'
+                        }`} />
+                      )}
+                    </div>
+                  ))}
                 </div>
 
-                {/* Action Buttons */}
-                <div className="flex gap-3">
+                {/* Actions */}
+                <div className="flex gap-2">
                   {bulkImportStep === 'input' && (
                     <>
-                      <button
-                        onClick={closeBulkModal}
-                        className="px-4 py-2 text-slate-600 hover:text-slate-800 font-medium transition-colors"
-                      >
+                      <button onClick={closeBulkModal} className="px-3 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium">
                         Cancel
                       </button>
                       <button
                         onClick={handleBulkImportPreview}
-                        disabled={validProxies.length === 0}
-                        className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled={!bulkProxiesText.trim()}
+                        className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg disabled:opacity-50"
                       >
-                        Preview Import ({validProxies.length})
+                        Preview ({bulkProxiesText.split('\n').filter(line => line.trim()).length} lines)
                       </button>
                     </>
                   )}
@@ -654,34 +692,44 @@ export function BulkActions({ onRefresh }: { onRefresh: () => void }) {
                     <>
                       <button
                         onClick={() => setBulkImportStep('input')}
-                        className="px-4 py-2 text-slate-600 hover:text-slate-800 font-medium transition-colors"
+                        className="px-3 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium"
                       >
-                        Back to Edit
+                        Back
                       </button>
                       <button
                         onClick={handleBulkImport}
-                        className={`px-6 py-2 ${replaceExisting
-                          ? 'bg-orange-600 hover:bg-orange-700'
-                          : 'bg-emerald-600 hover:bg-emerald-700'
-                          } text-white font-medium rounded-lg transition-colors flex items-center gap-2`}
+                        className={`px-4 py-2 ${
+                          replaceExisting ? 'bg-orange-600 hover:bg-orange-700' : 'bg-emerald-600 hover:bg-emerald-700'
+                        } text-white text-sm font-medium rounded-lg flex items-center gap-2`}
                       >
-                        <Upload className="w-4 h-4" />
-                        {replaceExisting ? 'Replace All' : 'Import'} {validProxies.length} Proxies
+                        <Upload className="w-3 h-3" />
+                        {replaceExisting ? 'Replace' : 'Import'} {bulkProxiesText.split('\n').filter(line => line.trim()).length} lines
                       </button>
                     </>
+                  )}
+
+                  {bulkImportStep === 'progress' && (
+                    <div className="flex gap-2">
+                      <button
+                        disabled
+                        className="px-4 py-2 bg-gray-400 text-white text-sm font-medium rounded-lg cursor-not-allowed opacity-50"
+                      >
+                        Processing...
+                      </button>
+                    </div>
                   )}
 
                   {bulkImportStep === 'results' && !bulkImportLoading && (
                     <>
                       <button
                         onClick={resetBulkImport}
-                        className="px-4 py-2 text-slate-600 hover:text-slate-800 font-medium transition-colors"
+                        className="px-3 py-2 text-slate-600 hover:text-slate-800 text-sm font-medium"
                       >
                         Import More
                       </button>
                       <button
                         onClick={closeBulkModal}
-                        className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors"
+                        className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg"
                       >
                         Done
                       </button>
@@ -705,6 +753,21 @@ export function ProxyTable({
   onRefresh: () => void
 }) {
   const [selectedProxies, setSelectedProxies] = useState<string[]>([]);
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 100;
+
+  // Calculate pagination
+  const totalPages = Math.ceil(proxies.length / itemsPerPage);
+  const startIndex = (currentPage - 1) * itemsPerPage;
+  const endIndex = startIndex + itemsPerPage;
+  const currentProxies = proxies.slice(startIndex, endIndex);
+
+  // Reset to first page when proxies change
+  React.useEffect(() => {
+    if (currentPage > totalPages && totalPages > 0) {
+      setCurrentPage(1);
+    }
+  }, [proxies.length, currentPage, totalPages]);
 
   const handleSelectProxy = (proxyId: string) => {
     setSelectedProxies(prev =>
@@ -716,21 +779,105 @@ export function ProxyTable({
 
   const handleSelectAll = () => {
     setSelectedProxies(prev =>
-      prev.length === proxies.length ? [] : proxies.map(p => p.proxy_id)
+      prev.length === currentProxies.length ? [] : currentProxies.map(p => p.proxy_id)
     );
   };
 
+  const handlePageChange = (page: number) => {
+    setCurrentPage(page);
+    setSelectedProxies([]); // Clear selection when changing pages
+  };
+
+  // Return only the table rows since parent handles table structure
+  if (currentProxies.length === 0) {
+    return (
+      <tr>
+        <td colSpan={5} className="px-6 py-12 text-center text-slate-500">
+          <div className="flex flex-col items-center gap-3">
+            <Globe className="w-12 h-12 text-slate-300" />
+            <div>
+              <p className="text-sm font-medium">No proxies found</p>
+              <p className="text-xs">Add some proxies to get started</p>
+            </div>
+          </div>
+        </td>
+      </tr>
+    );
+  }
+
   return (
     <>
-      <div className="mb-4 flex items-center gap-4">
+      {currentProxies.map((proxy) => (
+        <ProxyRow
+          key={proxy.proxy_id}
+          proxy={proxy}
+          isSelected={selectedProxies.includes(proxy.proxy_id)}
+          onSelect={handleSelectProxy}
+          onRefresh={onRefresh}
+        />
+      ))}
+    </>
+  );
+}
+
+export function ProxyTableWithControls({
+  proxies,
+  onRefresh
+}: {
+  proxies: Proxy[],
+  onRefresh: () => void
+}) {
+  const [selectedProxies, setSelectedProxies] = useState<string[]>([]);
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 100;
+
+  // Calculate pagination
+  const totalPages = Math.ceil(proxies.length / itemsPerPage);
+  const startIndex = (currentPage - 1) * itemsPerPage;
+  const endIndex = startIndex + itemsPerPage;
+  const currentProxies = proxies.slice(startIndex, endIndex);
+
+  // Reset to first page when proxies change
+  React.useEffect(() => {
+    if (currentPage > totalPages && totalPages > 0) {
+      setCurrentPage(1);
+    }
+  }, [proxies.length, currentPage, totalPages]);
+
+  const handleSelectProxy = (proxyId: string) => {
+    setSelectedProxies(prev =>
+      prev.includes(proxyId)
+        ? prev.filter(id => id !== proxyId)
+        : [...prev, proxyId]
+    );
+  };
+
+  const handleSelectAll = () => {
+    setSelectedProxies(prev =>
+      prev.length === currentProxies.length ? [] : currentProxies.map(p => p.proxy_id)
+    );
+  };
+
+  const handlePageChange = (page: number) => {
+    setCurrentPage(page);
+    setSelectedProxies([]); // Clear selection when changing pages
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Selection and Pagination Info */}
+      <div className="flex items-center gap-4">
         <label className="flex items-center gap-2 text-sm text-slate-600">
           <input
             type="checkbox"
-            checked={proxies.length > 0 && selectedProxies.length === proxies.length}
+            checked={currentProxies.length > 0 && selectedProxies.length === currentProxies.length}
             onChange={handleSelectAll}
             className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
           />
-          Select All ({selectedProxies.length} selected)
+          {currentProxies.length === 0 ? 'No items to select' : 
+           selectedProxies.length === 0 ? `Select All (${currentProxies.length} items)` :
+           selectedProxies.length === currentProxies.length ? `All Selected (${selectedProxies.length})` :
+           `Select All (${selectedProxies.length} of ${currentProxies.length} selected)`}
         </label>
         {selectedProxies.length > 0 && (
           <button
@@ -746,17 +893,153 @@ export function ProxyTable({
             Delete Selected
           </button>
         )}
+        
+        {/* Pagination Info */}
+        <div className="ml-auto text-sm text-slate-600">
+          Showing {startIndex + 1}-{Math.min(endIndex, proxies.length)} of {proxies.length} proxies
+        </div>
       </div>
-      {proxies.map((proxy) => (
-        <ProxyRow
-          key={proxy.proxy_id}
-          proxy={proxy}
-          isSelected={selectedProxies.includes(proxy.proxy_id)}
-          onSelect={handleSelectProxy}
-          onRefresh={onRefresh}
-        />
-      ))}
-    </>
+      
+      {/* Table */}
+      <div className="w-full bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full table-auto">
+            <thead className="bg-slate-50 border-b border-slate-200">
+              <tr>
+                <th className="px-6 py-3 text-left w-16">
+                  <span className="text-xs font-medium text-slate-500 uppercase tracking-wider">Select</span>
+                </th>
+                <th className="px-6 py-3 text-left min-w-[300px]">
+                  <span className="text-xs font-medium text-slate-500 uppercase tracking-wider">Proxy Details</span>
+                </th>
+                <th className="px-6 py-3 text-left w-32">
+                  <span className="text-xs font-medium text-slate-500 uppercase tracking-wider">Status</span>
+                </th>
+                <th className="px-6 py-3 text-left w-40">
+                  <span className="text-xs font-medium text-slate-500 uppercase tracking-wider">Performance</span>
+                </th>
+                <th className="px-6 py-3 text-left w-24">
+                  <span className="text-xs font-medium text-slate-500 uppercase tracking-wider">Actions</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-200">
+              {currentProxies.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="px-6 py-12 text-center text-slate-500">
+                    <div className="flex flex-col items-center gap-3">
+                      <Globe className="w-12 h-12 text-slate-300" />
+                      <div>
+                        <p className="text-sm font-medium">No proxies found</p>
+                        <p className="text-xs">Add some proxies to get started</p>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              ) : (
+                currentProxies.map((proxy) => (
+                  <ProxyRow
+                    key={proxy.proxy_id}
+                    proxy={proxy}
+                    isSelected={selectedProxies.includes(proxy.proxy_id)}
+                    onSelect={handleSelectProxy}
+                    onRefresh={onRefresh}
+                  />
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Pagination Controls */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between border-t border-slate-200 pt-4">
+          <div className="text-sm text-slate-600">
+            Page {currentPage} of {totalPages}
+          </div>
+          
+          <div className="flex items-center gap-2">
+            {/* Previous Button */}
+            <button
+              onClick={() => handlePageChange(currentPage - 1)}
+              disabled={currentPage === 1}
+              className="px-3 py-2 text-sm font-medium text-slate-600 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              Previous
+            </button>
+
+            {/* Page Numbers */}
+            <div className="flex gap-1">
+              {/* First Page */}
+              {currentPage > 3 && (
+                <>
+                  <button
+                    onClick={() => handlePageChange(1)}
+                    className="w-10 h-10 text-sm font-medium text-slate-600 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors"
+                  >
+                    1
+                  </button>
+                  {currentPage > 4 && <span className="px-2 py-2 text-slate-400">...</span>}
+                </>
+              )}
+
+              {/* Current Page and Neighbors */}
+              {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                let pageNum;
+                if (totalPages <= 5) {
+                  pageNum = i + 1;
+                } else if (currentPage <= 3) {
+                  pageNum = i + 1;
+                } else if (currentPage >= totalPages - 2) {
+                  pageNum = totalPages - 4 + i;
+                } else {
+                  pageNum = currentPage - 2 + i;
+                }
+
+                if (pageNum < 1 || pageNum > totalPages) return null;
+
+                return (
+                  <button
+                    key={pageNum}
+                    onClick={() => handlePageChange(pageNum)}
+                    className={`w-10 h-10 text-sm font-medium rounded-lg transition-colors ${
+                      pageNum === currentPage
+                        ? 'bg-blue-600 text-white'
+                        : 'text-slate-600 bg-white border border-slate-300 hover:bg-slate-50'
+                    }`}
+                  >
+                    {pageNum}
+                  </button>
+                );
+              })}
+
+              {/* Last Page */}
+              {currentPage < totalPages - 2 && (
+                <>
+                  {currentPage < totalPages - 3 && <span className="px-2 py-2 text-slate-400">...</span>}
+                  <button
+                    onClick={() => handlePageChange(totalPages)}
+                    className="w-10 h-10 text-sm font-medium text-slate-600 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors"
+                  >
+                    {totalPages}
+                  </button>
+                </>
+              )}
+            </div>
+
+            {/* Next Button */}
+            <button
+              onClick={() => handlePageChange(currentPage + 1)}
+              disabled={currentPage === totalPages}
+              className="px-3 py-2 text-sm font-medium text-slate-600 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -812,8 +1095,16 @@ export function ProxyRow({
   };
 
   return (
-    <tr className="hover:bg-slate-50 transition-colors">
-      <td className="px-6 py-4">
+    <tr className={`transition-colors ${
+      proxy.total_requests !== undefined && proxy.total_requests !== null 
+        ? proxy.total_requests > 0 
+          ? ((proxy.total_requests - (proxy.failed_requests || 0)) / proxy.total_requests) === 0
+            ? 'bg-red-50 hover:bg-red-100 border-l-4 border-l-red-500' // 0% success - red
+            : 'bg-green-50 hover:bg-green-100 border-l-4 border-l-green-400' // Has success - green
+          : 'hover:bg-slate-50' // No requests - default
+        : 'hover:bg-slate-50' // No data - default
+    }`}>
+      <td className="px-4 py-2">
         <input
           type="checkbox"
           checked={isSelected}
@@ -821,17 +1112,17 @@ export function ProxyRow({
           className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
         />
       </td>
-      <td className="px-6 py-4">
-        <div className="space-y-2">
-          <div className="flex items-center gap-3">
-            <code className="text-sm font-mono text-slate-900 bg-slate-100 px-3 py-1 rounded-md">
+      <td className="px-4 py-2">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <code className="text-xs font-mono text-slate-900 bg-slate-100 px-2 py-1 rounded">
               {proxy.ip}:{proxy.port}
             </code>
             <div className={`w-2 h-2 rounded-full ${proxy.is_working ? 'bg-green-500' : 'bg-red-500'
               }`} title={proxy.is_working ? 'Online' : 'Offline'}></div>
           </div>
           {(proxy.provider || proxy.region) && (
-            <div className="flex items-center gap-2 text-sm text-slate-600">
+            <div className="flex items-center gap-2 text-xs text-slate-600">
               <Globe className="h-3 w-3" />
               <span>{proxy.provider || 'Unknown Provider'}</span>
               {proxy.region && (
@@ -844,62 +1135,70 @@ export function ProxyRow({
           )}
         </div>
       </td>
-      <td className="px-6 py-4">
-        <div className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium ${proxy.status === 'active'
+      <td className="px-4 py-2">
+        <div className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${proxy.status === 'active'
           ? 'bg-green-100 text-green-800 border border-green-200'
           : proxy.status === 'inactive'
             ? 'bg-red-100 text-red-800 border border-red-200'
             : 'bg-yellow-100 text-yellow-800 border border-yellow-200'
           }`}>
-          <div className={`w-1.5 h-1.5 rounded-full mr-2 ${proxy.status === 'active' ? 'bg-green-500' :
+          <div className={`w-1.5 h-1.5 rounded-full mr-1.5 ${proxy.status === 'active' ? 'bg-green-500' :
             proxy.status === 'inactive' ? 'bg-red-500' : 'bg-yellow-500'
             }`}></div>
           {proxy.status}
         </div>
       </td>
-      <td className="px-6 py-4">
-        <div className="space-y-2">
-          {proxy.success_rate !== undefined ? (
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-medium text-slate-900">
-                {proxy.success_rate.toFixed(1)}% Success
-              </span>
-            </div>
+      <td className="px-4 py-2">
+        <div className="space-y-1">
+          {proxy.total_requests !== undefined && proxy.total_requests !== null ? (
+            <>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-slate-900">
+                  {proxy.total_requests > 0 ? 
+                    (((proxy.total_requests - (proxy.failed_requests || 0)) / proxy.total_requests) * 100).toFixed(1)
+                    : '0.0'
+                  }% Success
+                </span>
+              </div>
+              <div className="text-xs text-slate-500">
+                <span>{proxy.total_requests.toLocaleString()} total requests</span>
+                {proxy.failed_requests !== undefined && proxy.failed_requests > 0 && (
+                  <span className="text-red-600 ml-2">
+                    ({proxy.failed_requests.toLocaleString()} failed)
+                  </span>
+                )}
+              </div>
+            </>
           ) : (
             <span className="text-sm text-slate-400">No data</span>
           )}
-          {proxy.total_requests !== undefined && (
-            <div className="text-xs text-slate-500">
-              {proxy.total_requests.toLocaleString()} total requests
-            </div>
-          )}
         </div>
       </td>
-      <td className="px-6 py-4">
-        <div className="flex items-center gap-2">
+      <td className="px-4 py-2">
+        <div className="flex items-center gap-2 relative">
           <button
             onClick={handleTest}
             disabled={isPending}
-            className="inline-flex items-center justify-center w-8 h-8 rounded-lg text-blue-600 hover:bg-blue-50 transition-colors disabled:opacity-50"
+            className="inline-flex items-center justify-center w-7 h-7 rounded-lg text-blue-600 hover:bg-blue-50 transition-colors disabled:opacity-50"
             title="Test proxy"
           >
-            <Activity className="h-4 w-4" />
+            <Activity className="h-3.5 w-3.5" />
           </button>
           <button
             onClick={handleDelete}
             disabled={isPending}
-            className="inline-flex items-center justify-center w-8 h-8 rounded-lg text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
+            className="inline-flex items-center justify-center w-7 h-7 rounded-lg text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
             title="Delete proxy"
           >
-            <Trash2 className="h-4 w-4" />
+            <Trash2 className="h-3.5 w-3.5" />
           </button>
+          {message && (
+            <div className="absolute z-10 bg-white border border-slate-200 rounded-lg shadow-lg p-2 mt-1 text-xs top-full left-0 min-w-48">
+              {message}
+              <button onClick={() => setMessage(null)} className="ml-2 text-slate-400 hover:text-slate-600">×</button>
+            </div>
+          )}
         </div>
-        {message && (
-          <div className="absolute z-10 bg-white border border-slate-200 rounded-lg shadow-lg p-2 mt-1 text-xs">
-            {message}
-            <button onClick={() => setMessage(null)} className="ml-2 text-slate-400 hover:text-slate-600">×</button>
-          </div>
-        )}
       </td>
     </tr>
   );

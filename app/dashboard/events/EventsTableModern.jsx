@@ -144,14 +144,14 @@ const EventsTableModern = memo(function EventsTableModern({
         
         if (loadingSeatCounts && seatCount === undefined) {
           return (
-            <div className="flex items-center justify-end">
+            <div className="flex items-center justify-end" aria-live="polite" aria-label="Loading seat count">
               <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
             </div>
           );
         }
         
         return (
-          <div className="text-right">
+          <div className="text-right space-y-1">
             <div className="font-bold text-slate-900 text-lg">
               {(seatCount ?? availableSeats).toLocaleString()}
             </div>
@@ -224,6 +224,7 @@ const EventsTableModern = memo(function EventsTableModern({
             href={`/dashboard/events/${r._id}/edit`} 
             className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors duration-200 hover:shadow-sm" 
             title="Edit Event"
+            aria-label={`Edit event ${r.Event_Name}`}
           >
             <Edit size={16} />
           </Link>
@@ -231,6 +232,7 @@ const EventsTableModern = memo(function EventsTableModern({
             className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors duration-200 hover:shadow-sm"
             title="Delete Event"
             onClick={() => onDeleteEvent && onDeleteEvent(r._id, r.Event_Name)}
+            aria-label={`Delete event ${r.Event_Name}`}
           >
             <Trash2 size={16} />
           </button>
@@ -244,12 +246,13 @@ const EventsTableModern = memo(function EventsTableModern({
                 ? 'bg-gradient-to-r from-blue-500 to-purple-600 text-white hover:from-blue-600 hover:to-purple-700 shadow-blue-200' 
                 : 'bg-red-600 text-white hover:bg-red-700 shadow-red-200'
             }`}
-            title={togglingEvents.has(r._id) ? 'Processing...' : (r.Skip_Scraping ? 'Start Scraping' : 'Stop Scraping')}
+            title={togglingEvents.has(r._id) ? 'Processing…' : (r.Skip_Scraping ? 'Start Scraping' : 'Stop Scraping')}
+            aria-label={togglingEvents.has(r._id) ? `Updating ${r.Event_Name}` : (r.Skip_Scraping ? `Start scraping ${r.Event_Name}` : `Stop scraping ${r.Event_Name}`)}
           >
             {togglingEvents.has(r._id) ? (
               <>
                 <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                <span>...</span>
+                <span>…</span>
               </>
             ) : r.Skip_Scraping ? (
               <>

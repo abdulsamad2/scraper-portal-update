@@ -97,6 +97,7 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
             <button
               onClick={() => setIsSidebarOpen(!isSidebarOpen)}
               className="p-2 hover:bg-slate-100 rounded-lg transition-colors lg:hidden"
+              aria-label={isSidebarOpen ? "Close sidebar" : "Open sidebar"}
             >
               <X className="w-5 h-5" />
             </button>

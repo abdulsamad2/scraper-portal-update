@@ -27,7 +27,10 @@ export default function RootLayout({
   // Initialize startup service
 
   return (
-    <html lang="en">
+    <html lang="en" style={{ colorScheme: 'light dark' }}>
+      <head>
+        <meta name="theme-color" content="#ffffff" />
+      </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >

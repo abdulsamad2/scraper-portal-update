@@ -377,44 +377,58 @@ export default function EventsPage() {
  
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+      <header className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div className="flex items-baseline gap-3">
-            <h1 className="text-2xl font-bold">Events</h1>
-            <span className="text-sm text-gray-600">{activeCount} active / {totalCount} total</span>
-            <span className="text-xs text-gray-500 flex items-center gap-1">
-              Last updated: {lastRefresh ? lastRefresh.toLocaleTimeString('en-US', {
+          <h1 className="text-2xl font-bold" style={{ textWrap: 'balance' }}>Events Dashboard</h1>
+          <div className="flex items-center gap-2 text-sm">
+            <span className="text-gray-600">
+              <span className="font-semibold text-green-600" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                {new Intl.NumberFormat('en-US').format(activeCount)}
+              </span> active / 
+              <span className="font-semibold" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                {new Intl.NumberFormat('en-US').format(totalCount)}
+              </span> total
+            </span>
+          </div>
+          <div className="text-xs text-gray-500 flex items-center gap-1">
+            <span>Last updated: </span>
+            <time style={{ fontVariantNumeric: 'tabular-nums' }}>
+              {lastRefresh ? new Intl.DateTimeFormat('en-US', {
                 hour: '2-digit',
                 minute: '2-digit',
                 second: '2-digit',
                 hour12: false
-              }) : '--:--:--'}
-              {refreshing && (
-                <>
-                  <span className="text-blue-500">•</span>
-                  <span className="text-blue-500">Refreshing...</span>
-                </>
-              )}
-            </span>
+              }).format(lastRefresh) : '--:--:--'}
+            </time>
+            {refreshing && (
+              <>
+                <span className="text-blue-500">•</span>
+                <span className="text-blue-500">Refreshing…</span>
+              </>
+            )}
           </div>
+        </div>
         <div className="flex gap-2">
           <button
             onClick={() => fetchEvents(true)}
             disabled={refreshing}
-            className="inline-flex items-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="inline-flex items-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed touch-action: manipulation"
+            aria-label="Refresh events data"
           >
-            <RefreshCw className={`w-4 h-4 mr-1 ${refreshing ? 'animate-spin' : ''}`} />
-            {refreshing ? 'Refreshing...' : 'Refresh'}
+            <RefreshCw className={`w-4 h-4 mr-1 ${refreshing ? 'animate-spin' : ''}`} aria-hidden="true" />
+            {refreshing ? 'Refreshing…' : 'Refresh'}
           </button>
 
           <button
             onClick={toggleScrapingAll}
-            className={`inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white ${allActive ? 'bg-red-600 hover:bg-red-700 focus:ring-red-500' : 'bg-green-600 hover:bg-green-700 focus:ring-green-500'}`}
+            className={`inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white focus-visible:ring-2 focus-visible:ring-offset-2 touch-action: manipulation ${allActive ? 'bg-red-600 hover:bg-red-700 focus-visible:ring-red-500' : 'bg-green-600 hover:bg-green-700 focus-visible:ring-green-500'}`}
+            aria-label={allActive ? 'Stop scraping for all filtered events' : 'Start scraping for all filtered events'}
+            disabled={filteredEvents.length === 0}
           >
             {allActive ? 'Stop Scraping All' : 'Start Scraping All'}
           </button>
         </div>
-       
-      </div>
+      </header>
 
       {/* Delete Feedback Message */}
       {deleteMessage && (
@@ -458,49 +472,70 @@ export default function EventsPage() {
       )}
 
       {/* Modern Search and Filters */}
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+      <section className="bg-white rounded-xl shadow-sm border border-slate-200 p-6" aria-label="Search and filter events">
         {/* Search Bar */}
         <div className="flex flex-col lg:flex-row gap-4 items-center">
           <div className="flex-1 relative">
+            <label htmlFor="event-search" className="sr-only">Search events by name or venue</label>
             <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-              <Search className="h-5 w-5 text-gray-400" />
+              <Search className="h-5 w-5 text-gray-400" aria-hidden="true" />
             </div>
             <input
-              type="text"
-              placeholder="Search events by name or venue..."
-              className="block w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+              id="event-search"
+              type="search"
+              placeholder="Search events by name or venue…"
+              className="block w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:border-blue-500 transition-colors"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
+              autoComplete="off"
+              aria-describedby="search-results"
             />
+            {searchTerm && (
+              <button
+                onClick={() => setSearchTerm('')}
+                className="absolute inset-y-0 right-0 pr-3 flex items-center hover:text-gray-600 focus-visible:ring-2 focus-visible:ring-blue-500 rounded"
+                aria-label="Clear search"
+              >
+                <X className="h-4 w-4" aria-hidden="true" />
+              </button>
+            )}
           </div>
           
           <div className="flex items-center gap-3">
             {/* Sort Dropdown */}
-            <select
-              value={filters.sortBy}
-              onChange={(e) => updateFilter('sortBy', e.target.value)}
-              className="border border-gray-300 rounded-lg px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-            >
-              <option value="newest">Newest First</option>
-              <option value="oldest">Oldest First</option>
-              <option value="name">Name A-Z</option>
-              <option value="date">Event Date</option>
-              <option value="seats">Most Seats</option>
-            </select>
+            <div>
+              <label htmlFor="sort-events" className="sr-only">Sort events by</label>
+              <select
+                id="sort-events"
+                value={filters.sortBy}
+                onChange={(e) => updateFilter('sortBy', e.target.value)}
+                className="border border-gray-300 rounded-lg px-4 py-3 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:border-blue-500 transition-colors"
+                aria-label="Sort events by"
+              >
+                <option value="newest">Newest First</option>
+                <option value="oldest">Oldest First</option>
+                <option value="name">Name A–Z</option>
+                <option value="date">Event Date</option>
+                <option value="seats">Most Seats</option>
+              </select>
+            </div>
             
             {/* Filter Toggle Button */}
             <button
               onClick={() => setShowFilters(!showFilters)}
-              className={`inline-flex items-center px-4 py-3 rounded-lg border transition-colors ${
+              className={`inline-flex items-center px-4 py-3 rounded-lg border transition-colors focus-visible:ring-2 focus-visible:ring-blue-500 touch-action: manipulation ${
                 showFilters || hasActiveFilters()
                   ? 'bg-blue-50 border-blue-300 text-blue-700'
                   : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
               }`}
+              aria-expanded={showFilters}
+              aria-controls="advanced-filters"
+              aria-label={showFilters ? 'Hide advanced filters' : 'Show advanced filters'}
             >
-              <SlidersHorizontal className="w-5 h-5 mr-2" />
+              <SlidersHorizontal className="w-5 h-5 mr-2" aria-hidden="true" />
               Filters
               {hasActiveFilters() && (
-                <span className="ml-2 bg-blue-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                <span className="ml-2 bg-blue-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center" aria-label="Active filters applied">
                   !
                 </span>
               )}
@@ -521,7 +556,8 @@ export default function EventsPage() {
 
         {/* Advanced Filters Panel */}
         {showFilters && (
-          <div className="mt-6 pt-6 border-t border-gray-200">
+          <section id="advanced-filters" className="mt-6 pt-6 border-t border-gray-200" aria-labelledby="advanced-filters-title">
+            <h3 id="advanced-filters-title" className="text-lg font-semibold mb-4">Advanced Filters</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
               {/* Event Date Range */}
               <div className="space-y-2">
@@ -643,9 +679,9 @@ export default function EventsPage() {
                 </div>
               </div>
             )}
-          </div>
+          </section>
         )}
-      </div>
+      </section>
 
       {/* Events Table */}
       <div className="bg-white shadow-md rounded-lg overflow-hidden">
@@ -693,12 +729,12 @@ export default function EventsPage() {
                 </div>
                 <div className="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
                   <div className="flex items-center space-x-4">
-                    <p className="text-sm text-gray-700">
-                      Showing <span className="font-medium">{(currentPage - 1) * eventsPerPage + 1}</span> to{' '}
-                      <span className="font-medium">
-                        {Math.min(currentPage * eventsPerPage, filteredEvents.length)}
+                    <p className="text-sm text-gray-700" aria-live="polite">
+                      Showing <span className="font-medium" style={{ fontVariantNumeric: 'tabular-nums' }}>{new Intl.NumberFormat('en-US').format((currentPage - 1) * eventsPerPage + 1)}</span> to{' '}
+                      <span className="font-medium" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                        {new Intl.NumberFormat('en-US').format(Math.min(currentPage * eventsPerPage, filteredEvents.length))}
                       </span>{' '}
-                      of <span className="font-medium">{filteredEvents.length}</span> results
+                      of <span className="font-medium" style={{ fontVariantNumeric: 'tabular-nums' }}>{new Intl.NumberFormat('en-US').format(filteredEvents.length)}</span> results
                     </p>
                     <div className="flex items-center space-x-2">
                       <label htmlFor="perPage" className="text-sm text-gray-700">Per page:</label>

@@ -516,6 +516,7 @@ const NewScraper = ({ onCancel, onSuccess, initialData = null, isEdit = false })
                   onChange={handleInputChange}
                   onBlur={handleBlur}
                   placeholder="https://www.ticketmaster.com/event/... (supports .com, .co.uk, .ca, etc.)"
+                  autoComplete="url"
                   className={`w-full pl-10 pr-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-colors ${
                     !validationState.URL && touchedFields.URL
                       ? "border-red-500 bg-red-50"
@@ -565,6 +566,7 @@ const NewScraper = ({ onCancel, onSuccess, initialData = null, isEdit = false })
                   onChange={handleInputChange}
                   onBlur={handleBlur}
                   placeholder="Enter event ID"
+                  autoComplete="off"
                   className={`w-full pl-10 pr-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-colors ${
                     !validationState.Event_ID && touchedFields.Event_ID
                       ? "border-red-500 bg-red-50"
@@ -616,6 +618,7 @@ const NewScraper = ({ onCancel, onSuccess, initialData = null, isEdit = false })
                   onChange={handleInputChange}
                   onBlur={handleBlur}
                   placeholder="Event Name"
+                  autoComplete="off"
                   className={`w-full pl-10 pr-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-colors ${
                     !validationState.Event_Name && touchedFields.Event_Name
                       ? "border-red-500 bg-red-50"
@@ -764,6 +767,7 @@ const NewScraper = ({ onCancel, onSuccess, initialData = null, isEdit = false })
                   onChange={handleInputChange}
                   onBlur={handleBlur}
                   placeholder="Enter venue name"
+                  autoComplete="organization"
                   className={`w-full pl-10 pr-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-colors ${
                     !validationState.Venue && touchedFields.Venue
                       ? "border-red-500 bg-red-50"
@@ -1010,7 +1014,7 @@ const NewScraper = ({ onCancel, onSuccess, initialData = null, isEdit = false })
               {loading ? (
                 <>
                   <Loader className="w-4 h-4 animate-spin" />
-                  {isEdit ? "Updating..." : "Creating..."}
+                  {isEdit ? "Updating…" : "Creating…"}
                 </>
               ) : (
                 <>

@@ -365,9 +365,34 @@ export async function getProxyStats() {
               $cond: ['$is_working', 1, 0] 
             }
           },
-          avgSuccessRate: { $avg: '$success_rate' },
-          totalRequests: { $sum: '$total_requests' },
-          totalFailures: { $sum: '$failed_requests' }
+          // Fix success rate calculation to handle nulls properly
+          avgSuccessRate: { 
+            $avg: { 
+              $cond: [
+                { $ne: ['$success_rate', null] },
+                '$success_rate',
+                0
+              ]
+            }
+          },
+          totalRequests: { 
+            $sum: { 
+              $cond: [
+                { $ne: ['$total_requests', null] },
+                '$total_requests',
+                0
+              ]
+            }
+          },
+          totalFailures: { 
+            $sum: { 
+              $cond: [
+                { $ne: ['$failed_requests', null] },
+                '$failed_requests',
+                0
+              ]
+            }
+          }
         }
       }
     ]);
@@ -398,5 +423,25 @@ export async function getProxyStats() {
   } catch (error: unknown) {
     console.error('Error fetching proxy stats:', error);
     return { error: (error as Error).message || 'Failed to fetch proxy statistics' };
+  }
+}
+
+/**
+ * Deletes all proxies from the database
+ * @returns {Promise<object>} Success message with count or error object
+ */
+export async function deleteAllProxies() {
+  await dbConnect();
+  try {
+    const result = await (Proxy as any).deleteMany({});
+    
+    return {
+      message: `Successfully deleted ${result.deletedCount} proxies`,
+      success: true,
+      deletedCount: result.deletedCount
+    };
+  } catch (error: unknown) {
+    console.error('Error deleting all proxies:', error);
+    return { error: (error as Error).message || 'Failed to delete all proxies', success: false };
   }
 }
