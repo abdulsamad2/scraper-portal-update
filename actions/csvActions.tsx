@@ -293,17 +293,15 @@ async function withRetry<T>(
 
       if (attempt === config.maxRetries) {
         //ts-ignore
-        await createErrorLog(
-          'CSV_RETRY_OPERATION',
-          'DATABASE_ERROR',
-          lastError.message,
-          {
-            stack: lastError.stack,
-            operation: operationName,
-            attempt: attempt + 1,
-            timestamp: new Date()
-          }
-        );
+        await createErrorLog({
+          operation: 'CSV_RETRY_OPERATION',
+          errorType: 'DATABASE_ERROR',
+          message: lastError.message,
+          stack: lastError.stack,
+          operationName: operationName,
+          attempt: attempt + 1,
+          timestamp: new Date()
+        });
         throw lastError;
       }
 
@@ -490,16 +488,14 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
       };
     } catch (error) {
       console.error('Error generating CSV:', error);
-      await createErrorLog(
-        'CSV_GENERATION',
-        'DATABASE_ERROR',
-        error instanceof Error ? error.message : 'Unknown error',
-        {
-          stack: error instanceof Error ? error.stack : undefined,
-          operation: 'generateInventoryCsv',
-          timestamp: new Date()
-        }
-      );
+      await createErrorLog({
+        operation: 'CSV_GENERATION',
+        errorType: 'DATABASE_ERROR',
+        message: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined,
+        operationName: 'generateInventoryCsv',
+        timestamp: new Date()
+      });
       return { success: false, message: 'Failed to generate CSV.' };
     }
   }, 'CSV Generation');

@@ -415,10 +415,10 @@ export async function getProxyStats() {
         totalRequests: 0,
         totalFailures: 0
       },
-      statusBreakdown: statusBreakdown.reduce((acc, item) => {
+      statusBreakdown: statusBreakdown.reduce((acc: Record<string, number>, item: { _id: string; count: number }) => {
         acc[item._id] = item.count;
         return acc;
-      }, {})
+      }, {} as Record<string, number>)
     };
   } catch (error: unknown) {
     console.error('Error fetching proxy stats:', error);
