@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { 
   Filter, Search, Calendar, 
   MapPin, Users, TrendingUp, AlertTriangle, 
-  CheckCircle, X, Eye, Settings
+  CheckCircle, X, Eye
 } from 'lucide-react';
 
 interface EventData {
