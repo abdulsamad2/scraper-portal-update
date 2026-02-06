@@ -12,7 +12,14 @@ export async function GET(request: Request) {
     const search = searchParams.get('search') || '';
     
     // Build search filter
-    const filter: any = {};
+    interface SearchFilter {
+      $or?: Array<{
+        Event_Name?: { $regex: string; $options: string };
+        Venue?: { $regex: string; $options: string };
+      }>;
+    }
+    
+    const filter: SearchFilter = {};
     if (search) {
       filter.$or = [
         { Event_Name: { $regex: search, $options: 'i' } },
