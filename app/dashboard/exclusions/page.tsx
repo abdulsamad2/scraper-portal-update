@@ -1,10 +1,10 @@
 'use client';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { 
-  Filter, Search, Plus, Edit, Trash2, Calendar, 
+  Filter, Search, Calendar, 
   MapPin, Users, TrendingUp, AlertTriangle, 
-  CheckCircle, X, Settings, Eye
+  CheckCircle, X, Eye, Settings
 } from 'lucide-react';
 
 interface EventData {
@@ -42,11 +42,7 @@ export default function ExclusionRulesPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [notification, setNotification] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     setLoading(true);
     try {
       // Load events and exclusion rules
@@ -70,7 +66,11 @@ export default function ExclusionRulesPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const showNotification = (type: 'success' | 'error' | 'info', message: string) => {
     setNotification({ type, message });
@@ -329,7 +329,7 @@ export default function ExclusionRulesPage() {
         <div className="bg-white rounded-2xl shadow-xl border border-slate-200/50 overflow-hidden">
           <div className="bg-gradient-to-r from-slate-50 to-slate-100 p-6 border-b border-slate-200">
             <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-3">
-              <Settings className="text-purple-600" size={24} />
+              <Filter className="text-purple-600" size={24} />
               Events & Exclusion Rules
             </h2>
             <p className="text-slate-600 font-medium mt-1">
@@ -453,7 +453,7 @@ export default function ExclusionRulesPage() {
                           href={`/dashboard/events/${event._id}/exclusions`}
                           className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-xl hover:from-purple-700 hover:to-indigo-700 transition-all duration-200 text-sm font-medium shadow-lg hover:shadow-xl transform hover:-translate-y-0.5"
                         >
-                          <Settings size={16} />
+                          <Filter size={16} />
                           <span>Configure</span>
                         </Link>
                       </div>

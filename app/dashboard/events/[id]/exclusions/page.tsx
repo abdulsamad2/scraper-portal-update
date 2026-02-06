@@ -1,4 +1,5 @@
 import React from 'react';
+import Link from 'next/link';
 import { getEventById } from '@/actions/eventActions';
 import ExclusionManagementPage from '../../../../../components/ExclusionManagementPage';
 
@@ -38,12 +39,12 @@ export default async function EventExclusionPage({ params }: ExclusionPageProps)
             <p className="text-slate-600 mb-6">
               The event you're looking for doesn't exist or has been removed.
             </p>
-            <a 
+            <Link 
               href="/dashboard/events"
               className="inline-flex items-center space-x-2 bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors"
             >
               <span>Back to Events</span>
-            </a>
+            </Link>
           </div>
         </div>
       </div>

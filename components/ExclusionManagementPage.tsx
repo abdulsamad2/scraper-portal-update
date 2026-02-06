@@ -1,9 +1,8 @@
 'use client';
-import React, { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { 
-  ArrowLeft, Save, Trash2, Plus, Minus, Settings, 
+  ArrowLeft, Save, Trash2, Plus, 
   AlertTriangle, Info, CheckCircle, X, Filter 
 } from 'lucide-react';
 import { 
@@ -13,7 +12,6 @@ import {
   SectionRowExclusion,
   ExclusionRulesData 
 } from '@/actions/exclusionActions';
-import { getEventById } from '@/actions/eventActions';
 
 interface ExclusionPageProps {
   eventId: string;
@@ -30,7 +28,6 @@ interface SectionData {
 
 
 export default function ExclusionManagementPage({ eventId, eventName }: ExclusionPageProps) {
-  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [sections, setSections] = useState<SectionData[]>([]);
@@ -40,11 +37,7 @@ export default function ExclusionManagementPage({ eventId, eventName }: Exclusio
   
   const [notification, setNotification] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
 
-  useEffect(() => {
-    loadData();
-  }, [eventId]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     setLoading(true);
     try {
       const [rulesResult, sectionsResult] = await Promise.all([
@@ -68,7 +61,11 @@ export default function ExclusionManagementPage({ eventId, eventName }: Exclusio
     } finally {
       setLoading(false);
     }
-  };
+  }, [eventId]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const showNotification = (type: 'success' | 'error' | 'info', message: string) => {
     setNotification({ type, message });
