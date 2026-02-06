@@ -15,29 +15,7 @@ const sectionRowExclusionSchema = new mongoose.Schema({
   }]
 }, { _id: false });
 
-// Schema for outlier exclusion settings
-const outlierExclusionSchema = new mongoose.Schema({
-  enabled: {
-    type: Boolean,
-    default: false
-  },
-  percentageBelowAverage: {
-    type: Number,
-    min: 0,
-    max: 50,
-    required: function() {
-      return this.enabled;
-    }
-  },
-  baselineListingsCount: {
-    type: Number,
-    min: 1,
-    max: 10,
-    required: function() {
-      return this.enabled;
-    }
-  }
-}, { _id: false });
+
 
 const exclusionRulesSchema = new mongoose.Schema({
   eventId: {
@@ -50,7 +28,6 @@ const exclusionRulesSchema = new mongoose.Schema({
     required: true
   },
   sectionRowExclusions: [sectionRowExclusionSchema],
-  outlierExclusion: outlierExclusionSchema,
   isActive: {
     type: Boolean,
     default: true

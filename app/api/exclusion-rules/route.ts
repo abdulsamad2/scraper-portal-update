@@ -10,7 +10,10 @@ export async function GET() {
       .sort({ lastUpdated: -1 })
       .lean();
 
-    return NextResponse.json(exclusionRules);
+    // Convert MongoDB documents to plain objects
+    const plainRules = JSON.parse(JSON.stringify(exclusionRules));
+
+    return NextResponse.json(plainRules);
   } catch (error) {
     console.error('Error fetching exclusion rules:', error);
     return NextResponse.json(

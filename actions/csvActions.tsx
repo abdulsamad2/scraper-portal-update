@@ -93,8 +93,6 @@ function calculateDelay(attempt: number, config: RetryConfig): number {
   return exponentialDelay + jitter;
 }
 
-<<<<<<< Updated upstream
-=======
 // Get price adjustment percentage from environment variables
 function getPriceAdjustmentPercentage(): number {
   const priceAdjustmentEnv = process.env.PRICE_INCREASE_PERCENTAGE;
@@ -172,43 +170,7 @@ async function applyExclusionRules(records: CsvRow[]): Promise<CsvRow[]> {
       return true;
     });
     
-    // Apply outlier price exclusions per event
-    const finalRecords: CsvRow[] = [];
-    
-    for (const mappingId of mappingIds) {
-      const eventRecords = filteredRecords.filter(r => r.event_id === mappingId);
-      const eventObjectId = mappingToIdMap.get(mappingId);
-      const rules = rulesMap.get(eventObjectId);
-      
-      if (rules?.outlierExclusion?.enabled && eventRecords.length > 0) {
-        // Validate that required configuration is present
-        const baselineCount = rules.outlierExclusion.baselineListingsCount;
-        const thresholdPercentage = rules.outlierExclusion.percentageBelowAverage;
-        
-        if (!baselineCount || !thresholdPercentage) {
-          console.warn(`Event ${mappingId}: Outlier exclusion enabled but configuration incomplete. Skipping outlier filtering.`);
-          finalRecords.push(...eventRecords);
-          continue;
-        }
-        
-        // Calculate baseline average from lowest N prices
-        const prices = eventRecords.map(r => r.list_price).sort((a, b) => a - b);
-        const actualBaselineCount = Math.min(baselineCount, prices.length);
-        const baselinePrices = prices.slice(0, actualBaselineCount);
-        const baselineAvg = baselinePrices.reduce((sum, price) => sum + price, 0) / baselinePrices.length;
-        
-        // Calculate threshold
-        const threshold = baselineAvg * (1 - thresholdPercentage / 100);
-        
-        // Filter out outliers
-        const nonOutlierRecords = eventRecords.filter(record => record.list_price >= threshold);
-        finalRecords.push(...nonOutlierRecords);
-        
-        console.log(`Event ${mappingId}: Excluded ${eventRecords.length - nonOutlierRecords.length} outlier listings below $${threshold.toFixed(2)} (${thresholdPercentage}% below baseline of $${baselineAvg.toFixed(2)})`);
-      } else {
-        finalRecords.push(...eventRecords);
-      }
-    }
+    const finalRecords = filteredRecords;
     
     const excludedCount = records.length - finalRecords.length;
     if (excludedCount > 0) {
@@ -233,7 +195,6 @@ function applyPriceAdjustment(originalPrice: number): number {
   return originalPrice * (1 + adjustmentPercentage / 100);
 }
 
->>>>>>> Stashed changes
 // Generic retry wrapper
 async function withRetry<T>(
   operation: () => Promise<T>,
@@ -249,19 +210,16 @@ async function withRetry<T>(
       lastError = error as Error;
       
       if (attempt === config.maxRetries) {
-        await createErrorLog(
-          'CSV_RETRY_OPERATION',
-          'DATABASE_ERROR',
-          lastError.message,
-          {
-            stack: lastError.stack,
-            metadata: {
-              operation: operationName,
-              attempt: attempt + 1,
-              timestamp: new Date()
-            }
+        await createErrorLog({
+          errorType: 'CSV_RETRY_OPERATION',
+          errorMessage: lastError.message,
+          stack: lastError.stack,
+          metadata: {
+            operation: operationName,
+            attempt: attempt + 1,
+            timestamp: new Date()
           }
-        );
+        });
         throw lastError;
       }
       
@@ -458,18 +416,15 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
       };
     } catch (error) {
       console.error('Error generating CSV:', error);
-      await createErrorLog(
-        'CSV_GENERATION',
-        'DATABASE_ERROR',
-        error instanceof Error ? error.message : 'Unknown error',
-        {
-          stack: error instanceof Error ? error.stack : undefined,
-          metadata: {
-            operation: 'generateInventoryCsv',
-            timestamp: new Date()
-          }
+      await createErrorLog({
+        errorType: 'CSV_GENERATION',
+        errorMessage: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined,
+        metadata: {
+          operation: 'generateInventoryCsv',
+          timestamp: new Date()
         }
-      );
+      });
       return { success: false, message: 'Failed to generate CSV.' };
     }
   }, 'CSV Generation');
@@ -633,13 +588,8 @@ async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]
       barcodes: inventory?.barcodes || "",
       internal_notes: "-tnow -tmplus",
       public_notes: publicNotes,
-<<<<<<< Updated upstream
       tags: inventory?.splitType === "NEVERLEAVEONE" ? "STANDARD" : "RESALE",
       list_price: Number((inventory?.listPrice || 0).toFixed(2)),
-=======
-      tags: inventory?.splitType ==='NEVERLEAVEONE'? 'STANDARD' : 'RESALE',
-      list_price: Number(applyPriceAdjustment(inventory?.listPrice || 0).toFixed(2)),
->>>>>>> Stashed changes
       face_price: Number((inventory?.cost || 0).toFixed(2)),
       taxed_cost: Number((inventory?.cost || 0).toFixed(2)),
       cost: Number((inventory?.cost || 0).toFixed(2)),

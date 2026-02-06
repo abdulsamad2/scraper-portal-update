@@ -4,15 +4,13 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { 
   ArrowLeft, Save, Trash2, Plus, Minus, Settings, 
-  AlertTriangle, Info, CheckCircle, X, Target, Filter, TrendingUp 
+  AlertTriangle, Info, CheckCircle, X, Filter 
 } from 'lucide-react';
 import { 
   getExclusionRules, 
   saveExclusionRules, 
   getEventSectionsAndRows, 
-  getPricingStatistics,
   SectionRowExclusion,
-  OutlierExclusion,
   ExclusionRulesData 
 } from '@/actions/exclusionActions';
 import { getEventById } from '@/actions/eventActions';
@@ -29,29 +27,16 @@ interface SectionData {
   avgPrice: number;
 }
 
-interface PricingStats {
-  totalListings: number;
-  avgPrice: number;
-  minPrice: number;
-  maxPrice: number;
-  baselineAverage: number;
-  lowestPrices: number[];
-}
+
 
 export default function ExclusionManagementPage({ eventId, eventName }: ExclusionPageProps) {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [sections, setSections] = useState<SectionData[]>([]);
-  const [pricingStats, setPricingStats] = useState<PricingStats | null>(null);
   
   // Exclusion rules state
   const [sectionRowExclusions, setSectionRowExclusions] = useState<SectionRowExclusion[]>([]);
-  const [outlierExclusion, setOutlierExclusion] = useState<OutlierExclusion>({
-    enabled: false,
-    percentageBelowAverage: undefined,
-    baselineListingsCount: undefined
-  });
   
   const [notification, setNotification] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
 
@@ -62,28 +47,20 @@ export default function ExclusionManagementPage({ eventId, eventName }: Exclusio
   const loadData = async () => {
     setLoading(true);
     try {
-      const [rulesResult, sectionsResult, statsResult] = await Promise.all([
+      const [rulesResult, sectionsResult] = await Promise.all([
         getExclusionRules(eventId),
-        getEventSectionsAndRows(eventId),
-        getPricingStatistics(eventId)
+        getEventSectionsAndRows(eventId)
       ]);
 
       if (sectionsResult.success && sectionsResult.data) {
         setSections(sectionsResult.data);
       }
 
-      if (statsResult.success && statsResult.data) {
-        setPricingStats(statsResult.data);
-      }
+
 
       if (rulesResult.success && rulesResult.data) {
         const data = Array.isArray(rulesResult.data) ? rulesResult.data[0] : rulesResult.data;
         setSectionRowExclusions(data?.sectionRowExclusions || []);
-        setOutlierExclusion(data?.outlierExclusion || {
-          enabled: false,
-          percentageBelowAverage: undefined,
-          baselineListingsCount: undefined
-        });
       }
     } catch (error) {
       console.error('Error loading data:', error);
@@ -99,13 +76,6 @@ export default function ExclusionManagementPage({ eventId, eventName }: Exclusio
   };
 
   const handleSave = async () => {
-    // Validate outlier exclusion configuration
-    if (outlierExclusion.enabled) {
-      if (!outlierExclusion.baselineListingsCount || !outlierExclusion.percentageBelowAverage) {
-        showNotification('error', 'Please configure both baseline count and threshold percentage for outlier detection');
-        return;
-      }
-    }
 
     setSaving(true);
     try {
@@ -113,7 +83,6 @@ export default function ExclusionManagementPage({ eventId, eventName }: Exclusio
         eventId,
         eventName,
         sectionRowExclusions,
-        outlierExclusion,
         isActive: true
       };
 
@@ -160,10 +129,7 @@ export default function ExclusionManagementPage({ eventId, eventName }: Exclusio
     updateSectionExclusion(sectionIndex, { excludedRows: newExcludedRows });
   };
 
-  const calculateOutlierThreshold = () => {
-    if (!pricingStats || !outlierExclusion.percentageBelowAverage) return 0;
-    return pricingStats.baselineAverage * (1 - outlierExclusion.percentageBelowAverage / 100);
-  };
+
 
   if (loading) {
     return (
@@ -234,118 +200,8 @@ export default function ExclusionManagementPage({ eventId, eventName }: Exclusio
           </div>
         )}
 
+        {/* Section & Row Exclusions */}
         <div className="space-y-6">
-          {/* Outlier Price Exclusions - Top Card */}
-          <div className="bg-white rounded-2xl shadow-xl border border-slate-200/50 hover:shadow-2xl transition-all duration-300">
-            <div className="p-8 border-b border-slate-200">
-              <h2 className="text-2xl font-bold text-slate-800 mb-2 flex items-center gap-3">
-                <TrendingUp className="text-orange-600" size={24} />
-                Outlier Price Exclusions
-              </h2>
-              <p className="text-slate-600 font-medium">Automatically exclude listings priced below market level</p>
-            </div>
-            
-            <div className="p-8">
-              <div className="flex items-center space-x-3 bg-orange-50 p-4 rounded-xl border border-orange-200 mb-8">
-                <input
-                  type="checkbox"
-                  checked={outlierExclusion.enabled}
-                  onChange={(e) => setOutlierExclusion({ ...outlierExclusion, enabled: e.target.checked })}
-                  className="w-5 h-5 text-orange-600 border-slate-300 rounded focus:ring-orange-500"
-                  id="outlier-enabled"
-                />
-                <label htmlFor="outlier-enabled" className="text-slate-700 font-semibold cursor-pointer">
-                  Enable outlier price exclusions
-                </label>
-              </div>
-
-              {outlierExclusion.enabled && (
-                <div className="space-y-8">
-                  <div>
-                    <label className="block text-sm font-bold text-slate-700 uppercase tracking-wider mb-3">
-                      Baseline Count: <span className="text-orange-600">{outlierExclusion.baselineListingsCount ? `${outlierExclusion.baselineListingsCount} lowest listings` : 'Not set'}</span>
-                    </label>
-                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
-                      <input
-                        type="range"
-                        min="1"
-                        max="10"
-                        value={outlierExclusion.baselineListingsCount || 3}
-                        onChange={(e) => setOutlierExclusion({ 
-                          ...outlierExclusion, 
-                          baselineListingsCount: parseInt(e.target.value) 
-                        })}
-                        className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer"
-                      />
-                      <div className="flex justify-between text-xs text-slate-500 mt-2 font-medium">
-                        <span>1</span>
-                        <span>10</span>
-                      </div>
-                    </div>
-                    {!outlierExclusion.baselineListingsCount && (
-                      <p className="text-red-600 text-xs mt-2 font-semibold">Please select baseline count</p>
-                    )}
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-bold text-slate-700 uppercase tracking-wider mb-3">
-                      Exclusion Threshold: <span className="text-blue-600">{outlierExclusion.percentageBelowAverage ? `${outlierExclusion.percentageBelowAverage}%` : 'Not set'}</span> below baseline
-                    </label>
-                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
-                      <input
-                        type="range"
-                        min="5"
-                        max="30"
-                        step="0.5"
-                        value={outlierExclusion.percentageBelowAverage || 5}
-                        onChange={(e) => setOutlierExclusion({ 
-                          ...outlierExclusion, 
-                          percentageBelowAverage: parseFloat(e.target.value) 
-                        })}
-                        className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer"
-                      />
-                      <div className="flex justify-between text-xs text-slate-500 mt-2 font-medium">
-                        <span>5%</span>
-                        <span>30%</span>
-                      </div>
-                    </div>
-                    {!outlierExclusion.percentageBelowAverage && (
-                      <p className="text-red-600 text-xs mt-2 font-semibold">Please select threshold percentage</p>
-                    )}
-                  </div>
-
-                  {pricingStats && outlierExclusion.percentageBelowAverage && outlierExclusion.baselineListingsCount && (
-                    <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-2xl p-6 shadow-sm">
-                      <h3 className="font-bold text-blue-800 mb-4 flex items-center text-lg">
-                        <Target className="mr-3" size={20} />
-                        Current Pricing Analysis
-                      </h3>
-                      <div className="grid grid-cols-2 gap-6 text-sm">
-                        <div className="space-y-2">
-                          <span className="text-blue-600 font-bold text-xs uppercase tracking-wider">Total Listings:</span>
-                          <p className="text-blue-900 font-bold text-lg">{pricingStats.totalListings}</p>
-                        </div>
-                        <div className="space-y-2">
-                          <span className="text-blue-600 font-bold text-xs uppercase tracking-wider">Average Price:</span>
-                          <p className="text-blue-900 font-bold text-lg">${pricingStats.avgPrice}</p>
-                        </div>
-                        <div className="space-y-2">
-                          <span className="text-blue-600 font-bold text-xs uppercase tracking-wider">Baseline Average:</span>
-                          <p className="text-blue-900 font-bold text-lg">${pricingStats.baselineAverage}</p>
-                        </div>
-                        <div className="space-y-2">
-                          <span className="text-blue-600 font-bold text-xs uppercase tracking-wider">Exclusion Threshold:</span>
-                          <p className="text-blue-900 font-bold text-lg">${calculateOutlierThreshold().toFixed(2)}</p>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Section & Row Exclusions - Second Card */}
           <div className="bg-white rounded-2xl shadow-xl border border-slate-200/50 hover:shadow-2xl transition-all duration-300">
             <div className="p-8 border-b border-slate-200">
               <h2 className="text-2xl font-bold text-slate-800 mb-2 flex items-center gap-3">

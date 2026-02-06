@@ -10,17 +10,10 @@ export interface SectionRowExclusion {
   excludedRows: string[];
 }
 
-export interface OutlierExclusion {
-  enabled: boolean;
-  percentageBelowAverage?: number;
-  baselineListingsCount?: number;
-}
-
 export interface ExclusionRulesData {
   eventId: string;
   eventName: string;
   sectionRowExclusions: SectionRowExclusion[];
-  outlierExclusion: OutlierExclusion;
   isActive: boolean;
 }
 
@@ -29,15 +22,19 @@ export async function getExclusionRules(eventId: string) {
   try {
     await dbConnect();
     const rules = await ExclusionRules.findOne({ eventId, isActive: true }).lean();
-    return { success: true, data: rules };
+    
+    // Convert MongoDB document to plain object
+    const plainRules = rules ? JSON.parse(JSON.stringify(rules)) : null;
+    
+    return { success: true, data: plainRules };
   } catch (error) {
     console.error('Error fetching exclusion rules:', error);
-    await createErrorLog(
-      'EXCLUSION_RULES_FETCH_ERROR',
-      `Failed to fetch exclusion rules for event ${eventId}`,
-      error instanceof Error ? error.message : 'Unknown error',
-      { eventId }
-    );
+    await createErrorLog({
+      errorType: 'EXCLUSION_RULES_FETCH_ERROR',
+      errorMessage: `Failed to fetch exclusion rules for event ${eventId}`,
+      stackTrace: error instanceof Error ? error.message : 'Unknown error',
+      metadata: { eventId }
+    });
     return { success: false, error: 'Failed to fetch exclusion rules' };
   }
 }
@@ -53,19 +50,23 @@ export async function saveExclusionRules(rulesData: ExclusionRulesData) {
       { 
         upsert: true, 
         new: true,
-        runValidators: true 
+        runValidators: true,
+        lean: true
       }
     );
 
-    return { success: true, data: updatedRules };
+    // Convert MongoDB document to plain object
+    const plainRules = updatedRules ? JSON.parse(JSON.stringify(updatedRules)) : null;
+
+    return { success: true, data: plainRules };
   } catch (error) {
     console.error('Error saving exclusion rules:', error);
-    await createErrorLog(
-      'EXCLUSION_RULES_SAVE_ERROR',
-      `Failed to save exclusion rules for event ${rulesData.eventId}`,
-      error instanceof Error ? error.message : 'Unknown error',
-      { eventId: rulesData.eventId, rulesData }
-    );
+    await createErrorLog({
+      errorType: 'EXCLUSION_RULES_SAVE_ERROR',
+      errorMessage: `Failed to save exclusion rules for event ${rulesData.eventId}`,
+      stackTrace: error instanceof Error ? error.message : 'Unknown error',
+      metadata: { eventId: rulesData.eventId, rulesData }
+    });
     return { success: false, error: 'Failed to save exclusion rules' };
   }
 }
@@ -82,12 +83,12 @@ export async function deleteExclusionRules(eventId: string) {
     return { success: true };
   } catch (error) {
     console.error('Error deleting exclusion rules:', error);
-    await createErrorLog(
-      'EXCLUSION_RULES_DELETE_ERROR',
-      `Failed to delete exclusion rules for event ${eventId}`,
-      error instanceof Error ? error.message : 'Unknown error',
-      { eventId }
-    );
+    await createErrorLog({
+      errorType: 'EXCLUSION_RULES_DELETE_ERROR',
+      errorMessage: `Failed to delete exclusion rules for event ${eventId}`,
+      stackTrace: error instanceof Error ? error.message : 'Unknown error',
+      metadata: { eventId }
+    });
     return { success: false, error: 'Failed to delete exclusion rules' };
   }
 }
@@ -126,83 +127,20 @@ export async function getEventSectionsAndRows(eventId: string) {
     ];
 
     const result = await ConsecutiveGroup.aggregate(pipeline);
-    return { success: true, data: result };
+    
+    // Convert MongoDB documents to plain objects
+    const plainResult = result ? JSON.parse(JSON.stringify(result)) : [];
+    
+    return { success: true, data: plainResult };
   } catch (error) {
     console.error('Error fetching sections and rows:', error);
-    await createErrorLog(
-      'SECTIONS_ROWS_FETCH_ERROR',
-      `Failed to fetch sections and rows for event ${eventId}`,
-      error instanceof Error ? error.message : 'Unknown error',
-      { eventId }
-    );
+    await createErrorLog({
+      errorType: 'SECTIONS_ROWS_FETCH_ERROR',
+      errorMessage: `Failed to fetch sections and rows for event ${eventId}`,
+      stackTrace: error instanceof Error ? error.message : 'Unknown error',
+      metadata: { eventId }
+    });
     return { success: false, error: 'Failed to fetch sections and rows' };
   }
 }
 
-// Get pricing statistics for outlier detection
-export async function getPricingStatistics(eventId: string) {
-  try {
-    await dbConnect();
-    
-    // First get the event to find its mapping_id
-    const { Event } = await import('../models/eventModel');
-    const event = await Event.findById(eventId).lean();
-    if (!event || Array.isArray(event) || !('mapping_id' in event)) {
-      return { success: false, error: 'Event not found' };
-    }
-    
-    const pipeline = [
-      { $match: { mapping_id: (event as any).mapping_id } },
-      {
-        $group: {
-          _id: null,
-          prices: { $push: '$inventory.listPrice' },
-          totalListings: { $sum: 1 },
-          avgPrice: { $avg: '$inventory.listPrice' },
-          minPrice: { $min: '$inventory.listPrice' },
-          maxPrice: { $max: '$inventory.listPrice' }
-        }
-      },
-      {
-        $project: {
-          totalListings: 1,
-          avgPrice: { $round: ['$avgPrice', 2] },
-          minPrice: 1,
-          maxPrice: 1,
-          sortedPrices: { $sortArray: { input: '$prices', sortBy: 1 } }
-        }
-      }
-    ];
-
-    const result = await ConsecutiveGroup.aggregate(pipeline);
-    
-    if (result.length === 0) {
-      return { success: true, data: null };
-    }
-
-    const stats = result[0];
-    const sortedPrices = stats.sortedPrices;
-    
-    // Get baseline from lowest 3 prices
-    const baselinePrices = sortedPrices.slice(0, 3);
-    const baselineAvg = baselinePrices.reduce((a: any, b: any) => a + b, 0) / baselinePrices.length;
-    
-    return {
-      success: true,
-      data: {
-        ...stats,
-        baselineAverage: Math.round(baselineAvg * 100) / 100,
-        lowestPrices: baselinePrices
-      }
-    };
-  } catch (error) {
-    console.error('Error fetching pricing statistics:', error);
-    await createErrorLog(
-      'PRICING_STATS_FETCH_ERROR',
-      `Failed to fetch pricing statistics for event ${eventId}`,
-      error instanceof Error ? error.message : 'Unknown error',
-      { eventId }
-    );
-    return { success: false, error: 'Failed to fetch pricing statistics' };
-  }
-}
