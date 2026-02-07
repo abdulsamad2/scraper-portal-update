@@ -5,6 +5,7 @@ import { ConsecutiveGroup } from '@/models/seatModel'; // Assuming models are al
 import { Event } from '@/models/eventModel'; // Assuming models are aliased to @/models
 import { UpdateQuery } from 'mongoose';
 import { revalidatePath } from 'next/cache';
+import { clearInventoryFromSync } from './csvActions';
 
 /**
  * Creates a new consecutive seat group.
@@ -264,9 +265,24 @@ export async function deleteConsecutiveGroupsByEventId(eventId: string) {
     const deleteResult = await ConsecutiveGroup.deleteMany({ eventId: eventId });
     console.log('Delete result:', deleteResult);
     
+    // Also clear inventory from sync service
+    if (deleteResult.deletedCount > 0) {
+      console.log('Clearing inventory from sync service...');
+      try {
+        const syncResult = await clearInventoryFromSync();
+        console.log('Sync clear result:', syncResult);
+        if (!syncResult.success) {
+          console.warn('Failed to clear sync inventory:', syncResult.message);
+        }
+      } catch (syncError) {
+        console.error('Error clearing sync inventory:', syncError);
+        // Don't fail the entire operation if sync clearing fails
+      }
+    }
+    
     revalidatePath('/seat-groups');
     return { 
-      message: `Successfully deleted ${deleteResult.deletedCount} consecutive seat groups for event`, 
+      message: `Successfully deleted ${deleteResult.deletedCount} consecutive seat groups for event and cleared sync inventory`, 
       success: true, 
       deletedCount: deleteResult.deletedCount 
     };
@@ -285,10 +301,26 @@ export async function deleteConsecutiveGroupsByEventIds(eventIds: string[]) {
   await dbConnect();
   try {
     const deleteResult = await ConsecutiveGroup.deleteMany({ eventId: { $in: eventIds } });
+    
+    // Also clear inventory from sync service if any groups were deleted
+    if (deleteResult.deletedCount > 0) {
+      console.log('Clearing inventory from sync service after bulk deletion...');
+      try {
+        const syncResult = await clearInventoryFromSync();
+        console.log('Sync clear result:', syncResult);
+        if (!syncResult.success) {
+          console.warn('Failed to clear sync inventory:', syncResult.message);
+        }
+      } catch (syncError) {
+        console.error('Error clearing sync inventory:', syncError);
+        // Don't fail the entire operation if sync clearing fails
+      }
+    }
+    
     revalidatePath('/seat-groups');
     revalidatePath('/dashboard/inventory');
     return { 
-      message: `Successfully deleted ${deleteResult.deletedCount} consecutive seat groups for ${eventIds.length} events`, 
+      message: `Successfully deleted ${deleteResult.deletedCount} consecutive seat groups for ${eventIds.length} events and cleared sync inventory`, 
       success: true, 
       deletedCount: deleteResult.deletedCount 
     };
