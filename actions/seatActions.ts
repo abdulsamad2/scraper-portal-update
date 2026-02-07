@@ -5,7 +5,7 @@ import { ConsecutiveGroup } from '@/models/seatModel'; // Assuming models are al
 import { Event } from '@/models/eventModel'; // Assuming models are aliased to @/models
 import { UpdateQuery } from 'mongoose';
 import { revalidatePath } from 'next/cache';
-import { clearInventoryFromSync } from './csvActions';
+import { clearInventoryFromSync, deleteInventoryBatchFromSync } from './csvActions';
 
 /**
  * Creates a new consecutive seat group.
@@ -258,31 +258,38 @@ export async function deleteConsecutiveGroupsByEventId(eventId: string) {
   try {
     console.log('Attempting to delete consecutive groups for eventId:', eventId);
     
-    // First, check how many groups exist for this event
-    const existingCount = await ConsecutiveGroup.countDocuments({ eventId: eventId });
-    console.log(`Found ${existingCount} consecutive groups for eventId: ${eventId}`);
+    // First, get the groups to extract inventory IDs for sync deletion
+    const groupsToDelete = await ConsecutiveGroup.find({ eventId: eventId }).lean();
+    console.log(`Found ${groupsToDelete.length} consecutive groups for eventId: ${eventId}`);
+    
+    // Extract inventory IDs (mapping_id field contains the inventory ID)
+    const inventoryIdsToDelete = groupsToDelete
+      .map(group => group.mapping_id)
+      .filter(id => id && id.trim() !== ''); // Filter out empty or null IDs
+    
+    console.log(`Inventory IDs to delete from sync: ${inventoryIdsToDelete.length} items`);
     
     const deleteResult = await ConsecutiveGroup.deleteMany({ eventId: eventId });
     console.log('Delete result:', deleteResult);
     
-    // Also clear inventory from sync service
-    if (deleteResult.deletedCount > 0) {
-      console.log('Clearing inventory from sync service...');
+    // Delete specific inventory items from sync service instead of clearing all
+    if (deleteResult.deletedCount > 0 && inventoryIdsToDelete.length > 0) {
+      console.log('Deleting specific inventory from sync service...');
       try {
-        const syncResult = await clearInventoryFromSync();
-        console.log('Sync clear result:', syncResult);
+        const syncResult = await deleteInventoryBatchFromSync(inventoryIdsToDelete);
+        console.log('Sync deletion result:', syncResult);
         if (!syncResult.success) {
-          console.warn('Failed to clear sync inventory:', syncResult.message);
+          console.warn('Failed to delete inventory from sync:', syncResult.message);
         }
       } catch (syncError) {
-        console.error('Error clearing sync inventory:', syncError);
-        // Don't fail the entire operation if sync clearing fails
+        console.error('Error deleting inventory from sync:', syncError);
+        // Don't fail the entire operation if sync deletion fails
       }
     }
     
     revalidatePath('/seat-groups');
     return { 
-      message: `Successfully deleted ${deleteResult.deletedCount} consecutive seat groups for event and cleared sync inventory`, 
+      message: `Successfully deleted ${deleteResult.deletedCount} consecutive seat groups for event and removed ${inventoryIdsToDelete.length} items from sync inventory`, 
       success: true, 
       deletedCount: deleteResult.deletedCount 
     };
@@ -300,27 +307,41 @@ export async function deleteConsecutiveGroupsByEventId(eventId: string) {
 export async function deleteConsecutiveGroupsByEventIds(eventIds: string[]) {
   await dbConnect();
   try {
-    const deleteResult = await ConsecutiveGroup.deleteMany({ eventId: { $in: eventIds } });
+    console.log(`Attempting to delete consecutive groups for ${eventIds.length} events`);
     
-    // Also clear inventory from sync service if any groups were deleted
-    if (deleteResult.deletedCount > 0) {
-      console.log('Clearing inventory from sync service after bulk deletion...');
+    // First, get the groups to extract inventory IDs for sync deletion
+    const groupsToDelete = await ConsecutiveGroup.find({ eventId: { $in: eventIds } }).lean();
+    console.log(`Found ${groupsToDelete.length} consecutive groups for events: ${eventIds.join(', ')}`);
+    
+    // Extract inventory IDs (mapping_id field contains the inventory ID)
+    const inventoryIdsToDelete = groupsToDelete
+      .map(group => group.mapping_id)
+      .filter(id => id && id.trim() !== ''); // Filter out empty or null IDs
+    
+    console.log(`Inventory IDs to delete from sync: ${inventoryIdsToDelete.length} items`);
+    
+    const deleteResult = await ConsecutiveGroup.deleteMany({ eventId: { $in: eventIds } });
+    console.log('Delete result:', deleteResult);
+    
+    // Delete specific inventory items from sync service instead of clearing all
+    if (deleteResult.deletedCount > 0 && inventoryIdsToDelete.length > 0) {
+      console.log('Deleting specific inventory from sync service after bulk deletion...');
       try {
-        const syncResult = await clearInventoryFromSync();
-        console.log('Sync clear result:', syncResult);
+        const syncResult = await deleteInventoryBatchFromSync(inventoryIdsToDelete);
+        console.log('Sync deletion result:', syncResult);
         if (!syncResult.success) {
-          console.warn('Failed to clear sync inventory:', syncResult.message);
+          console.warn('Failed to delete inventory from sync:', syncResult.message);
         }
       } catch (syncError) {
-        console.error('Error clearing sync inventory:', syncError);
-        // Don't fail the entire operation if sync clearing fails
+        console.error('Error deleting inventory from sync:', syncError);
+        // Don't fail the entire operation if sync deletion fails
       }
     }
     
     revalidatePath('/seat-groups');
     revalidatePath('/dashboard/inventory');
     return { 
-      message: `Successfully deleted ${deleteResult.deletedCount} consecutive seat groups for ${eventIds.length} events and cleared sync inventory`, 
+      message: `Successfully deleted ${deleteResult.deletedCount} consecutive seat groups for ${eventIds.length} events and removed ${inventoryIdsToDelete.length} items from sync inventory`, 
       success: true, 
       deletedCount: deleteResult.deletedCount 
     };

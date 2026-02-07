@@ -754,6 +754,55 @@ export async function clearInventoryFromSync(): Promise<{ success: boolean; mess
   }
 }
 
+export async function deleteInventoryBatchFromSync(inventoryIds: string[]): Promise<{ success: boolean; message: string; successful: string[]; failed: string[] }> {
+  try {
+    // Get sync service credentials from environment variables
+    const companyId = process.env.SYNC_COMPANY_ID;
+    const apiToken = process.env.SYNC_API_TOKEN;
+    
+    if (!companyId || !apiToken) {
+      throw new Error('Sync service credentials not configured. Please set SYNC_COMPANY_ID and SYNC_API_TOKEN environment variables.');
+    }
+    
+    if (!inventoryIds || inventoryIds.length === 0) {
+      return {
+        success: true,
+        message: 'No inventory IDs provided for deletion',
+        successful: [],
+        failed: []
+      };
+    }
+    
+    // Initialize sync service
+    const syncService = new SyncService(companyId, apiToken);
+    
+    // Delete specific inventory items
+    const result = await syncService.deleteInventoryBatch(inventoryIds);
+    
+    if ('success' in result && result.success) {
+      console.log(`Successfully deleted ${inventoryIds.length} inventory items from sync service`);
+      
+      return {
+        success: true,
+        message: `Successfully deleted ${inventoryIds.length} inventory items from sync service`,
+        successful: inventoryIds,
+        failed: []
+      };
+    } else {
+      throw new Error((result as { message?: string })?.message || 'Batch inventory deletion failed');
+    }
+  } catch (error) {
+    console.error('Error deleting inventory batch from sync service:', error);
+    
+    return {
+      success: false,
+      message: `Failed to delete inventory batch from sync service: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      successful: [],
+      failed: inventoryIds
+    };
+  }
+}
+
 // Database settings functions
 export async function getSchedulerSettings() {
   await dbConnect();
