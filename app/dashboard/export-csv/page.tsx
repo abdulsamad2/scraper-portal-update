@@ -102,7 +102,6 @@ const ExportCsvPage: React.FC = () => {
   });
   const [loading, setLoading] = useState<boolean>(false);
   const [performanceMetrics, setPerformanceMetrics] = useState<PerformanceMetrics | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
   const [clearStatus, setClearStatus] = useState('');
   const [isClearingInventory, setIsClearingInventory] = useState(false);
   const [staleCleanupStatus, setStaleCleanupStatus] = useState('');
@@ -151,8 +150,6 @@ const ExportCsvPage: React.FC = () => {
       } catch (error) {
         console.error('Failed to load settings:', error);
         showMessage('Failed to load scheduler settings', 'error');
-      } finally {
-        setIsLoading(false);
       }
     };
     
