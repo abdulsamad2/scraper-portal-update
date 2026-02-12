@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import moment from 'moment';
 import { Download, Upload } from 'lucide-react';
-import { generateInventoryCsv, uploadCsvToSyncService } from '../../../actions/csvActions';
+import { generateInventoryCsv } from '../../../actions/csvActions';
 import { deleteStaleInventory } from '../../../actions/seatActions';
 
 // Simple toast notification function
@@ -66,6 +66,27 @@ interface LastRunStats {
   errors?: string[];
 }
 
+interface PerformanceMetrics {
+  totalRuns?: number;
+  lastGenerated?: string;
+  lastRunTime?: string;
+  nextRunTime?: string;
+  lastUploadAt?: string;
+  lastUploadStatus?: string;
+  lastUploadId?: string;
+  lastUploadError?: string;
+  lastClearAt?: string;
+  lastCsvGenerated?: string;
+  lastRunAt?: string;
+  nextRunAt?: string;
+  lastManualGeneration?: {
+    recordCount: number;
+    generationTime: number;
+    totalTime?: number;
+    timestamp: string;
+  };
+}
+
 const ExportCsvPage: React.FC = () => {
   const [settings, setSettings] = useState<ExportSettings>({
     uploadToSync: false,
@@ -80,9 +101,7 @@ const ExportCsvPage: React.FC = () => {
     status: 'Idle',
   });
   const [loading, setLoading] = useState<boolean>(false);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const [performanceMetrics, setPerformanceMetrics] = useState<any>(null);
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [performanceMetrics, setPerformanceMetrics] = useState<PerformanceMetrics | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [clearStatus, setClearStatus] = useState('');
   const [isClearingInventory, setIsClearingInventory] = useState(false);
@@ -188,23 +207,7 @@ const ExportCsvPage: React.FC = () => {
         showMessage(`CSV generated and downloaded successfully! ${result.recordCount || 'Records'} processed in ${result.generationTime || totalTime}ms`, 'success');
         
         // Update performance metrics
-        setPerformanceMetrics((prev: {
-          totalRuns?: number;
-          lastRunAt?: string;
-          nextRunAt?: string;
-          lastCsvGenerated?: string;
-          lastUploadAt?: string;
-          lastUploadStatus?: string;
-          lastUploadId?: string;
-          lastUploadError?: string;
-          lastClearAt?: string;
-          lastManualGeneration?: {
-            recordCount: number;
-            generationTime: number;
-            totalTime: number;
-            timestamp: string;
-          };
-        }) => ({
+        setPerformanceMetrics((prev: PerformanceMetrics | null) => ({
           ...prev,
           lastManualGeneration: {
             recordCount: result.recordCount,
@@ -217,7 +220,6 @@ const ExportCsvPage: React.FC = () => {
         setCsvStatus(prev => ({ ...prev, status: 'Generation failed' }));
         showMessage(result.message || 'Failed to generate CSV', 'error');
       }
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     } catch (error) {
       console.error('CSV Generation Error:', error);
       setCsvStatus(prev => ({ ...prev, status: 'Generation failed' }));
@@ -258,7 +260,7 @@ const ExportCsvPage: React.FC = () => {
         }));
         
         // Update performance metrics with the upload info
-        setPerformanceMetrics((prev: any) => ({
+        setPerformanceMetrics((prev: PerformanceMetrics | null) => ({
           ...prev,
           lastUploadAt: new Date().toISOString(),
           lastUploadStatus: 'success',
