@@ -637,7 +637,7 @@ export async function uploadCsvToSyncService(csvContent: string): Promise<{ succ
       // Upload CSV content to sync service with timeout
       const uploadPromise = syncService.uploadCsvContentToSync(csvContent);
       const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('Upload timeout after 30 seconds')), 30000);
+        setTimeout(() => reject(new Error('Upload timeout after 180 seconds')), 180000);
       });
       // eslint-disable-next-line @typescript-eslint/ban-ts-comment
       const result = await Promise.race([uploadPromise, timeoutPromise]) as any;
@@ -779,14 +779,37 @@ export async function deleteInventoryBatchFromSync(inventoryIds: string[]): Prom
     // Delete specific inventory items
     const result = await syncService.deleteInventoryBatch(inventoryIds);
     
-    if ('success' in result && result.success) {
-      console.log(`Successfully deleted ${inventoryIds.length} inventory items from sync service`);
+    console.log('Raw sync service response:', JSON.stringify(result, null, 2));
+    
+    // Check the actual deletion count from the response
+    const deletedCount = (result as { deleted?: number })?.deleted ?? 0;
+    const totalRequested = inventoryIds.length;
+    
+    console.log(`Sync service deletion summary: ${deletedCount}/${totalRequested} items deleted`);
+    
+    if (deletedCount === 0) {
+      console.warn('⚠️  No items were deleted from sync service. This could mean:');
+      console.warn('   - Inventory IDs do not exist in sync service');
+      console.warn('   - Items were already deleted');
+      console.warn('   - API endpoint format issue');
+    }
+    
+    // If we get here without an error, sync service reported success
+    // Check common success indicators or assume success if no error was thrown
+    const isSuccess = ('success' in result && result.success) || 
+                      ('status' in result && result.status === 'success') ||
+                      ('error' in result && !result.error) ||
+                      !('error' in result); // If no explicit error field, assume success
+    
+    if (isSuccess) {
+      const actuallyDeleted = (result as { deleted?: number })?.deleted ?? 0;
+      console.log(`Successfully processed deletion request: ${actuallyDeleted}/${inventoryIds.length} inventory items deleted from sync service`);
       
       return {
         success: true,
-        message: `Successfully deleted ${inventoryIds.length} inventory items from sync service`,
-        successful: inventoryIds,
-        failed: []
+        message: `Successfully processed deletion request: ${actuallyDeleted}/${inventoryIds.length} inventory items deleted from sync service`,
+        successful: actuallyDeleted > 0 ? inventoryIds.slice(0, actuallyDeleted) : [],
+        failed: actuallyDeleted < inventoryIds.length ? inventoryIds.slice(actuallyDeleted) : []
       };
     } else {
       throw new Error((result as { message?: string })?.message || 'Batch inventory deletion failed');

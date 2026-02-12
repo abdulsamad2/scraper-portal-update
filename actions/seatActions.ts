@@ -262,12 +262,15 @@ export async function deleteConsecutiveGroupsByEventId(eventId: string) {
     const groupsToDelete = await ConsecutiveGroup.find({ eventId: eventId }).lean();
     console.log(`Found ${groupsToDelete.length} consecutive groups for eventId: ${eventId}`);
     
-    // Extract inventory IDs (mapping_id field contains the inventory ID)
+    // Extract inventory IDs (use inventory.inventoryId for unique inventory identification)
     const inventoryIdsToDelete = groupsToDelete
-      .map(group => group.mapping_id)
+      .map(group => group.inventory?.inventoryId?.toString())
       .filter(id => id && id.trim() !== ''); // Filter out empty or null IDs
     
     console.log(`Inventory IDs to delete from sync: ${inventoryIdsToDelete.length} items`);
+    if (inventoryIdsToDelete.length > 0) {
+      console.log('Sample inventory IDs:', inventoryIdsToDelete.slice(0, 5)); // Show first 5 for debugging
+    }
     
     const deleteResult = await ConsecutiveGroup.deleteMany({ eventId: eventId });
     console.log('Delete result:', deleteResult);

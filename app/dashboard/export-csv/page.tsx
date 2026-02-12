@@ -218,9 +218,11 @@ const ExportCsvPage: React.FC = () => {
         showMessage(result.message || 'Failed to generate CSV', 'error');
       }
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    } catch (_error) {
+    } catch (error) {
+      console.error('CSV Generation Error:', error);
       setCsvStatus(prev => ({ ...prev, status: 'Generation failed' }));
-      showMessage('Error generating CSV', 'error');
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error generating CSV';
+      showMessage(`Error generating CSV: ${errorMessage}`, 'error');
     } finally {
       setLoading(false);
     }
@@ -230,25 +232,54 @@ const ExportCsvPage: React.FC = () => {
     setLoading(true);
     showMessage('Uploading CSV...', 'info');
     try {
-      // In a real application, you would get the latest generated CSV content to upload
-      // For now, we'll assume it's available or re-generate if needed.
-      const generateResult = await generateInventoryCsv(settings.eventUpdateFilterMinutes);
-      if (!generateResult.success || !generateResult.csv) {
-        showMessage(generateResult.message || 'Failed to get CSV content for upload.', 'error');
-        setLoading(false);
-        return;
-      }
+      // Call the API route that handles both generation and upload server-side
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 minute timeout
 
-      const uploadResult = await uploadCsvToSyncService(generateResult.csv);
-      if (uploadResult.success) {
+      const response = await fetch('/api/export-csv', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          eventUpdateFilterMinutes: settings.eventUpdateFilterMinutes 
+        }),
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
+      
+      const result = await response.json();
+      
+      if (result.success) {
         showMessage('CSV uploaded to sync service successfully!', 'success');
-        setCsvStatus(prev => ({ ...prev, lastUpload: moment().toISOString(), status: 'Uploaded' }));
+        setCsvStatus(prev => ({ 
+          ...prev, 
+          lastUpload: moment().toISOString(), 
+          status: 'Uploaded' 
+        }));
+        
+        // Update performance metrics with the upload info
+        setPerformanceMetrics((prev: any) => ({
+          ...prev,
+          lastUploadAt: new Date().toISOString(),
+          lastUploadStatus: 'success',
+          lastUploadId: result.uploadId,
+          lastManualGeneration: {
+            recordCount: result.recordCount,
+            generationTime: result.generationTime,
+            timestamp: new Date().toISOString()
+          }
+        }));
       } else {
-        showMessage(uploadResult.message || 'Failed to upload CSV.', 'error');
+        showMessage(result.message || 'Failed to upload CSV.', 'error');
       }
     } catch (error) {
-      console.error('Error uploading CSV:', error);
-      showMessage('Error uploading CSV.', 'error');
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.error('Request timed out:', error);
+        showMessage('Upload request timed out. Please try again.', 'error');
+      } else {
+        console.error('Error uploading CSV:', error);
+        showMessage('Error uploading CSV.', 'error');
+      }
     }
     setLoading(false);
   };
