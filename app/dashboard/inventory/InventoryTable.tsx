@@ -13,7 +13,7 @@ export interface InventoryRow {
   //@ts-nocheck
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   inventory?: any; // Contains all inventory and event details now
-  isDeleted?: boolean;
+  status?: 'active' | 'deleted'; // Explicit variant instead of boolean
   deletedAt?: Date;
 }
 
@@ -26,32 +26,51 @@ interface DeletedItem {
   deletedAt: Date;
 }
 
-// Helper component for tooltips
-const Tooltip = ({ text, children }: { text: string; children: React.ReactNode }) => (
-  <div className="group relative flex cursor-pointer items-center">
-    {children}
-    <div className="absolute bottom-full left-1/2 z-10 mb-2 w-48 -translate-x-1/2 transform rounded-lg bg-gray-700 p-2 text-center text-xs text-white opacity-0 transition-opacity group-hover:opacity-100">
-      {text}
-    </div>
-  </div>
-);
-
-// Info icon for tooltips
-const InfoIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="ml-1.5 h-4 w-4 text-gray-400">
-    <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
-  </svg>
-);
-
-// Custom header with tooltip
-const CustomHeader = ({ title, description }: { title: string; description: string }) => (
-  <Tooltip text={description}>
+// Compound component for table headers
+const TableHeader = {
+  Root: ({ children }: { children: React.ReactNode }) => (
     <div className="flex items-center">
-      <span className="font-semibold">{title}</span>
-      <InfoIcon />
+      {children}
     </div>
-  </Tooltip>
-);
+  ),
+  
+  Title: ({ children }: { children: React.ReactNode }) => (
+    <span className="font-semibold">{children}</span>
+  ),
+  
+  Tooltip: ({ text, children }: { text: string; children: React.ReactNode }) => (
+    <div className="group relative flex cursor-pointer items-center">
+      {children}
+      <div className="absolute bottom-full left-1/2 z-10 mb-2 w-48 -translate-x-1/2 transform rounded-lg bg-gray-700 p-2 text-center text-xs text-white opacity-0 transition-opacity group-hover:opacity-100">
+        {text}
+      </div>
+    </div>
+  ),
+  
+  Icon: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="ml-1.5 h-4 w-4 text-gray-400">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
+    </svg>
+  )
+};
+
+// Row status variants instead of boolean conditions
+const RowStatus = {
+  Active: ({ children }: { children: React.ReactNode }) => (
+    <div className="opacity-100">{children}</div>
+  ),
+  
+  Deleted: ({ children, deletedAt }: { children: React.ReactNode; deletedAt?: Date }) => (
+    <div className="opacity-50 bg-red-50 border-l-4 border-red-400 px-2">
+      <div className="flex items-center justify-between">
+        <div>{children}</div>
+        <div className="text-xs text-red-600 font-medium">
+          Deleted {deletedAt ? new Date(deletedAt).toLocaleTimeString() : ''}
+        </div>
+      </div>
+    </div>
+  )
+};
 
 
 const InventoryTable: React.FC<InventoryTableProps> = ({ data }) => {
@@ -85,44 +104,94 @@ const InventoryTable: React.FC<InventoryTableProps> = ({ data }) => {
     return () => clearInterval(interval);
   }, []);
 
-  // Combine current data with recently deleted items
+  // Combine current data with recently deleted items using explicit status
   const displayData = [
-    ...data,
+    ...data.map(item => ({ ...item, status: 'active' as const })),
     ...deletedItems.map(deletedItem => {
       const originalItem = previousData.find(item => item._id === deletedItem.id);
       return originalItem ? {
         ...originalItem,
-        isDeleted: true,
+        status: 'deleted' as const,
         deletedAt: deletedItem.deletedAt
       } : null;
     }).filter(Boolean) as InventoryRow[]
   ];
   const columns: TableColumn<InventoryRow>[] = [
     {
-      name: <CustomHeader title="Event Name" description="The name of the event. Click to view event details." />,
+      name: (
+        <TableHeader.Tooltip text="The name of the event. Click to view event details.">
+          <TableHeader.Root>
+            <TableHeader.Title>Event Name</TableHeader.Title>
+            <TableHeader.Icon />
+          </TableHeader.Root>
+        </TableHeader.Tooltip>
+      ),
       width: "200px",
       sortable: true,
       
       cell: (row) => {
         const eventName = row.inventory?.event_name;
         const eventId = row.inventory?.eventId;
-        return eventName && eventId ? (
+        const content = eventName && eventId ? (
           <Link href={`/dashboard/events/${eventId}`} className="text-blue-600 hover:underline font-medium">
             {eventName}
           </Link>
         ) : (
           eventName || '—'
         );
+        
+        // Use explicit status variants
+        return row.status === 'deleted' 
+          ? <RowStatus.Deleted deletedAt={row.deletedAt}>{content}</RowStatus.Deleted>
+          : <RowStatus.Active>{content}</RowStatus.Active>;
       },
     },
-    { name: <CustomHeader title="Inventory ID" description="The unique identifier for this inventory lot from the source." />, selector: (r) => r.inventory?.inventoryId ?? "-", sortable: true, width: "120px" },
-    {
-      name: <CustomHeader title="Venue" description="The location where the event is held." />,
-      selector: (row) => row.inventory?.venue_name || "-",
-      width: "180px",
+    { 
+      name: (
+        <TableHeader.Tooltip text="The unique identifier for this inventory lot from the source.">
+          <TableHeader.Root>
+            <TableHeader.Title>Inventory ID</TableHeader.Title>
+            <TableHeader.Icon />
+          </TableHeader.Root>
+        </TableHeader.Tooltip>
+      ),
+      selector: (r) => r.inventory?.inventoryId ?? "-", 
+      sortable: true, 
+      width: "120px",
+      cell: (row) => {
+        const content = row.inventory?.inventoryId ?? "-";
+        return row.status === 'deleted'
+          ? <RowStatus.Deleted deletedAt={row.deletedAt}>{content}</RowStatus.Deleted>
+          : <RowStatus.Active>{content}</RowStatus.Active>;
+      }
     },
     {
-      name: <CustomHeader title="Event Date" description="The date of the event." />,
+      name: (
+        <TableHeader.Tooltip text="The location where the event is held.">
+          <TableHeader.Root>
+            <TableHeader.Title>Venue</TableHeader.Title>
+            <TableHeader.Icon />
+          </TableHeader.Root>
+        </TableHeader.Tooltip>
+      ),
+      selector: (row) => row.inventory?.venue_name || "-",
+      width: "180px",
+      cell: (row) => {
+        const content = row.inventory?.venue_name || "-";
+        return row.status === 'deleted'
+          ? <RowStatus.Deleted deletedAt={row.deletedAt}>{content}</RowStatus.Deleted>
+          : <RowStatus.Active>{content}</RowStatus.Active>;
+      }
+    },
+    {
+      name: (
+        <TableHeader.Tooltip text="The date of the event.">
+          <TableHeader.Root>
+            <TableHeader.Title>Event Date</TableHeader.Title>
+            <TableHeader.Icon />
+          </TableHeader.Root>
+        </TableHeader.Tooltip>
+      ),
       selector: (row) => row.inventory?.event_date,
       format: (r) =>
         r.inventory?.event_date
@@ -130,24 +199,243 @@ const InventoryTable: React.FC<InventoryTableProps> = ({ data }) => {
           : "-",
       sortable: true,
       width: "120px",
+      cell: (row) => {
+        const content = row.inventory?.event_date
+          ? new Date(row.inventory.event_date).toLocaleDateString()
+          : "-";
+        return row.status === 'deleted'
+          ? <RowStatus.Deleted deletedAt={row.deletedAt}>{content}</RowStatus.Deleted>
+          : <RowStatus.Active>{content}</RowStatus.Active>;
+      }
     },
-    { name: <CustomHeader title="Section" description="The section of the seating." />, selector: (r) => r.inventory?.section || r.section || "", sortable: true, width: "100px" },
-    { name: <CustomHeader title="Row" description="The row of the seating." />, selector: (r) => r.inventory?.row || r.row || "", sortable: true, width: "80px" },
-    { name: <CustomHeader title="Seat Count" description="The number of seats in this group." />, selector: (r) => r.seatCount ?? 0, sortable: true, right: true, width: "100px" },
-    { name: <CustomHeader title="Seat Range" description="The range of seat numbers." />, selector: (r) => r.seatRange || "-", width: "120px" },
+    { 
+      name: (
+        <TableHeader.Tooltip text="The section of the seating.">
+          <TableHeader.Root>
+            <TableHeader.Title>Section</TableHeader.Title>
+            <TableHeader.Icon />
+          </TableHeader.Root>
+        </TableHeader.Tooltip>
+      ),
+      selector: (r) => r.inventory?.section || r.section || "", 
+      sortable: true, 
+      width: "100px",
+      cell: (row) => {
+        const content = row.inventory?.section || row.section || "";
+        return row.status === 'deleted'
+          ? <RowStatus.Deleted deletedAt={row.deletedAt}>{content}</RowStatus.Deleted>
+          : <RowStatus.Active>{content}</RowStatus.Active>;
+      }
+    },
+    { 
+      name: (
+        <TableHeader.Tooltip text="The row of the seating.">
+          <TableHeader.Root>
+            <TableHeader.Title>Row</TableHeader.Title>
+            <TableHeader.Icon />
+          </TableHeader.Root>
+        </TableHeader.Tooltip>
+      ),
+      selector: (r) => r.inventory?.row || r.row || "", 
+      sortable: true, 
+      width: "80px",
+      cell: (row) => {
+        const content = row.inventory?.row || row.row || "";
+        return row.status === 'deleted'
+          ? <RowStatus.Deleted deletedAt={row.deletedAt}>{content}</RowStatus.Deleted>
+          : <RowStatus.Active>{content}</RowStatus.Active>;
+      }
+    },
+    { 
+      name: (
+        <TableHeader.Tooltip text="The number of seats in this group.">
+          <TableHeader.Root>
+            <TableHeader.Title>Seat Count</TableHeader.Title>
+            <TableHeader.Icon />
+          </TableHeader.Root>
+        </TableHeader.Tooltip>
+      ),
+      selector: (r) => r.seatCount ?? 0, 
+      sortable: true, 
+      right: true, 
+      width: "100px",
+      cell: (row) => {
+        const content = (row.seatCount ?? 0).toString();
+        return row.status === 'deleted'
+          ? <RowStatus.Deleted deletedAt={row.deletedAt}>{content}</RowStatus.Deleted>
+          : <RowStatus.Active>{content}</RowStatus.Active>;
+      }
+    },
+    { 
+      name: (
+        <TableHeader.Tooltip text="The range of seat numbers.">
+          <TableHeader.Root>
+            <TableHeader.Title>Seat Range</TableHeader.Title>
+            <TableHeader.Icon />
+          </TableHeader.Root>
+        </TableHeader.Tooltip>
+      ),
+      selector: (r) => r.seatRange || "-", 
+      width: "120px",
+      cell: (row) => {
+        const content = row.seatRange || "-";
+        return row.status === 'deleted'
+          ? <RowStatus.Deleted deletedAt={row.deletedAt}>{content}</RowStatus.Deleted>
+          : <RowStatus.Active>{content}</RowStatus.Active>;
+      }
+    },
     {
-      name: <CustomHeader title="Hide Seats" description="Whether the seat numbers are hidden from buyers." />,
+      name: (
+        <TableHeader.Tooltip text="Whether the seat numbers are hidden from buyers.">
+          <TableHeader.Root>
+            <TableHeader.Title>Hide Seats</TableHeader.Title>
+            <TableHeader.Icon />
+          </TableHeader.Root>
+        </TableHeader.Tooltip>
+      ),
       selector: (r) => (r.inventory?.hideSeatNumbers ? "Yes" : "No"),
       sortable: true,
       width: "100px",
+      cell: (row) => {
+        const content = row.inventory?.hideSeatNumbers ? "Yes" : "No";
+        return row.status === 'deleted'
+          ? <RowStatus.Deleted deletedAt={row.deletedAt}>{content}</RowStatus.Deleted>
+          : <RowStatus.Active>{content}</RowStatus.Active>;
+      }
     },
-    { name: <CustomHeader title="Cost" description="The cost of the tickets." />, selector: (r) => r.inventory?.cost.toFixed(2) ?? 0, sortable: true, right: true, width: "80px" },
-    { name: <CustomHeader title="List Price" description="The price at which the tickets are listed for sale." />, selector: (r) => r.inventory?.listPrice.toFixed(2) ?? "-", sortable: true, right: true, width: "100px" },
-    { name: <CustomHeader title="Stock Type" description="The type of ticket stock (e.g., Mobile, Hard)." />, selector: (r) => r.inventory?.stockType ?? "-", sortable: true, width: "120px" },
-    { name: <CustomHeader title="Split Type" description="How the group of tickets can be split (e.g., Any, Even)." />, selector: (r) => r.inventory?.splitType ?? "-", width: "120px" },
-    { name: <CustomHeader title="Public Notes" description="Notes visible to the public." />, selector: (r) => r.inventory?.publicNotes ?? "-", width: "200px" },
-    { name: <CustomHeader title="Instant Transfer" description="Whether the tickets are available for instant transfer." />, selector: (r) => (r.inventory?.instant_transfer ? "Yes" : "No"), sortable: true, width: "120px" },
-    { name: <CustomHeader title="Files Available" description="Whether ticket files are available." />, selector: (r) => (r.inventory?.files_available ? "Yes" : "No"), sortable: true, width: "120px" },
+    { 
+      name: (
+        <TableHeader.Tooltip text="The cost of the tickets.">
+          <TableHeader.Root>
+            <TableHeader.Title>Cost</TableHeader.Title>
+            <TableHeader.Icon />
+          </TableHeader.Root>
+        </TableHeader.Tooltip>
+      ),
+      selector: (r) => r.inventory?.cost?.toFixed(2) ?? "0", 
+      sortable: true, 
+      right: true, 
+      width: "80px",
+      cell: (row) => {
+        const content = row.inventory?.cost?.toFixed(2) ?? "0";
+        return row.status === 'deleted'
+          ? <RowStatus.Deleted deletedAt={row.deletedAt}>{content}</RowStatus.Deleted>
+          : <RowStatus.Active>{content}</RowStatus.Active>;
+      }
+    },
+    { 
+      name: (
+        <TableHeader.Tooltip text="The price at which the tickets are listed for sale.">
+          <TableHeader.Root>
+            <TableHeader.Title>List Price</TableHeader.Title>
+            <TableHeader.Icon />
+          </TableHeader.Root>
+        </TableHeader.Tooltip>
+      ),
+      selector: (r) => r.inventory?.listPrice?.toFixed(2) ?? "-", 
+      sortable: true, 
+      right: true, 
+      width: "100px",
+      cell: (row) => {
+        const content = row.inventory?.listPrice?.toFixed(2) ?? "-";
+        return row.status === 'deleted'
+          ? <RowStatus.Deleted deletedAt={row.deletedAt}>{content}</RowStatus.Deleted>
+          : <RowStatus.Active>{content}</RowStatus.Active>;
+      }
+    },
+    { 
+      name: (
+        <TableHeader.Tooltip text="The type of ticket stock (e.g., Mobile, Hard).">
+          <TableHeader.Root>
+            <TableHeader.Title>Stock Type</TableHeader.Title>
+            <TableHeader.Icon />
+          </TableHeader.Root>
+        </TableHeader.Tooltip>
+      ),
+      selector: (r) => r.inventory?.stockType ?? "-", 
+      sortable: true, 
+      width: "120px",
+      cell: (row) => {
+        const content = row.inventory?.stockType ?? "-";
+        return row.status === 'deleted'
+          ? <RowStatus.Deleted deletedAt={row.deletedAt}>{content}</RowStatus.Deleted>
+          : <RowStatus.Active>{content}</RowStatus.Active>;
+      }
+    },
+    { 
+      name: (
+        <TableHeader.Tooltip text="How the group of tickets can be split (e.g., Any, Even).">
+          <TableHeader.Root>
+            <TableHeader.Title>Split Type</TableHeader.Title>
+            <TableHeader.Icon />
+          </TableHeader.Root>
+        </TableHeader.Tooltip>
+      ),
+      selector: (r) => r.inventory?.splitType ?? "-", 
+      width: "120px",
+      cell: (row) => {
+        const content = row.inventory?.splitType ?? "-";
+        return row.status === 'deleted'
+          ? <RowStatus.Deleted deletedAt={row.deletedAt}>{content}</RowStatus.Deleted>
+          : <RowStatus.Active>{content}</RowStatus.Active>;
+      }
+    },
+    { 
+      name: (
+        <TableHeader.Tooltip text="Notes visible to the public.">
+          <TableHeader.Root>
+            <TableHeader.Title>Public Notes</TableHeader.Title>
+            <TableHeader.Icon />
+          </TableHeader.Root>
+        </TableHeader.Tooltip>
+      ),
+      selector: (r) => r.inventory?.publicNotes ?? "-", 
+      width: "200px",
+      cell: (row) => {
+        const content = row.inventory?.publicNotes ?? "-";
+        return row.status === 'deleted'
+          ? <RowStatus.Deleted deletedAt={row.deletedAt}>{content}</RowStatus.Deleted>
+          : <RowStatus.Active>{content}</RowStatus.Active>;
+      }
+    },
+    { 
+      name: (
+        <TableHeader.Tooltip text="Whether the tickets are available for instant transfer.">
+          <TableHeader.Root>
+            <TableHeader.Title>Instant Transfer</TableHeader.Title>
+            <TableHeader.Icon />
+          </TableHeader.Root>
+        </TableHeader.Tooltip>
+      ),
+      selector: (r) => (r.inventory?.instant_transfer ? "Yes" : "No"), 
+      sortable: true, 
+      width: "120px",
+      cell: (row) => {
+        const content = row.inventory?.instant_transfer ? "Yes" : "No";
+        return row.status === 'deleted'
+          ? <RowStatus.Deleted deletedAt={row.deletedAt}>{content}</RowStatus.Deleted>
+          : <RowStatus.Active>{content}</RowStatus.Active>;
+      }
+    },
+    { 
+      name: (
+        <TableHeader.Tooltip text="Whether ticket files are available.">
+          <TableHeader.Root>
+            <TableHeader.Title>Files Available</TableHeader.Title>
+            <TableHeader.Icon />
+          </TableHeader.Root>
+        </TableHeader.Tooltip>
+      ),
+      selector: (r) => (r.inventory?.files_available ? "Yes" : "No"), 
+      sortable: true, 
+      width: "120px",
+      cell: (row) => {
+        const content = row.inventory?.files_available ? "Yes" : "No";
+        return row.status === 'deleted'
+          ? <RowStatus.Deleted deletedAt={row.deletedAt}>{content}</RowStatus.Deleted>
+          : <RowStatus.Active>{content}</RowStatus.Active>;
+      }
+    },
   ];
 
   const tableRef = useRef<HTMLDivElement>(null);
@@ -251,7 +539,7 @@ const InventoryTable: React.FC<InventoryTableProps> = ({ data }) => {
   // Custom row styling for deleted items
   const conditionalRowStyles = [
     {
-      when: (row: InventoryRow) => row.isDeleted === true,
+      when: (row: InventoryRow) => row.status === 'deleted',
       style: {
         backgroundColor: '#fee2e2',
         color: '#991b1b',

@@ -2,7 +2,7 @@
 
 import React from 'react'
 import { useRouter } from 'next/navigation'
-import NewScraper from '@/app/dashboard/list-event/NewScraper'
+import { EditEventForm } from '@/app/dashboard/list-event/NewScraper'
 
 interface EditEventWrapperProps {
   initialData: Record<string, unknown> | null
@@ -19,11 +19,11 @@ const EditEventWrapper: React.FC<EditEventWrapperProps> = ({ initialData }) => {
     router.push('/dashboard/events')
   }
 
+  // Use explicit EditEventForm component instead of boolean prop
   return (
-    <NewScraper 
+    <EditEventForm 
       onCancel={handleCancel} 
       onSuccess={handleSuccess} 
-      isEdit={true} 
       initialData={initialData as never} 
     />
   )

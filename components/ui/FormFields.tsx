@@ -1,0 +1,413 @@
+'use client';
+import React from 'react';
+import { AlertCircle, CheckCircle, Globe, Hash, Tag, Calendar, Clock, MapPin, Ticket } from 'lucide-react';
+
+// Explicit validation status variants instead of boolean props
+const FieldStatus = {
+  Untouched: ({ children }: { children: React.ReactNode }) => children,
+  
+  Valid: ({ children }: { children: React.ReactNode }) => (
+    <div className="relative">
+      {children}
+      <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+        <CheckCircle className="h-5 w-5 text-green-500" />
+      </div>
+    </div>
+  ),
+  
+  Invalid: ({ children, error }: { children: React.ReactNode; error?: string }) => (
+    <div>
+      <div className="relative">
+        {children}
+        <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+          <AlertCircle className="h-5 w-5 text-red-500" />
+        </div>
+      </div>
+      {error && (
+        <p className="mt-1 text-sm text-red-600 flex items-center gap-1">
+          <AlertCircle className="h-3 w-3" />
+          {error}
+        </p>
+      )}
+    </div>
+  )
+};
+
+// Compound component for form fields
+export const FormField = {
+  Root: ({ children }: { children: React.ReactNode }) => (
+    <div className="space-y-1">
+      {children}
+    </div>
+  ),
+  
+  Label: ({ htmlFor, required, children }: { 
+    htmlFor: string; 
+    required?: boolean; 
+    children: React.ReactNode 
+  }) => (
+    <label htmlFor={htmlFor} className="block text-sm font-medium text-gray-700">
+      {children}
+      {required && <span className="text-red-500 ml-1">*</span>}
+    </label>
+  ),
+  
+  Input: ({ 
+    status, 
+    error, 
+    icon, 
+    ...props 
+  }: { 
+    status: 'untouched' | 'valid' | 'invalid';
+    error?: string;
+    icon?: React.ReactNode;
+  } & React.InputHTMLAttributes<HTMLInputElement>) => {
+    const getStatusClass = () => {
+      switch (status) {
+        case 'invalid':
+          return 'border-red-500 bg-red-50';
+        case 'valid':
+          return 'border-green-500 bg-green-50';
+        default:
+          return 'border-gray-300';
+      }
+    };
+
+    const input = (
+      <input
+        {...props}
+        className={`w-full ${icon ? 'pl-10' : 'pl-4'} pr-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-colors ${getStatusClass()}`}
+      />
+    );
+
+    const inputWithIcon = icon ? (
+      <div className="relative">
+        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+          {icon}
+        </div>
+        {input}
+      </div>
+    ) : input;
+
+    // Use explicit status variants
+    switch (status) {
+      case 'valid':
+        return <FieldStatus.Valid>{inputWithIcon}</FieldStatus.Valid>;
+      case 'invalid':
+        return <FieldStatus.Invalid error={error}>{inputWithIcon}</FieldStatus.Invalid>;
+      default:
+        return <FieldStatus.Untouched>{inputWithIcon}</FieldStatus.Untouched>;
+    }
+  },
+  
+  Checkbox: ({ 
+    status, 
+    ...props 
+  }: { 
+    status: 'untouched' | 'valid' | 'invalid';
+  } & React.InputHTMLAttributes<HTMLInputElement>) => (
+    <input
+      {...props}
+      type="checkbox"
+      className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+    />
+  ),
+  
+  Help: ({ children }: { children: React.ReactNode }) => (
+    <p className="text-xs text-gray-500">
+      {children}
+    </p>
+  )
+};
+
+// Specific field variants with proper icons
+export const EventFormFields = {
+  URL: ({ name, value, status, error, onChange, onBlur, disabled }: {
+    name: string;
+    value: string;
+    status: 'untouched' | 'valid' | 'invalid';
+    error?: string;
+    onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+    onBlur: (e: React.FocusEvent<HTMLInputElement>) => void;
+    disabled?: boolean;
+  }) => (
+    <FormField.Root>
+      <FormField.Label htmlFor={name} required>Event URL</FormField.Label>
+      <FormField.Input
+        id={name}
+        name={name}
+        type="url"
+        value={value}
+        status={status}
+        error={error}
+        onChange={onChange}
+        onBlur={onBlur}
+        disabled={disabled}
+        placeholder="https://www.ticketmaster.com/event/..."
+        icon={<Globe className="h-5 w-5 text-gray-400" />}
+      />
+    </FormField.Root>
+  ),
+
+  EventID: ({ name, value, status, error, onChange, onBlur, disabled }: {
+    name: string;
+    value: string;
+    status: 'untouched' | 'valid' | 'invalid';
+    error?: string;
+    onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+    onBlur: (e: React.FocusEvent<HTMLInputElement>) => void;
+    disabled?: boolean;
+  }) => (
+    <FormField.Root>
+      <FormField.Label htmlFor={name} required>Event ID</FormField.Label>
+      <FormField.Input
+        id={name}
+        name={name}
+        type="text"
+        value={value}
+        status={status}
+        error={error}
+        onChange={onChange}
+        onBlur={onBlur}
+        disabled={disabled}
+        placeholder="Enter event ID"
+        icon={<Hash className="h-5 w-5 text-gray-400" />}
+      />
+      <FormField.Help>This ID will be extracted automatically if present in the URL</FormField.Help>
+    </FormField.Root>
+  ),
+
+  EventName: ({ name, value, status, error, onChange, onBlur, disabled }: {
+    name: string;
+    value: string;
+    status: 'untouched' | 'valid' | 'invalid';
+    error?: string;
+    onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+    onBlur: (e: React.FocusEvent<HTMLInputElement>) => void;
+    disabled?: boolean;
+  }) => (
+    <FormField.Root>
+      <FormField.Label htmlFor={name} required>Event Name</FormField.Label>
+      <FormField.Input
+        id={name}
+        name={name}
+        type="text"
+        value={value}
+        status={status}
+        error={error}
+        onChange={onChange}
+        onBlur={onBlur}
+        disabled={disabled}
+        placeholder="Event Name"
+        icon={<Tag className="h-5 w-5 text-gray-400" />}
+      />
+    </FormField.Root>
+  ),
+
+  DateTime: ({ name, value, status, error, onChange, onBlur, disabled }: {
+    name: string;
+    value: string;
+    status: 'untouched' | 'valid' | 'invalid';
+    error?: string;
+    onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+    onBlur: (e: React.FocusEvent<HTMLInputElement>) => void;
+    disabled?: boolean;
+  }) => (
+    <FormField.Root>
+      <FormField.Label htmlFor={name} required>Event Date & Time</FormField.Label>
+      <FormField.Input
+        id={name}
+        name={name}
+        type="datetime-local"
+        value={value}
+        status={status}
+        error={error}
+        onChange={onChange}
+        onBlur={onBlur}
+        disabled={disabled}
+        icon={<Calendar className="h-5 w-5 text-gray-400" />}
+      />
+    </FormField.Root>
+  ),
+
+  InHandDate: ({ name, value, status, error, onChange, onBlur, disabled }: {
+    name: string;
+    value: string;
+    status: 'untouched' | 'valid' | 'invalid';
+    error?: string;
+    onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+    onBlur: (e: React.FocusEvent<HTMLInputElement>) => void;
+    disabled?: boolean;
+  }) => (
+    <FormField.Root>
+      <FormField.Label htmlFor={name} required>In-Hand Date</FormField.Label>
+      <FormField.Input
+        id={name}
+        name={name}
+        type="date"
+        value={value}
+        status={status}
+        error={error}
+        onChange={onChange}
+        onBlur={onBlur}
+        disabled={disabled}
+        icon={<Clock className="h-5 w-5 text-gray-400" />}
+      />
+      <FormField.Help>When tickets will be available/in hand</FormField.Help>
+    </FormField.Root>
+  ),
+
+  Venue: ({ name, value, status, error, onChange, onBlur, disabled }: {
+    name: string;
+    value: string;
+    status: 'untouched' | 'valid' | 'invalid';
+    error?: string;
+    onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+    onBlur: (e: React.FocusEvent<HTMLInputElement>) => void;
+    disabled?: boolean;
+  }) => (
+    <FormField.Root>
+      <FormField.Label htmlFor={name} required>Venue</FormField.Label>
+      <FormField.Input
+        id={name}
+        name={name}
+        type="text"
+        value={value}
+        status={status}
+        error={error}
+        onChange={onChange}
+        onBlur={onBlur}
+        disabled={disabled}
+        placeholder="Enter venue name"
+        icon={<MapPin className="h-5 w-5 text-gray-400" />}
+      />
+    </FormField.Root>
+  ),
+
+  Zone: ({ name, value, status, error, onChange, onBlur, disabled }: {
+    name: string;
+    value: string;
+    status: 'untouched' | 'valid' | 'invalid';
+    error?: string;
+    onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+    onBlur: (e: React.FocusEvent<HTMLInputElement>) => void;
+    disabled?: boolean;
+  }) => (
+    <FormField.Root>
+      <FormField.Label htmlFor={name} required>Zone</FormField.Label>
+      <FormField.Input
+        id={name}
+        name={name}
+        type="text"
+        value={value}
+        status={status}
+        error={error}
+        onChange={onChange}
+        onBlur={onBlur}
+        disabled={disabled}
+        placeholder="Enter zone"
+        icon={<Ticket className="h-5 w-5 text-gray-400" />}
+      />
+    </FormField.Root>
+  ),
+
+  AvailableSeats: ({ name, value, onChange, disabled }: {
+    name: string;
+    value: number;
+    onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+    disabled?: boolean;
+  }) => (
+    <FormField.Root>
+      <FormField.Label htmlFor={name}>Available Seats</FormField.Label>
+      <FormField.Input
+        id={name}
+        name={name}
+        type="number"
+        min="0"
+        value={value}
+        status="untouched"
+        onChange={onChange}
+        disabled={disabled}
+      />
+      <FormField.Help>Initial number of available seats (if known)</FormField.Help>
+    </FormField.Root>
+  ),
+
+  MappingID: ({ name, value, status, error, onChange, onBlur, disabled }: {
+    name: string;
+    value: string;
+    status: 'untouched' | 'valid' | 'invalid';
+    error?: string;
+    onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+    onBlur: (e: React.FocusEvent<HTMLInputElement>) => void;
+    disabled?: boolean;
+  }) => (
+    <FormField.Root>
+      <FormField.Label htmlFor={name} required>Event Mapping ID</FormField.Label>
+      <FormField.Input
+        id={name}
+        name={name}
+        type="text"
+        value={value}
+        status={status}
+        error={error}
+        onChange={onChange}
+        onBlur={onBlur}
+        disabled={disabled}
+        placeholder="Enter event mapping ID"
+        icon={<Hash className="h-5 w-5 text-gray-400" />}
+      />
+    </FormField.Root>
+  ),
+
+  PriceIncrease: ({ name, value, status, error, onChange, onBlur, disabled }: {
+    name: string;
+    value: number;
+    status: 'untouched' | 'valid' | 'invalid';
+    error?: string;
+    onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+    onBlur: (e: React.FocusEvent<HTMLInputElement>) => void;
+    disabled?: boolean;
+  }) => (
+    <FormField.Root>
+      <FormField.Label htmlFor={name} required>Price increase %</FormField.Label>
+      <FormField.Input
+        id={name}
+        name={name}
+        type="number"
+        min="0"
+        step="0.01"
+        value={value}
+        status={status}
+        error={error}
+        onChange={onChange}
+        onBlur={onBlur}
+        disabled={disabled}
+        placeholder="Enter percentage increase"
+        icon={<Tag className="h-5 w-5 text-gray-400" />}
+      />
+      <FormField.Help>Percentage to increase the list cost by</FormField.Help>
+    </FormField.Root>
+  ),
+
+  SkipScraping: ({ name, checked, onChange, disabled }: {
+    name: string;
+    checked: boolean;
+    onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+    disabled?: boolean;
+  }) => (
+    <div className="flex items-center">
+      <FormField.Checkbox
+        id={name}
+        name={name}
+        status="untouched"
+        checked={checked}
+        onChange={onChange}
+        disabled={disabled}
+      />
+      <FormField.Label htmlFor={name}>
+        <span className="ml-2 text-sm text-gray-700">Initially Paused (Skip Scraping)</span>
+      </FormField.Label>
+    </div>
+  )
+};

@@ -2,7 +2,6 @@
 
 import dbConnect from '@/lib/dbConnect';
 import { ErrorLog } from '@/models/errorModel'; // Assuming models are aliased to @/models
-import { revalidatePath } from 'next/cache';
 
 /**
  * Creates a new error log.
@@ -14,7 +13,6 @@ export async function createErrorLog(logData: Record<string, unknown>) {
   try {
     const newLog = new ErrorLog(logData);
     const savedLog = await newLog.save();
-    revalidatePath('/error-logs'); // Adjust path as needed
     // No individual log page revalidation typically needed unless you have one
     return JSON.parse(JSON.stringify(savedLog));
   } catch (error) {
@@ -83,8 +81,6 @@ export async function updateErrorLog(logId: string, updateData: object) {
     if (!updatedLog) {
       return null;
     }
-    revalidatePath('/error-logs');
-    revalidatePath(`/error-logs/${logId}`); // If you have individual log pages
     return JSON.parse(JSON.stringify(updatedLog));
   } catch (error) {
     console.error('Error updating error log:', error);
@@ -104,7 +100,6 @@ export async function deleteErrorLog(logId: string) {
     if (!deletedLog) {
       return { message: 'Error log not found', success: false };
     }
-    revalidatePath('/error-logs');
     return { message: 'Error log deleted successfully', success: true, deletedLog: JSON.parse(JSON.stringify(deletedLog)) };
   } catch (error) {
     console.error('Error deleting error log:', error);

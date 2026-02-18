@@ -2,8 +2,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { 
-  ArrowLeft, Save, Trash2, Plus, 
-  AlertTriangle, Info, CheckCircle, X, Filter 
+  ArrowLeft, Save, Trash2, Plus, Filter 
 } from 'lucide-react';
 import { 
   getExclusionRules, 
@@ -12,6 +11,8 @@ import {
   SectionRowExclusion,
   ExclusionRulesData 
 } from '@/actions/exclusionActions';
+import { useNotifications } from '@/components/providers/NotificationProvider';
+import { LoadingState, AsyncButton } from '@/components/ui/LoadingStates';
 
 interface ExclusionPageProps {
   eventId: string;
@@ -27,18 +28,21 @@ interface SectionData {
 
 
 
+// Explicit state variants instead of boolean props
+type PageState = 'loading' | 'ready' | 'saving' | 'error';
+
 export default function ExclusionManagementPage({ eventId, eventName }: ExclusionPageProps) {
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [pageState, setPageState] = useState<PageState>('loading');
   const [sections, setSections] = useState<SectionData[]>([]);
   
   // Exclusion rules state
   const [sectionRowExclusions, setSectionRowExclusions] = useState<SectionRowExclusion[]>([]);
   
-  const [notification, setNotification] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+  // Use lifted notification state
+  const { actions: notificationActions } = useNotifications();
 
   const loadData = useCallback(async () => {
-    setLoading(true);
+    setPageState('loading');
     try {
       const [rulesResult, sectionsResult] = await Promise.all([
         getExclusionRules(eventId),
@@ -49,32 +53,25 @@ export default function ExclusionManagementPage({ eventId, eventName }: Exclusio
         setSections(sectionsResult.data);
       }
 
-
-
       if (rulesResult.success && rulesResult.data) {
         const data = Array.isArray(rulesResult.data) ? rulesResult.data[0] : rulesResult.data;
         setSectionRowExclusions(data?.sectionRowExclusions || []);
       }
+      
+      setPageState('ready');
     } catch (error) {
       console.error('Error loading data:', error);
-      showNotification('error', 'Failed to load exclusion data');
-    } finally {
-      setLoading(false);
+      notificationActions.showNotification('error', 'Failed to load exclusion data');
+      setPageState('error');
     }
-  }, [eventId]);
+  }, [eventId, notificationActions]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
 
-  const showNotification = (type: 'success' | 'error' | 'info', message: string) => {
-    setNotification({ type, message });
-    setTimeout(() => setNotification(null), 5000);
-  };
-
   const handleSave = async () => {
-
-    setSaving(true);
+    setPageState('saving');
     try {
       const rulesData: ExclusionRulesData = {
         eventId,
@@ -86,15 +83,16 @@ export default function ExclusionManagementPage({ eventId, eventName }: Exclusio
       const result = await saveExclusionRules(rulesData);
       
       if (result.success) {
-        showNotification('success', 'Exclusion rules saved successfully');
+        notificationActions.showNotification('success', 'Exclusion rules saved successfully');
+        setPageState('ready');
       } else {
-        showNotification('error', result.error || 'Failed to save exclusion rules');
+        notificationActions.showNotification('error', result.error || 'Failed to save exclusion rules');
+        setPageState('ready');
       }
     } catch (error) {
       console.error('Error saving rules:', error);
-      showNotification('error', 'Failed to save exclusion rules');
-    } finally {
-      setSaving(false);
+      notificationActions.showNotification('error', 'Failed to save exclusion rules');
+      setPageState('ready');
     }
   };
 
@@ -126,21 +124,9 @@ export default function ExclusionManagementPage({ eventId, eventName }: Exclusio
     updateSectionExclusion(sectionIndex, { excludedRows: newExcludedRows });
   };
 
-
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
-        <div className="max-w-6xl mx-auto p-8">
-          <div className="flex items-center justify-center h-64">
-            <div className="text-center">
-              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
-              <p className="mt-4 text-slate-600">Loading exclusion settings...</p>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
+  // Use explicit variants instead of boolean conditions
+  if (pageState === 'loading') {
+    return <LoadingState.Loading message="Loading exclusion settings..." />;
   }
 
   return (
@@ -155,14 +141,20 @@ export default function ExclusionManagementPage({ eventId, eventName }: Exclusio
             <ArrowLeft className="w-4 h-4 mr-2" />
             Back to Event
           </Link>
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="inline-flex items-center gap-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white px-4 py-2.5 rounded-lg hover:from-blue-700 hover:to-blue-800 transition-all shadow-md hover:shadow-lg transform hover:-translate-y-0.5 disabled:opacity-50"
-          >
-            <Save size={16} />
-            <span>{saving ? 'Saving...' : 'Save Rules'}</span>
-          </button>
+          
+          {/* Use compound component for async button */}
+          {pageState === 'saving' ? (
+            <LoadingState.Saving message="Saving Rules..." />
+          ) : (
+            <AsyncButton.Root onClick={handleSave} disabled={pageState !== 'ready'}>
+              <AsyncButton.Icon>
+                <Save size={16} />
+              </AsyncButton.Icon>
+              <AsyncButton.Text>
+                Save Rules
+              </AsyncButton.Text>
+            </AsyncButton.Root>
+          )}
         </div>
 
         {/* Title Card */}
@@ -174,28 +166,6 @@ export default function ExclusionManagementPage({ eventId, eventName }: Exclusio
             </div>
           </div>
         </div>
-
-        {/* Notification */}
-        {notification && (
-          <div className={`p-4 rounded-2xl shadow-sm border flex items-center justify-between ${
-            notification.type === 'success' ? 'bg-green-50 text-green-800 border-green-200' :
-            notification.type === 'error' ? 'bg-red-50 text-red-800 border-red-200' :
-            'bg-blue-50 text-blue-800 border-blue-200'
-          }`}>
-            <div className="flex items-center space-x-2">
-              {notification.type === 'success' && <CheckCircle size={20} />}
-              {notification.type === 'error' && <AlertTriangle size={20} />}
-              {notification.type === 'info' && <Info size={20} />}
-              <span className="font-medium">{notification.message}</span>
-            </div>
-            <button
-              onClick={() => setNotification(null)}
-              className="text-current hover:opacity-70 transition-opacity"
-            >
-              <X size={16} />
-            </button>
-          </div>
-        )}
 
         {/* Section & Row Exclusions */}
         <div className="space-y-6">

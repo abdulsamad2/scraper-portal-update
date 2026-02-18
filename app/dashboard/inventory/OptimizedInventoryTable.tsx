@@ -25,7 +25,7 @@ export interface InventoryRow {
     files_available?: boolean;
     [key: string]: unknown; // Allow additional properties
   };
-  isDeleted?: boolean;
+  status?: 'active' | 'deleted'; // Explicit variant instead of boolean
   deletedAt?: Date;
 }
 
@@ -36,22 +36,51 @@ interface OptimizedInventoryTableProps {
   onSort?: (field: string) => void;
 }
 
-// Helper component for tooltips
-const Tooltip = ({ text, children }: { text: string; children: React.ReactNode }) => (
-  <div className="group relative flex cursor-pointer items-center">
-    {children}
-    <div className="absolute bottom-full left-1/2 z-10 mb-2 w-48 -translate-x-1/2 transform rounded-lg bg-gray-700 p-2 text-center text-xs text-white opacity-0 transition-opacity group-hover:opacity-100 pointer-events-none">
-      {text}
+// Compound component for table headers
+const TableHeader = {
+  Root: ({ children }: { children: React.ReactNode }) => (
+    <div className="flex items-center">
+      {children}
     </div>
-  </div>
-);
+  ),
+  
+  Title: ({ children }: { children: React.ReactNode }) => (
+    <span className="font-semibold">{children}</span>
+  ),
+  
+  Tooltip: ({ text, children }: { text: string; children: React.ReactNode }) => (
+    <div className="group relative flex cursor-pointer items-center">
+      {children}
+      <div className="absolute bottom-full left-1/2 z-10 mb-2 w-48 -translate-x-1/2 transform rounded-lg bg-gray-700 p-2 text-center text-xs text-white opacity-0 transition-opacity group-hover:opacity-100 pointer-events-none">
+        {text}
+      </div>
+    </div>
+  ),
+  
+  Icon: () => (
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="ml-1.5 h-4 w-4 text-gray-400">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
+    </svg>
+  )
+};
 
-// Info icon for tooltips
-const InfoIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="ml-1.5 h-4 w-4 text-gray-400">
-    <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
-  </svg>
-);
+// Row status variants instead of boolean conditions
+const RowStatus = {
+  Active: ({ children }: { children: React.ReactNode }) => (
+    <div className="opacity-100">{children}</div>
+  ),
+  
+  Deleted: ({ children, deletedAt }: { children: React.ReactNode; deletedAt?: Date }) => (
+    <div className="opacity-50 bg-red-50 border-l-4 border-red-400 px-2">
+      <div className="flex items-center justify-between">
+        <div>{children}</div>
+        <div className="text-xs text-red-600 font-medium">
+          Deleted {deletedAt ? new Date(deletedAt).toLocaleTimeString() : ''}
+        </div>
+      </div>
+    </div>
+  )
+};
 
 // Sort icon component
 const SortIcon = ({ field, sortField, sortDirection }: { field: string; sortField?: string; sortDirection?: 'asc' | 'desc' }) => {
@@ -74,7 +103,7 @@ const SortIcon = ({ field, sortField, sortDirection }: { field: string; sortFiel
   );
 };
 
-// Custom header with tooltip and sorting
+// Custom header with tooltip and sorting using compound components
 const CustomHeader = ({ 
   title, 
   description, 
@@ -92,7 +121,7 @@ const CustomHeader = ({
   sortDirection?: 'asc' | 'desc';
   onSort?: (field: string) => void;
 }) => (
-  <Tooltip text={description}>
+  <TableHeader.Tooltip text={description}>
     <div 
       className={`flex items-center justify-between group transition-all duration-200 whitespace-nowrap ${
         sortable ? 'cursor-pointer hover:text-blue-600 hover:bg-blue-50 -mx-2 px-2 py-1 rounded-md' : ''
@@ -101,7 +130,7 @@ const CustomHeader = ({
     >
       <div className="flex items-center">
         <span className="font-bold text-xs uppercase tracking-wider text-gray-700 group-hover:text-blue-700">{title}</span>
-        <InfoIcon />
+        <TableHeader.Icon />
       </div>
       {sortable && field && (
         <div className="opacity-60 group-hover:opacity-100 transition-opacity">
@@ -109,7 +138,7 @@ const CustomHeader = ({
         </div>
       )}
     </div>
-  </Tooltip>
+  </TableHeader.Tooltip>
 );
 
 const OptimizedInventoryTable: React.FC<OptimizedInventoryTableProps> = ({ 
@@ -296,8 +325,8 @@ const OptimizedInventoryTable: React.FC<OptimizedInventoryTableProps> = ({
               key={row._id} 
               className={`
                 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/30'} 
-                ${row.isDeleted ? 'bg-red-50 text-red-900 opacity-80' : ''} 
-                hover:bg-blue-50/50 hover:shadow-sm transition-all duration-200 border-l-4 border-transparent hover:border-blue-400
+                ${row.status === 'deleted' ? 'bg-red-50 text-red-900 opacity-80' : ''} 
+                hover:bg-blue-50/50 hover:shadow-sm transition-all duration-200 border-l-4 border-l-transparent hover:border-l-blue-400
                 border-b border-gray-200/40 last:border-b-0
               `}
             >

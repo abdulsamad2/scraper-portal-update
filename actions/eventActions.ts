@@ -17,7 +17,6 @@
 
 import dbConnect from '@/lib/dbConnect';
 import { Event } from '@/models/eventModel'; // Assuming models are aliased to @/models
-import { revalidatePath } from 'next/cache';
 import { deleteConsecutiveGroupsByEventId, deleteConsecutiveGroupsByEventIds } from './seatActions';
 
 /**
@@ -30,8 +29,6 @@ export async function createEvent(eventData: Partial<Event>) {
   try {
     const newEvent = new Event(eventData);
     const savedEvent = await newEvent.save();
-    revalidatePath('/dashboard/events'); // Revalidate events page
-    revalidatePath(`/dashboard/events/${savedEvent._id}`); // Revalidate specific event page
     return JSON.parse(JSON.stringify(savedEvent));
   } catch (error:unknown) {
     console.error('Error creating event:', error);
@@ -141,9 +138,6 @@ export async function updateEvent(eventId: string, updateData: Partial<Event> & 
     if (!updatedEvent) {
       return { error: 'Failed to update event - event may have been deleted' };
     }
-    revalidatePath('/dashboard/events'); // Revalidate events page
-    revalidatePath(`/dashboard/events/${eventId}`); // Revalidate specific event page
-    revalidatePath('/dashboard/inventory'); // Revalidate inventory page
     
     const result = JSON.parse(JSON.stringify(updatedEvent));
     if (seatDeletionResult) {
@@ -198,9 +192,6 @@ export async function deleteEvent(eventId: string) {
     // Delete the event
     const deletedEvent = await Event.findByIdAndDelete(eventId);
     
-    revalidatePath('/dashboard/events');
-    revalidatePath('/dashboard/inventory');
-    
     return { 
       message: `Event deleted successfully. Also deleted ${seatDeletionResult.deletedCount || 0} associated seat groups.`, 
       success: true, 
@@ -230,9 +221,6 @@ export async function updateAllEvents(status: boolean){
         { Skip_Scraping: status } // Set Skip_Scraping to the provided status
       );
 
-      revalidatePath('/dashboard/events');
-      revalidatePath('/dashboard/inventory');
-
       return {
         success: true,
         message: `Successfully updated ${updateEventsStatus.modifiedCount} events and deleted ${seatDeletionResult.deletedCount || 0} seat groups`,
@@ -246,8 +234,6 @@ export async function updateAllEvents(status: boolean){
         {}, // Update all events
         { Skip_Scraping: status } // Set Skip_Scraping to the provided status
       );
-
-      revalidatePath('/dashboard/events');
 
       return {
         success: true,

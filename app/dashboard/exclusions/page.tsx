@@ -288,7 +288,7 @@ export default function ExclusionRulesPage() {
                 </p>
               </div>
               <div className="bg-purple-100 rounded-2xl p-3">
-                <Filter className="w-8 h-8 text-purple-600" />
+                <AlertTriangle className="w-8 h-8 text-purple-600" />
               </div>
             </div>
           </div>
@@ -333,36 +333,11 @@ export default function ExclusionRulesPage() {
           </div>
         </div>
 
-        {/* Notification */}
-        {notification && (
-          <div
-            className={`mb-6 p-4 rounded-2xl shadow-lg flex items-center justify-between transform transition-all duration-300 ${
-              notification.type === "success"
-                ? "bg-green-50 text-green-800 border border-green-200"
-                : notification.type === "error"
-                ? "bg-red-50 text-red-800 border border-red-200"
-                : "bg-blue-50 text-blue-800 border border-blue-200"
-            }`}
-          >
-            <div className="flex items-center space-x-3">
-              {notification.type === "success" && <CheckCircle size={20} />}
-              {notification.type === "error" && <AlertTriangle size={20} />}
-              <span className="font-medium">{notification.message}</span>
-            </div>
-            <button
-              onClick={() => setNotification(null)}
-              className="text-current hover:opacity-70 transition-opacity p-1 rounded-lg hover:bg-black/5"
-            >
-              <X size={16} />
-            </button>
-          </div>
-        )}
-
         {/* Events List */}
         <div className="bg-white rounded-2xl shadow-xl border border-slate-200/50 overflow-hidden">
           <div className="bg-gradient-to-r from-slate-50 to-slate-100 p-6 border-b border-slate-200">
             <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-3">
-              <Filter className="text-purple-600" size={24} />
+              <AlertTriangle className="text-purple-600" size={24} />
               Events & Exclusion Rules
             </h2>
             <p className="text-slate-600 font-medium mt-1">
@@ -370,10 +345,10 @@ export default function ExclusionRulesPage() {
             </p>
           </div>
 
-          {events.length === 0 && !loading ? (
+          {events.length === 0 ? (
             <div className="p-16 text-center">
               <div className="bg-gradient-to-br from-slate-100 to-slate-200 rounded-3xl w-20 h-20 mx-auto mb-6 flex items-center justify-center">
-                <Filter className="w-10 h-10 text-slate-400" />
+                <AlertTriangle className="w-10 h-10 text-slate-400" />
               </div>
               <h3 className="text-xl font-bold text-slate-600 mb-3">
                 No Events Found
@@ -383,11 +358,10 @@ export default function ExclusionRulesPage() {
               </p>
             </div>
           ) : (
-            <>
-              <div className="divide-y divide-slate-100">
-                {events.map((event) => {
-                  const rule = getEventExclusionRule(event._id);
-                  const exclusionSummary = getExclusionSummary(rule);
+            <div className="divide-y divide-slate-100">
+              {events.map((event) => {
+                const rule = getEventExclusionRule(event._id);
+                const exclusionSummary = getExclusionSummary(rule);
 
                 return (
                   <div
@@ -487,7 +461,7 @@ export default function ExclusionRulesPage() {
                           href={`/dashboard/events/${event._id}/exclusions`}
                           className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-xl hover:from-purple-700 hover:to-indigo-700 transition-all duration-200 text-sm font-medium shadow-lg hover:shadow-xl transform hover:-translate-y-0.5"
                         >
-                          <Filter size={16} />
+                          <AlertTriangle size={16} />
                           <span>Configure</span>
                         </Link>
                       </div>
@@ -495,85 +469,10 @@ export default function ExclusionRulesPage() {
                   </div>
                 );
               })}
-              </div>
-              
-              {/* Pagination Controls */}
-              {totalPages > 1 && (
-                <div className="bg-gradient-to-r from-slate-50 to-slate-100 px-6 py-4 border-t border-slate-200">
-                  <div className="flex items-center justify-between">
-                    <div className="text-sm text-slate-600">
-                      Showing {startIndex} to {endIndex} of {totalEvents} events
-                    </div>
-                    
-                    <div className="flex items-center gap-2">
-                      {/* Previous Button */}
-                      <button
-                        onClick={() => setCurrentPage(currentPage - 1)}
-                        disabled={currentPage === 1}
-                        className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-600 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
-                      >
-                        Previous
-                      </button>
-                      
-                      {/* Page Numbers */}
-                      <div className="flex items-center gap-1">
-                        {Array.from({ length: Math.min(5, totalPages) }, (_, index) => {
-                          let pageNumber;
-                          if (totalPages <= 5) {
-                            pageNumber = index + 1;
-                          } else if (currentPage <= 3) {
-                            pageNumber = index + 1;
-                          } else if (currentPage >= totalPages - 2) {
-                            pageNumber = totalPages - 4 + index;
-                          } else {
-                            pageNumber = currentPage - 2 + index;
-                          }
-                          
-                          return (
-                            <button
-                              key={pageNumber}
-                              onClick={() => setCurrentPage(pageNumber)}
-                              className={`w-10 h-10 text-sm font-medium rounded-lg transition-all duration-200 ${
-                                currentPage === pageNumber
-                                  ? 'bg-purple-600 text-white shadow-md'
-                                  : 'text-slate-600 bg-white border border-slate-300 hover:bg-slate-50'
-                              }`}
-                            >
-                              {pageNumber}
-                            </button>
-                          );
-                        })}
-                        
-                        {totalPages > 5 && currentPage < totalPages - 2 && (
-                          <>
-                            <span className="px-2 text-slate-400">...</span>
-                            <button
-                              onClick={() => setCurrentPage(totalPages)}
-                              className="w-10 h-10 text-sm font-medium text-slate-600 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-all duration-200"
-                            >
-                              {totalPages}
-                            </button>
-                          </>
-                        )}
-                      </div>
-                      
-                      {/* Next Button */}
-                      <button
-                        onClick={() => setCurrentPage(currentPage + 1)}
-                        disabled={currentPage === totalPages}
-                        className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-600 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
-                      >
-                        Next
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </>
+            </div>
           )}
         </div>
 
-        {/* Summary Stats */}
       </div>
     </div>
   );

@@ -237,18 +237,7 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
   return withRetry(async () => {
     await dbConnect();
     
-    // Force fresh database connection and disable query caching
-    // Cache-busting mechanisms implemented:
-    // 1. planCacheClear command to clear MongoDB query plans
-    // 2. read('primary') to force reads from primary replica
-    // 3. hint({ $natural: 1 }) to bypass query optimizer cache
-    // 4. readConcern 'local' to avoid stale cached data
-    // 5. allowDiskUse(true) for large aggregations
     const mongoose = await import('mongoose');
-    if (mongoose.connection.readyState === 1) {
-      // Clear any cached query plans to ensure fresh data
-      mongoose.connection.db?.admin().command({ planCacheClear: '*' }).catch(() => {});
-    }
     
     const startTime = Date.now();
 
@@ -266,7 +255,7 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
           { mapping_id: 1 }
         )
         .read('primary') // Force read from primary to avoid replica lag
-        .hint({ $natural: 1 }) // Force natural order to bypass query cache
+
         .maxTimeMS(30000); // Set timeout to prevent hanging
         
         console.log(`Filter: Events updated within last ${eventUpdateFilterMinutes} minutes since ${cutoffTime.toISOString()}`);
@@ -324,7 +313,7 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const PARALLEL_BATCHES = 3; // Process multiple batches in parallel
       
-      // Use aggregation pipeline with cache-busting options
+      // Use aggregation pipeline
       const pipeline = [
         { $match: eventFilter },
         // Join with Event collection to get the Ticketmaster URL
@@ -349,7 +338,6 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
       const cursor = ConsecutiveGroup.aggregate(pipeline as PipelineStage[], {
         allowDiskUse: true,
         readPreference: 'primary', // Force read from primary to avoid replica lag
-        readConcern: { level: 'local' },
         maxTimeMS: 60000, // Set timeout for large datasets
         cursor: { batchSize: BATCH_SIZE, noCursorTimeout: false }
       });

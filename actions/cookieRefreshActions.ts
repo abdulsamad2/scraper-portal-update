@@ -2,7 +2,6 @@
 
 import dbConnect from '@/lib/dbConnect';
 import { CookieRefresh } from '@/models/cookieRefreshModel'; // Assuming models are aliased to @/models
-import { revalidatePath } from 'next/cache';
 
 /**
  * Creates a new cookie refresh record.
@@ -14,7 +13,6 @@ export async function createCookieRefresh(refreshData: Record<string, string | n
   try {
     const newRefresh = new CookieRefresh(refreshData);
     const savedRefresh = await newRefresh.save();
-    revalidatePath('/admin/cookie-refreshes'); // Adjust path as needed
     return JSON.parse(JSON.stringify(savedRefresh));
   } catch (error) {
     console.error('Error creating cookie refresh record:', error);
@@ -101,8 +99,6 @@ export async function updateCookieRefresh(id: string, updateData: Record<string,
     if (!updatedRecord) {
       return null;
     }
-    revalidatePath('/admin/cookie-refreshes'); // Adjust path as needed
-    revalidatePath(`/admin/cookie-refreshes/${id}`); // If you have individual pages
     return JSON.parse(JSON.stringify(updatedRecord));
   } catch (error) {
     console.error('Error updating cookie refresh record:', error);
@@ -122,7 +118,6 @@ export async function deleteCookieRefresh(id: string) {
     if (!deletedRecord) {
       return { message: 'Cookie refresh record not found', success: false };
     }
-    revalidatePath('/admin/cookie-refreshes'); // Adjust path as needed
     return { message: 'Cookie refresh record deleted successfully', success: true, deletedRecord: JSON.parse(JSON.stringify(deletedRecord)) };
   } catch (error) {
     console.error('Error deleting cookie refresh record:', error);

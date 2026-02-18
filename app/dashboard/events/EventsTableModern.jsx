@@ -1,6 +1,6 @@
 'use client';
 
-import React, { memo, useMemo } from 'react';
+import React from 'react';
 import DataTable from 'react-data-table-component';
 import Link from 'next/link';
 import { Eye, Edit, Trash2, Play, Square, Info, AlertCircle, Calendar, MapPin, Users } from 'lucide-react';
@@ -22,24 +22,31 @@ const Header = ({ title, description, icon }) => (
   </div>
 );
 
-const StatusBadge = ({ active }) => (
-  <div className="flex items-center">
-    <div className={`w-2 h-2 rounded-full mr-2 ${active ? 'bg-blue-500' : 'bg-slate-400'}`}></div>
-    <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
-      active 
-        ? 'bg-blue-50 text-blue-700 border border-blue-200' 
-        : 'bg-slate-50 text-slate-700 border border-slate-200'
-    }`}>
-      {active ? 'Active' : 'Inactive'}
-    </span>
-  </div>
-);
+// Explicit variants instead of boolean props
+const StatusBadge = {
+  Active: () => (
+    <div className="flex items-center">
+      <div className="w-2 h-2 rounded-full mr-2 bg-blue-500"></div>
+      <span className="px-3 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+        Active
+      </span>
+    </div>
+  ),
+  Inactive: () => (
+    <div className="flex items-center">
+      <div className="w-2 h-2 rounded-full mr-2 bg-slate-400"></div>
+      <span className="px-3 py-1 rounded-full text-xs font-semibold bg-slate-50 text-slate-700 border border-slate-200">
+        Inactive
+      </span>
+    </div>
+  )
+};
 
-const EventsTableModern = memo(function EventsTableModern({ data, toggleScraping, seatCounts = {}, loadingSeatCounts = false, onDeleteEvent, togglingEvents = new Set() }) {
-  // Memoize utility functions to prevent unnecessary re-renders
-  const formatDate = useMemo(() => (d) => (d ? new Date(d).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : '—'), []);
-  const formatTime = useMemo(() => (d) => (d ? new Date(d).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—'), []);
-  const timeAgo = useMemo(() => (d) => {
+const EventsTableModern = function EventsTableModern({ data, toggleScraping, seatCounts = {}, loadingSeatCounts = false, onDeleteEvent, togglingEvents = new Set() }) {
+  // Utility functions for formatting
+  const formatDate = (d) => (d ? new Date(d).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : '—');
+  const formatTime = (d) => (d ? new Date(d).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—');
+  const timeAgo = (d) => {
     if (!d) return 'Never';
     const diff = Date.now() - new Date(d).getTime();
     const mins = Math.floor(diff / 60000);
@@ -48,23 +55,20 @@ const EventsTableModern = memo(function EventsTableModern({ data, toggleScraping
     if (hrs < 24) return `${hrs}h ago`;
     const days = Math.floor(hrs / 24);
     return `${days}d ago`;
-  }, []);
+  };
 
-  const isFresh = useMemo(() => (d) => Date.now() - new Date(d).getTime() < 4 * 60 * 1000, []);
+  const isFresh = (d) => Date.now() - new Date(d).getTime() < 4 * 60 * 1000;
 
-  // Memoize sorted data to prevent unnecessary sorting
-  const sortedData = useMemo(() => 
-    [...data].sort((a, b) => new Date(b.Last_Updated || b.updatedAt) - new Date(a.Last_Updated || a.updatedAt)),
-    [data]
-  );
+  // Sorted data
+  const sortedData = [...data].sort((a, b) => new Date(b.Last_Updated || b.updatedAt) - new Date(a.Last_Updated || a.updatedAt));
 
-  // Memoize columns to prevent recreation on every render
-  const columns = useMemo(() => [
+  // Columns configuration
+  const columns = [
     {
       name: <Header title="Status" description="Current scraping status" />, 
       selector: r => !r.Skip_Scraping, 
       width: '120px',
-      cell: r => <StatusBadge active={!r.Skip_Scraping} />,
+      cell: r => r.Skip_Scraping ? <StatusBadge.Inactive /> : <StatusBadge.Active />,
       sortable: true,
     },
     {
@@ -247,10 +251,10 @@ const EventsTableModern = memo(function EventsTableModern({ data, toggleScraping
       ignoreRowClick: true,
       allowOverflow: true,
     }
-  ], [seatCounts, loadingSeatCounts, toggleScraping, onDeleteEvent, formatDate, formatTime, timeAgo, isFresh]);
+  ];
 
-  // Memoize styles to prevent object recreation
-  const styles = useMemo(() => ({
+  // Styles configuration
+  const styles = {
     headRow: {
       style: {
         background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)',
@@ -287,10 +291,10 @@ const EventsTableModern = memo(function EventsTableModern({ data, toggleScraping
         color: '#334155',
       }
     },
-  }), []);
+  };
 
-  // Memoize conditional row styles
-  const conditionalRowStyles = useMemo(() => [
+  // Conditional row styles
+  const conditionalRowStyles = [
     {
       when: row => !row.Skip_Scraping && isFresh(row.Last_Updated || row.updatedAt),
       style: { 
@@ -323,7 +327,7 @@ const EventsTableModern = memo(function EventsTableModern({ data, toggleScraping
         }
       }
     }
-  ], [isFresh]);
+  ];
 
   return (
     <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -350,6 +354,6 @@ const EventsTableModern = memo(function EventsTableModern({ data, toggleScraping
       />
     </div>
   );
-});
+};
 
 export default EventsTableModern;
