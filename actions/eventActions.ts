@@ -17,6 +17,7 @@
 
 import dbConnect from '@/lib/dbConnect';
 import { Event } from '@/models/eventModel'; // Assuming models are aliased to @/models
+import { ConsecutiveGroup } from '@/models/seatModel';
 import { deleteConsecutiveGroupsByEventId, deleteConsecutiveGroupsByEventIds } from './seatActions';
 
 /**
@@ -70,6 +71,224 @@ export async function getAllEvents(): Promise<Array<object>> {
   } catch (error) {
     console.error('Error fetching all events:', error);
     return [{ error: (error as Error).message || 'Failed to fetch events' }];
+  }
+}
+
+/**
+ * Retrieves paginated events with optional search and filters.
+ * @param {number} page - The page number (1-based)
+ * @param {number} limit - The number of events per page
+ * @param {string} search - Optional search term to filter events
+ * @param {object} filters - Optional filters for date, venue, status, etc.
+ * @returns {Promise<{events: Array<object>, total: number, page: number, totalPages: number}>} Paginated events data
+ */
+export async function getPaginatedEventsAdvanced(page: number = 1, limit: number = 100, search: string = '', filters: any = {}) {
+  await dbConnect();
+  try {
+    const skip = (page - 1) * limit;
+    
+    // Build search query
+    const searchConditions = [];
+    if (search.trim()) {
+      const searchRegex = { $regex: search.trim(), $options: 'i' };
+      searchConditions.push({
+        $or: [
+          { Event_Name: searchRegex },
+          { Venue: searchRegex },
+          { mapping_id: searchRegex },
+          { Event_ID: searchRegex },
+        ]
+      });
+    }
+
+    // Build filter conditions
+    const filterConditions = [];
+    
+    // Date range filter
+    if (filters.dateFrom || filters.dateTo) {
+      const dateFilter: any = {};
+      if (filters.dateFrom) dateFilter.$gte = new Date(filters.dateFrom);
+      if (filters.dateTo) {
+        // include the full end day
+        const end = new Date(filters.dateTo);
+        end.setHours(23, 59, 59, 999);
+        dateFilter.$lte = end;
+      }
+      filterConditions.push({ Event_DateTime: dateFilter });
+    }
+
+    // Venue filter (only when not already covered by search)
+    if (filters.venue && !search.trim()) {
+      filterConditions.push({ Venue: { $regex: filters.venue.trim(), $options: 'i' } });
+    } else if (filters.venue && search.trim()) {
+      // venue filter is separate from free-text search
+      filterConditions.push({ Venue: { $regex: filters.venue.trim(), $options: 'i' } });
+    }
+
+    // Scraping status filter
+    if (filters.scrapingStatus === 'active') {
+      filterConditions.push({ $or: [{ Skip_Scraping: false }, { Skip_Scraping: { $exists: false } }] });
+    } else if (filters.scrapingStatus === 'inactive') {
+      filterConditions.push({ Skip_Scraping: true });
+    }
+
+    // Available seats filter
+    if (filters.hasAvailableSeats === 'yes') {
+      filterConditions.push({ Available_Seats: { $gt: 0 } });
+    } else if (filters.hasAvailableSeats === 'no') {
+      filterConditions.push({ $or: [{ Available_Seats: 0 }, { Available_Seats: { $exists: false } }] });
+    }
+
+    // Seat range filter
+    if (filters.seatRange?.min || filters.seatRange?.max) {
+      const seatFilter: any = {};
+      if (filters.seatRange.min) seatFilter.$gte = parseInt(filters.seatRange.min);
+      if (filters.seatRange.max) seatFilter.$lte = parseInt(filters.seatRange.max);
+      filterConditions.push({ Available_Seats: seatFilter });
+    }
+
+    // Combine all conditions
+    let query = {};
+    const allConditions = [...searchConditions, ...filterConditions];
+    if (allConditions.length > 0) {
+      query = { $and: allConditions };
+    }
+
+    // Build sort criteria - Default to last updated (most recent first)
+    let sortCriteria: any = { Last_Updated: -1, updatedAt: -1 }; // Default sort by last updated
+    switch (filters.sortBy) {
+      case 'newest':
+        sortCriteria = { createdAt: -1 };
+        break;
+      case 'oldest':
+        sortCriteria = { createdAt: 1 };
+        break;
+      case 'name':
+        sortCriteria = { Event_Name: 1 };
+        break;
+      case 'seats':
+        sortCriteria = { Available_Seats: -1 };
+        break;
+      case 'date':
+        sortCriteria = { Event_DateTime: -1 };
+        break;
+      case 'updated':
+      default:
+        sortCriteria = { Last_Updated: -1, updatedAt: -1 };
+    }
+
+    // Get total count for pagination
+    const total = await Event.countDocuments(query);
+    
+    // Get paginated events
+    const events = await Event.find(query)
+      .sort(sortCriteria)
+      .skip(skip)
+      .limit(limit)
+      .lean(); // Use lean() for better performance
+
+    const totalPages = Math.ceil(total / limit);
+
+    return {
+      events: JSON.parse(JSON.stringify(events)),
+      total,
+      page,
+      totalPages,
+      hasNextPage: page < totalPages,
+      hasPrevPage: page > 1
+    };
+  } catch (error) {
+    console.error('Error fetching paginated events:', error);
+    return {
+      events: [],
+      total: 0,
+      page: 1,
+      totalPages: 0,
+      hasNextPage: false,
+      hasPrevPage: false,
+      error: (error as Error).message || 'Failed to fetch events'
+    };
+  }
+}
+
+/**
+ * Returns total event count and active (scraping on) event count.
+ */
+export async function getEventCounts(): Promise<{ total: number; active: number }> {
+  await dbConnect();
+  try {
+    const [total, active] = await Promise.all([
+      Event.countDocuments({}),
+      Event.countDocuments({ $or: [{ Skip_Scraping: false }, { Skip_Scraping: { $exists: false } }] }),
+    ]);
+    return { total, active };
+  } catch {
+    return { total: 0, active: 0 };
+  }
+}
+
+/**
+ * Returns per-event standard and resale inventory quantities for a set of mapping_ids.
+ * Standard = splitType 'NEVERLEAVEONE', Resale = everything else.
+ */
+export async function getInventoryCountsByType(
+  mappingIds: string[]
+): Promise<Record<string, { standard: number; resale: number; standardRows: number; resaleRows: number }>> {
+  if (!mappingIds.length) return {};
+  await dbConnect();
+  try {
+    const result = await ConsecutiveGroup.aggregate([
+      { $match: { mapping_id: { $in: mappingIds } } },
+      {
+        $group: {
+          _id: '$mapping_id',
+          standard: {
+            $sum: {
+              $cond: [
+                { $eq: ['$inventory.splitType', 'NEVERLEAVEONE'] },
+                '$inventory.quantity',
+                0,
+              ],
+            },
+          },
+          resale: {
+            $sum: {
+              $cond: [
+                { $ne: ['$inventory.splitType', 'NEVERLEAVEONE'] },
+                '$inventory.quantity',
+                0,
+              ],
+            },
+          },
+          standardRows: {
+            $sum: {
+              $cond: [
+                { $eq: ['$inventory.splitType', 'NEVERLEAVEONE'] },
+                1,
+                0,
+              ],
+            },
+          },
+          resaleRows: {
+            $sum: {
+              $cond: [
+                { $ne: ['$inventory.splitType', 'NEVERLEAVEONE'] },
+                1,
+                0,
+              ],
+            },
+          },
+        },
+      },
+    ]);
+    const map: Record<string, { standard: number; resale: number; standardRows: number; resaleRows: number }> = {};
+    for (const row of result) {
+      map[row._id] = { standard: row.standard, resale: row.resale, standardRows: row.standardRows, resaleRows: row.resaleRows };
+    }
+    return map;
+  } catch (error) {
+    console.error('Error fetching inventory counts by type:', error);
+    return {};
   }
 }
 

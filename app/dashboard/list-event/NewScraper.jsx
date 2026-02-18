@@ -229,6 +229,8 @@ const EventFormContent = ({ mode, onCancel, onSuccess, initialData }) => {
         inHandDate: form.data.inHandDate.value,
         mapping_id: form.data.mapping_id.value,
         priceIncreasePercentage: form.data.Percentage_Increase_ListCost.value,
+        standardMarkupAdjustment: form.data.standardMarkupAdjustment.value,
+        resaleMarkupAdjustment: form.data.resaleMarkupAdjustment.value,
       };
 
       let result;
@@ -404,6 +406,16 @@ const EventFormContent = ({ mode, onCancel, onSuccess, initialData }) => {
               error={form.data.Percentage_Increase_ListCost.error}
               onChange={handleInputChange}
               onBlur={handleBlur}
+              disabled={form.meta.isSubmitting}
+            />
+
+            {/* Standard / Resale markup adjustment */}
+            <EventFormFields.MarkupAdjustments
+              standardAdj={Number(form.data.standardMarkupAdjustment.value)}
+              resaleAdj={Number(form.data.resaleMarkupAdjustment.value)}
+              defaultPct={Number(form.data.Percentage_Increase_ListCost.value)}
+              onStandardChange={val => form.actions.updateField('standardMarkupAdjustment', val)}
+              onResaleChange={val => form.actions.updateField('resaleMarkupAdjustment', val)}
               disabled={form.meta.isSubmitting}
             />
           </div>

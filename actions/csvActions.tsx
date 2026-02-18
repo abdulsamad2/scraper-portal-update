@@ -306,6 +306,9 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
       'inventory.zone': 1,
       'inventory.shown_quantity': 1,
       'inventory.passthrough': 1,
+      'event_std_adj': 1,
+      'event_resale_adj': 1,
+      'event_default_pct': 1,
     };
 
       // Enhanced cursor with better memory management and parallel processing
@@ -325,10 +328,13 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
             as: 'eventDetails'
           }
         },
-        // Add the event URL field to the document
+        // Add the event URL + markup adjustment fields to the document
         {
           $addFields: {
-            event_url: { $arrayElemAt: ['$eventDetails.URL', 0] }
+            event_url: { $arrayElemAt: ['$eventDetails.URL', 0] },
+            event_std_adj: { $ifNull: [{ $arrayElemAt: ['$eventDetails.standardMarkupAdjustment', 0] }, 0] },
+            event_resale_adj: { $ifNull: [{ $arrayElemAt: ['$eventDetails.resaleMarkupAdjustment', 0] }, 0] },
+            event_default_pct: { $ifNull: [{ $arrayElemAt: ['$eventDetails.priceIncreasePercentage', 0] }, 0] },
           }
         },
         { $project: projection },
@@ -451,7 +457,10 @@ interface ConsecutiveGroupDocument {
   event_date?: Date | string;
   eventId?: string;
   mapping_id?: string;
-  event_url?: string; // Ticketmaster URL from Event collection
+  event_url?: string;
+  event_std_adj?: number;
+  event_resale_adj?: number;
+  event_default_pct?: number;
   seats?: Array<{ number: string | number }>;
 }
 
@@ -509,6 +518,16 @@ function calculateSplitConfiguration(quantity: number, splitType?: string): {
 async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]> {
   return batch.map(doc => {
     const inventory = doc.inventory;
+    const isResale = inventory?.splitType !== 'NEVERLEAVEONE';
+
+    // Apply per-ticket-type markup adjustment on top of already-marked-up listPrice.
+    // Formula: adjustedPrice = listPrice * (1 + (defaultPct + adj) / 100) / (1 + defaultPct / 100)
+    const rawListPrice = inventory?.listPrice || 0;
+    const defaultPct = doc.event_default_pct ?? 0;
+    const adj = isResale ? (doc.event_resale_adj ?? 0) : (doc.event_std_adj ?? 0);
+    const adjustedListPrice = defaultPct !== 0 || adj !== 0
+      ? rawListPrice * (1 + (defaultPct + adj) / 100) / (1 + defaultPct / 100)
+      : rawListPrice;
     
     // Pre-compute expensive operations with null safety
     const seatsString = doc.seats && doc.seats.length > 0 ?
@@ -546,7 +565,7 @@ async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]
       internal_notes: "-tnow -tmplus",
       public_notes: publicNotes,
       tags: inventory?.splitType === "NEVERLEAVEONE" ? "STANDARD" : "RESALE",
-      list_price: Number((inventory?.listPrice || 0).toFixed(2)),
+      list_price: Number(adjustedListPrice.toFixed(2)),
       face_price: Number((inventory?.cost || 0).toFixed(2)),
       taxed_cost: Number((inventory?.cost || 0).toFixed(2)),
       cost: Number((inventory?.cost || 0).toFixed(2)),

@@ -25,6 +25,8 @@ interface FormData {
   inHandDate: FormField;
   mapping_id: FormField;
   Percentage_Increase_ListCost: FormField;
+  standardMarkupAdjustment: FormField;
+  resaleMarkupAdjustment: FormField;
 }
 
 interface FormContextInterface {
@@ -61,6 +63,8 @@ const validationRules: {
   inHandDate: (value: string) => boolean;
   mapping_id: (value: string) => boolean;
   Percentage_Increase_ListCost: (value: number) => boolean;
+  standardMarkupAdjustment: (value: number) => boolean;
+  resaleMarkupAdjustment: (value: number) => boolean;
 } = {
   URL: (value: string) => {
     try {
@@ -80,6 +84,8 @@ const validationRules: {
   inHandDate: (value: string) => Boolean(value),
   mapping_id: (value: string) => value.length > 0,
   Percentage_Increase_ListCost: (value: number) => value >= 0,
+  standardMarkupAdjustment: (_value: number) => true,
+  resaleMarkupAdjustment: (_value: number) => true,
 };
 
 const errorMessages = {
@@ -94,6 +100,8 @@ const errorMessages = {
   inHandDate: "Please select an in-hand date",
   mapping_id: "Please enter a valid event mapping ID",
   Percentage_Increase_ListCost: "Please enter a valid percentage (0 or greater)",
+  standardMarkupAdjustment: "",
+  resaleMarkupAdjustment: "",
 };
 
 export function EventFormProvider({ children, initialData }: { 
@@ -123,6 +131,8 @@ export function EventFormProvider({ children, initialData }: {
       inHandDate: { value: formatDateForInput(initialData?.inHandDate), status: 'untouched' },
       mapping_id: { value: initialData?.mapping_id || "", status: 'untouched' },
       Percentage_Increase_ListCost: { value: initialData?.priceIncreasePercentage || 0, status: 'untouched' },
+      standardMarkupAdjustment: { value: initialData?.standardMarkupAdjustment ?? 0, status: 'untouched' },
+      resaleMarkupAdjustment: { value: initialData?.resaleMarkupAdjustment ?? 0, status: 'untouched' },
     };
   };
 
@@ -155,6 +165,8 @@ export function EventFormProvider({ children, initialData }: {
         return validationRules[name](value as string);
       case "Available_Seats":
       case "Percentage_Increase_ListCost":
+      case "standardMarkupAdjustment":
+      case "resaleMarkupAdjustment":
         return validationRules[name](value as number);
       case "Skip_Scraping":
         return validationRules[name](value as boolean);

@@ -1,7 +1,15 @@
 import React from 'react';
 import Link from 'next/link';
-import { getEventById } from '@/actions/eventActions';
-import { Calendar, MapPin, ExternalLink, Edit, Clock, Users, TrendingUp, Activity, Filter } from 'lucide-react';
+import { notFound } from 'next/navigation';
+import { getEventById, getInventoryCountsByType } from '@/actions/eventActions';
+import {
+  Calendar, MapPin, ExternalLink,
+  Activity, ChevronLeft, Globe, Ticket,
+  Hash, Clock, Tag, Link2, TrendingUp
+} from 'lucide-react';
+
+import EventDetailActions from './EventDetailActions';
+import PriceEditor from './PriceEditor';
 
 interface EventDetailsProps {
   params: Promise<{ id: string }>;
@@ -20,24 +28,28 @@ interface EventType {
   Skip_Scraping?: boolean;
   inHandDate?: string;
   priceIncreasePercentage?: number;
+  standardMarkupAdjustment?: number;
+  resaleMarkupAdjustment?: number;
   Last_Updated?: string;
   createdAt?: string;
   updatedAt?: string;
-  metadata?: {
-    lastUpdate?: string;
-    iterationNumber?: number;
-    scrapeStartTime?: string;
-    scrapeEndTime?: string;
-    inHandDate?: string;
-    scrapeDurationSeconds?: number;
-    totalRunningTimeMinutes?: number;
-    ticketStats?: {
-      totalTickets?: number;
-      ticketCountChange?: number;
-      previousTicketCount?: number;
-    };
-  };
   error?: string;
+}
+
+function fmt(date: string, opts: Intl.DateTimeFormatOptions) {
+  return new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', ...opts }).format(new Date(date));
+}
+
+function InfoRow({ icon, label, children }: { icon: React.ReactNode; label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center gap-4 py-3 border-b border-slate-100 last:border-0">
+      <div className="w-8 h-8 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-center shrink-0 text-slate-400">{icon}</div>
+      <div className="w-28 shrink-0">
+        <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">{label}</p>
+      </div>
+      <div className="flex-1 text-sm text-slate-800 font-medium">{children}</div>
+    </div>
+  );
 }
 
 export default async function EventDetailsPage({ params }: EventDetailsProps) {
@@ -45,298 +57,227 @@ export default async function EventDetailsPage({ params }: EventDetailsProps) {
   const event: EventType = await getEventById(id) as EventType;
 
   if (!event || event.error) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
-        <div className="max-w-6xl mx-auto p-8">
-          <Link 
-            href="/dashboard/events" 
-            className="inline-flex items-center text-slate-600 hover:text-blue-600 transition-colors mb-6"
-          >
-            <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-            </svg>
-            Back to Events
-          </Link>
-          <div className="bg-white rounded-xl shadow-lg p-8 text-center">
-            <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
-              <Calendar className="w-8 h-8 text-red-600" />
+    notFound();
+  }
+
+  const isActive = !event.Skip_Scraping;
+  const lastUpdated = event.Last_Updated || event.updatedAt;
+  const isStale = lastUpdated
+    ? Date.now() - new Date(lastUpdated).getTime() > 4 * 60 * 1000
+    : true;
+
+  const pct = event.priceIncreasePercentage ?? 25;
+
+  const stdAdj = event.standardMarkupAdjustment ?? 0;
+  const resAdj = event.resaleMarkupAdjustment ?? 0;
+
+  // Fetch standard/resale inventory counts
+  const inventoryCounts = event.mapping_id
+    ? await getInventoryCountsByType([event.mapping_id])
+    : {};
+  const standardQty = event.mapping_id ? (inventoryCounts[event.mapping_id]?.standard ?? 0) : 0;
+  const resaleQty = event.mapping_id ? (inventoryCounts[event.mapping_id]?.resale ?? 0) : 0;
+
+  return (
+    <div className="space-y-6">
+
+      {/* ── Nav bar ── */}
+      <div className="flex items-center justify-between gap-3">
+        <Link
+          href="/dashboard/events"
+          className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-500 hover:text-blue-600 transition-colors rounded"
+        >
+          <ChevronLeft size={15} />
+          Events
+        </Link>
+        <div className="flex items-center gap-2">
+          {event.URL && (
+            <a href={event.URL} target="_blank" rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold bg-blue-600 hover:bg-blue-700 text-white transition-colors shadow-sm">
+              <Ticket size={13} />
+              Ticketmaster
+              <ExternalLink size={10} />
+            </a>
+          )}
+          <EventDetailActions eventId={id} eventName={event.Event_Name} isScrapingActive={isActive} />
+        </div>
+      </div>
+
+      {/* ── Event header card ── */}
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-xl overflow-hidden">
+        <div className="bg-gradient-to-r from-purple-600 to-indigo-600 px-6 py-6 relative overflow-hidden">
+          <div className="absolute inset-0 bg-black/10" />
+          <div className="relative">
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${
+                    isActive ? 'bg-green-500/20 text-green-100 border-green-400/30' : 'bg-white/10 text-white/60 border-white/20'
+                  }`}>
+                    <Activity size={10} />
+                    {isActive ? 'Active' : 'Paused'}
+                  </span>
+                  {isStale && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-400/20 text-amber-200 border border-amber-300/30">
+                      ⚠ Stale data
+                    </span>
+                  )}
+                </div>
+                <h1 className="text-2xl font-bold text-white drop-shadow-sm leading-tight">
+                  {event.Event_Name}
+                </h1>
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-sm text-purple-100">
+                  {event.Venue && (
+                    <span className="flex items-center gap-1.5"><MapPin size={13} className="text-purple-200" />{event.Venue}</span>
+                  )}
+                  {event.Event_DateTime && (
+                    <span className="flex items-center gap-1.5">
+                      <Calendar size={13} className="text-purple-200" />
+                      {fmt(event.Event_DateTime, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
+                      <span className="text-purple-300">·</span>
+                      {fmt(event.Event_DateTime, { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                  )}
+                </div>
+              </div>
             </div>
-            <h1 className="text-2xl font-bold text-slate-800 mb-2">Event not found</h1>
-            <p className="text-slate-600">The event you&apos;re looking for doesn&apos;t exist or has been removed.</p>
+          </div>
+        </div>
+
+      {/* ── Stat strip ── */}
+        <div className="grid grid-cols-2 sm:grid-cols-5 bg-slate-50 border-t border-slate-100 divide-x divide-slate-100">
+          <div className="px-5 py-4">
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Standard</p>
+            <p className="text-2xl font-bold tabular-nums text-blue-700" style={{ fontVariantNumeric: 'tabular-nums' }}>
+              {standardQty.toLocaleString()}
+            </p>
+            <span className="inline-flex items-center text-[10px] font-semibold px-1.5 py-0.5 rounded border border-blue-200 bg-blue-50 text-blue-600 mt-1">S qty</span>
+          </div>
+          <div className="px-5 py-4">
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Resale</p>
+            <p className="text-2xl font-bold tabular-nums text-red-700" style={{ fontVariantNumeric: 'tabular-nums' }}>
+              {resaleQty.toLocaleString()}
+            </p>
+            <span className="inline-flex items-center text-[10px] font-semibold px-1.5 py-0.5 rounded border border-red-200 bg-red-50 text-red-600 mt-1">R qty</span>
+          </div>
+          <div className="px-5 py-4">
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Default Markup</p>
+            <p className={`text-2xl font-bold tabular-nums ${
+              pct > 0 ? 'text-rose-600' : pct < 0 ? 'text-blue-600' : 'text-slate-700'
+            }`}>{pct > 0 ? '+' : ''}{pct}%</p>
+          </div>
+          <div className="px-5 py-4">
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Standard Effective</p>
+            <div className="flex items-baseline gap-1.5">
+              <p className={`text-2xl font-bold tabular-nums ${
+                (pct + stdAdj) > 0 ? 'text-orange-600' : 'text-slate-700'
+              }`}>{(pct + stdAdj) > 0 ? '+' : ''}{pct + stdAdj}%</p>
+              {stdAdj !== 0 && (
+                <span className={`text-xs font-bold px-1.5 py-0.5 rounded-full ${
+                  stdAdj > 0 ? 'bg-orange-100 text-orange-600' : 'bg-sky-100 text-sky-600'
+                }`}>{stdAdj > 0 ? '+' : ''}{stdAdj}</span>
+              )}
+            </div>
+          </div>
+          <div className="px-5 py-4">
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Resale Effective</p>
+            <div className="flex items-baseline gap-1.5">
+              <p className={`text-2xl font-bold tabular-nums ${
+                (pct + resAdj) > 0 ? 'text-orange-600' : 'text-slate-700'
+              }`}>{(pct + resAdj) > 0 ? '+' : ''}{pct + resAdj}%</p>
+              {resAdj !== 0 && (
+                <span className={`text-xs font-bold px-1.5 py-0.5 rounded-full ${
+                  resAdj > 0 ? 'bg-orange-100 text-orange-600' : 'bg-sky-100 text-sky-600'
+                }`}>{resAdj > 0 ? '+' : ''}{resAdj}</span>
+              )}
+            </div>
           </div>
         </div>
       </div>
-    );
-  }
 
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      weekday: 'long',
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric'
-    });
-  };
+      {/* ── Body ── */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
-  const formatTime = (dateString: string) => {
-    return new Date(dateString).toLocaleTimeString('en-US', {
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-  };
-
-  const isStale = event.Last_Updated 
-    ? Date.now() - new Date(event.Last_Updated).getTime() > 4 * 60 * 1000
-    : true;
-
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
-      <div className="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8 space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <Link 
-            href="/dashboard/events" 
-            className="inline-flex items-center text-slate-600 hover:text-blue-600 transition-colors font-medium"
-          >
-            <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-            </svg>
-            Back to Events
-          </Link>
-          <div className="flex items-center gap-3">
-            <Link
-              href={`/dashboard/events/${id}/exclusions`}
-              className="inline-flex items-center gap-2 bg-gradient-to-r from-purple-600 to-purple-700 text-white px-4 py-2.5 rounded-lg hover:from-purple-700 hover:to-purple-800 transition-all shadow-md hover:shadow-lg transform hover:-translate-y-0.5"
-            >
-              <Filter size={16} />
-              Manage Exclusions
-            </Link>
-            <Link
-              href={`/dashboard/events/${id}/edit`}
-              className="inline-flex items-center gap-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white px-4 py-2.5 rounded-lg hover:from-blue-700 hover:to-blue-800 transition-all shadow-md hover:shadow-lg transform hover:-translate-y-0.5"
-            >
-              <Edit size={16} />
-              Edit Event
-            </Link>
+        {/* Left: Details */}
+        <section className="lg:col-span-2 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="px-5 py-4 border-b border-slate-100 flex items-center gap-2">
+            <span className="w-7 h-7 rounded-lg bg-purple-50 flex items-center justify-center">
+              <Calendar size={14} className="text-purple-500" />
+            </span>
+            <h2 className="text-sm font-bold text-slate-700">Event Details</h2>
           </div>
-        </div>
-
-        {/* Event Header Card */}
-        <div className="bg-white rounded-2xl shadow-xl border border-slate-200/50 overflow-hidden backdrop-blur-sm">
-          <div className="bg-gradient-to-r from-blue-600 to-purple-600 p-8 text-white relative overflow-hidden">
-            <div className="relative flex items-start justify-between">
-              <div className="flex-1">
-                <h1 className="text-4xl font-bold mb-3 text-white drop-shadow-sm">
-                  {event.Event_Name || 'Event Details'}
-                </h1>
-                <div className="flex flex-wrap items-center gap-6 text-blue-100">
-                  {event.Venue && (
-                    <div className="flex items-center gap-2">
-                      <MapPin size={16} />
-                      <span className="font-medium">{event.Venue}</span>
-                    </div>
-                  )}
-                  {event.Event_DateTime && (
-                    <div className="flex items-center gap-2">
-                      <Calendar size={16} />
-                      <span className="font-medium">{formatDate(event.Event_DateTime)}</span>
-                    </div>
-                  )}
-                </div>
-              </div>
-              <div className="text-right">
-                <div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-bold ${
-                  event.Skip_Scraping 
-                    ? 'bg-red-500/20 text-red-100 border border-red-400/30' 
-                    : 'bg-green-500/20 text-green-100 border border-green-400/30'
-                }`}>
-                  <Activity size={16} />
-                  {event.Skip_Scraping ? 'Inactive' : 'Active'}
-                </div>
-                {isStale && (
-                  <div className="mt-3 text-xs text-orange-200">
-                    ⚠ Data may be stale
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Main Content Grid */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Left Column - Main Details */}
-          <div className="lg:col-span-2 space-y-6">
-            {/* Event Information */}
-            <div className="bg-white rounded-2xl shadow-xl border border-slate-200/50 p-8 hover:shadow-2xl transition-all duration-300">
-              <h2 className="text-2xl font-bold text-slate-800 mb-8 flex items-center gap-3 pb-2 border-b border-slate-200">
-                <Calendar className="text-blue-600" size={24} />
-                Event Information
-              </h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Event ID</label>
-                  <div className="font-mono text-sm text-slate-800 bg-slate-50 p-3 rounded-lg border border-slate-200">
-                    {event.Event_ID || '—'}
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Event Date & Time</label>
-                  <div className="text-slate-800">
-                    {event.Event_DateTime ? (
-                      <div>
-                        <div className="font-bold text-lg">{formatDate(event.Event_DateTime)}</div>
-                        <div className="text-sm text-slate-600 font-medium">{formatTime(event.Event_DateTime)}</div>
-                      </div>
-                    ) : '—'}
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Venue</label>
-                  <div className="text-slate-800 font-semibold">
-                    {event.Venue || '—'}
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Event URL</label>
-                  <div>
-                    {event.URL ? (
-                      <a 
-                        href={event.URL} 
-                        target="_blank" 
-                        rel="noopener noreferrer" 
-                        className="inline-flex items-center gap-2 text-blue-600 hover:text-blue-700 transition-colors"
-                      >
-                        <ExternalLink size={16} />
-                        <span className="truncate max-w-xs">View Event</span>
-                      </a>
-                    ) : '—'}
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Zone</label>
-                  <div className="text-slate-800">
-                    {event.Zone || 'none'}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Technical Details */}
-            <div className="bg-white rounded-2xl shadow-xl border border-slate-200/50 p-8 hover:shadow-2xl transition-all duration-300">
-              <h2 className="text-2xl font-bold text-slate-800 mb-8 flex items-center gap-3 pb-2 border-b border-slate-200">
-                <svg className="text-blue-600" width="24" height="24" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                </svg>
-                Technical Details
-              </h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">MongoDB ID</label>
-                  <div className="font-mono text-xs text-slate-800 bg-slate-50 p-3 rounded-lg border border-slate-200 break-all">
-                    {event._id}
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Mapping ID</label>
-                  <div className="font-mono text-sm text-slate-800 bg-slate-50 p-3 rounded-lg border border-slate-200">
-                    {event.mapping_id || '—'}
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Created At</label>
-                  <div className="text-slate-800">
-                    {event.createdAt ? new Date(event.createdAt).toLocaleString() : '—'}
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Last Updated</label>
-                  <div className="text-slate-800">
-                    {event.updatedAt ? new Date(event.updatedAt).toLocaleString() : '—'}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Right Column - Stats & Status */}
-          <div className="space-y-6">
-            {/* Quick Stats */}
-            <div className="bg-white rounded-2xl shadow-xl border border-slate-200/50 p-6 hover:shadow-2xl transition-all duration-300">
-              <h3 className="text-xl font-bold text-slate-800 mb-6 pb-2 border-b border-slate-200">Quick Stats</h3>
-              <div className="space-y-4">
-                <div className="p-5 bg-blue-50 rounded-xl">
-                  <div className="flex items-center gap-4">
-                    <Users className="text-blue-600" size={24} />
-                    <div>
-                      <div className="text-sm font-medium text-slate-600">Available Seats</div>
-                      <div className="text-3xl font-bold text-slate-800">
-                        {(event.Available_Seats ?? 0).toLocaleString()}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                
-                <div className="p-5 bg-green-50 rounded-xl">
-                  <div className="flex items-center gap-4">
-                    <TrendingUp className="text-green-600" size={24} />
-                    <div>
-                      <div className="text-sm font-medium text-slate-600">Price Increase</div>
-                      <div className="text-3xl font-bold text-slate-800">
-                        {event.priceIncreasePercentage ?? 25}%
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="p-5 bg-purple-50 rounded-xl">
-                  <div className="flex items-center gap-4">
-                    <Clock className="text-purple-600" size={24} />
-                    <div>
-                      <div className="text-sm font-medium text-slate-600">In Hand Date</div>
-                      <div className="text-lg font-bold text-slate-800">
-                        {event.inHandDate ? new Date(event.inHandDate).toLocaleDateString() : '—'}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Status Card */}
-            <div className="bg-white rounded-2xl shadow-xl border border-slate-200/50 p-6 hover:shadow-2xl transition-all duration-300">
-              <h3 className="text-xl font-bold text-slate-800 mb-6 pb-2 border-b border-slate-200">Status Overview</h3>
-              <div className="space-y-5">
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-700 font-medium">Scraping Status</span>
-                  <span className={`px-4 py-2 rounded-full text-sm font-bold ${
-                    event.Skip_Scraping 
-                      ? 'bg-red-100 text-red-800' 
-                      : 'bg-green-100 text-green-800'
-                  }`}>
-                    {event.Skip_Scraping ? 'Inactive' : 'Active'}
+          <dl className="px-5 py-2">
+            <InfoRow icon={<Tag size={13} />} label="Event Name">
+              {event.Event_Name}
+            </InfoRow>
+            <InfoRow icon={<MapPin size={13} />} label="Venue">
+              {event.Venue || <span className="text-slate-400 font-normal">—</span>}
+            </InfoRow>
+            <InfoRow icon={<Calendar size={13} />} label="Date & Time">
+              {event.Event_DateTime ? (
+                <span>
+                  {fmt(event.Event_DateTime, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
+                  <span className="text-slate-400 font-normal ml-2 text-xs">
+                    {fmt(event.Event_DateTime, { hour: '2-digit', minute: '2-digit' })}
                   </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-700 font-medium">Data Freshness</span>
-                  <span className={`px-4 py-2 rounded-full text-sm font-bold ${
-                    isStale 
-                      ? 'bg-orange-100 text-orange-800' 
-                      : 'bg-green-100 text-green-800'
-                  }`}>
-                    {isStale ? 'Stale' : 'Fresh'}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-700 font-medium">Zone</span>
-                  <span className="px-4 py-2 bg-slate-100 text-slate-800 rounded-full text-sm font-bold">
-                    {event.Zone || 'none'}
-                  </span>
-                </div>
+                </span>
+              ) : <span className="text-slate-400 font-normal">—</span>}
+            </InfoRow>
+            <InfoRow icon={<Clock size={13} />} label="In-Hand Date">
+              {event.inHandDate
+                ? fmt(event.inHandDate, { month: 'short', day: 'numeric', year: 'numeric' })
+                : <span className="text-slate-400 font-normal">—</span>}
+            </InfoRow>
+            <InfoRow icon={<Tag size={13} />} label="Zone">
+              <span className={`inline-block px-2.5 py-0.5 rounded-full text-xs font-semibold ${
+                event.Zone && event.Zone !== 'none' ? 'bg-indigo-50 text-indigo-700' : 'bg-slate-100 text-slate-500'
+              }`}>{event.Zone || 'none'}</span>
+            </InfoRow>
+            <InfoRow icon={<Hash size={13} />} label="Event ID">
+              <code className="text-xs bg-slate-100 px-2 py-0.5 rounded-md font-mono text-slate-600">{event.Event_ID || '—'}</code>
+            </InfoRow>
+            <InfoRow icon={<Hash size={13} />} label="Mapping ID">
+              <code className="text-xs bg-slate-100 px-2 py-0.5 rounded-md font-mono text-slate-600">{event.mapping_id || '—'}</code>
+            </InfoRow>
+            <InfoRow icon={<Link2 size={13} />} label="Source URL">
+              {event.URL ? (
+                <a href={event.URL} target="_blank" rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 text-purple-600 hover:text-purple-700 transition-colors">
+                  <Globe size={11} />
+                  View on Ticketmaster
+                  <ExternalLink size={10} />
+                </a>
+              ) : <span className="text-slate-400 font-normal">—</span>}
+            </InfoRow>
+            <InfoRow icon={<Clock size={13} />} label="Listed">
+              {event.createdAt
+                ? fmt(event.createdAt, { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+                : <span className="text-slate-400 font-normal">—</span>}
+            </InfoRow>
+            <InfoRow icon={<TrendingUp size={13} />} label="Markup">
+              <div className="flex flex-wrap gap-1.5">
+                <span className={`inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-bold border tabular-nums ${
+                  pct > 0 ? 'bg-rose-50 border-rose-200 text-rose-700' : 'bg-slate-50 border-slate-200 text-slate-500'
+                }`}>Default {pct > 0 ? '+' : ''}{pct}%</span>
+                <span className={`inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-bold border tabular-nums ${
+                  stdAdj > 0 ? 'bg-orange-50 border-orange-200 text-orange-700' : stdAdj < 0 ? 'bg-sky-50 border-sky-200 text-sky-700' : 'bg-slate-50 border-slate-200 text-slate-400'
+                }`}>S {stdAdj > 0 ? '+' : ''}{stdAdj}% → {pct + stdAdj}%</span>
+                <span className={`inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-bold border tabular-nums ${
+                  resAdj > 0 ? 'bg-orange-50 border-orange-200 text-orange-700' : resAdj < 0 ? 'bg-sky-50 border-sky-200 text-sky-700' : 'bg-slate-50 border-slate-200 text-slate-400'
+                }`}>R {resAdj > 0 ? '+' : ''}{resAdj}% → {pct + resAdj}%</span>
               </div>
-            </div>
-          </div>
+            </InfoRow>
+          </dl>
+        </section>
+
+        {/* Right: Price editor */}
+        <div className="lg:col-span-1">
+          <PriceEditor
+            eventId={id}
+            initialPct={pct}
+            initialStandardAdj={stdAdj}
+            initialResaleAdj={resAdj}
+          />
         </div>
       </div>
     </div>

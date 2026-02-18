@@ -5,17 +5,28 @@ import DataTable from 'react-data-table-component';
 import Link from 'next/link';
 import { Eye, Edit, Trash2, Play, Square, Info, AlertCircle, Calendar, MapPin, Users } from 'lucide-react';
 
+// Respect user's motion preferences
+const prefersReducedMotion =
+  typeof window !== 'undefined'
+    ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    : false;
+
 // Modern tooltip header component
 const Header = ({ title, description, icon }) => (
   <div className="flex items-center gap-2">
-    {icon && <span className="text-slate-500">{icon}</span>}
+    {icon && <span className="text-slate-500" aria-hidden="true">{icon}</span>}
     <span className="font-semibold text-slate-700">{title}</span>
     {description && (
       <div className="group relative">
-        <Info size={14} className="text-slate-400 cursor-help hover:text-slate-600 transition-colors" />
-        <div className="pointer-events-none absolute left-1/2 top-full z-50 mt-2 w-max max-w-xs -translate-x-1/2 scale-0 transform rounded-lg bg-slate-900 px-3 py-2 text-xs text-white opacity-0 shadow-xl transition-all duration-200 group-hover:scale-100 group-hover:opacity-100">
+        <Info
+          size={14}
+          className="text-slate-400 cursor-help hover:text-slate-600 transition-[color] duration-200"
+          aria-label={description}
+          role="img"
+        />
+        <div className="pointer-events-none absolute left-1/2 top-full z-50 mt-2 w-max max-w-xs -translate-x-1/2 scale-0 transform rounded-lg bg-slate-900 px-3 py-2 text-xs text-white opacity-0 shadow-xl transition-[transform,opacity] duration-200 group-hover:scale-100 group-hover:opacity-100">
           {description}
-          <div className="absolute -top-1 left-1/2 h-2 w-2 -translate-x-1/2 rotate-45 bg-slate-900"></div>
+          <div className="absolute -top-1 left-1/2 h-2 w-2 -translate-x-1/2 rotate-45 bg-slate-900" aria-hidden="true"></div>
         </div>
       </div>
     )}
@@ -25,16 +36,16 @@ const Header = ({ title, description, icon }) => (
 // Explicit variants instead of boolean props
 const StatusBadge = {
   Active: () => (
-    <div className="flex items-center">
-      <div className="w-2 h-2 rounded-full mr-2 bg-blue-500"></div>
+    <div className="flex items-center" role="status" aria-label="Active">
+      <div className="w-2 h-2 rounded-full mr-2 bg-blue-500" aria-hidden="true"></div>
       <span className="px-3 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
         Active
       </span>
     </div>
   ),
   Inactive: () => (
-    <div className="flex items-center">
-      <div className="w-2 h-2 rounded-full mr-2 bg-slate-400"></div>
+    <div className="flex items-center" role="status" aria-label="Inactive">
+      <div className="w-2 h-2 rounded-full mr-2 bg-slate-400" aria-hidden="true"></div>
       <span className="px-3 py-1 rounded-full text-xs font-semibold bg-slate-50 text-slate-700 border border-slate-200">
         Inactive
       </span>
@@ -77,23 +88,23 @@ const EventsTableModern = function EventsTableModern({ data, toggleScraping, sea
       grow: 2, 
       sortable: true,
       cell: r => (
-        <div className="py-1">
+        <div className="py-1 min-w-0 w-full">
           <Link 
             href={`/dashboard/events/${r._id}`} 
-            className="text-slate-900 hover:text-blue-600 font-semibold text-sm transition-colors duration-200 block mb-1"
+            className="text-slate-900 hover:text-blue-600 font-semibold text-sm transition-[color] duration-200 block mb-1 truncate"
           >
             {r.Event_Name}
           </Link>
-          <div className="flex items-center gap-3 text-xs text-slate-500">
+          <div className="flex items-center gap-3 text-xs text-slate-500 min-w-0">
             {r.Venue && (
-              <div className="flex items-center gap-1">
-                <MapPin size={12} />
-                <span>{r.Venue}</span>
+              <div className="flex items-center gap-1 min-w-0">
+                <MapPin size={12} aria-hidden="true" />
+                <span className="truncate">{r.Venue}</span>
               </div>
             )}
             <div className="flex items-center gap-1">
               <span className="text-slate-400">ID:</span>
-              <span className="font-mono">{r.mapping_id || '—'}</span>
+              <span className="font-mono tabular-nums">{r.mapping_id || '—'}</span>
             </div>
           </div>
         </div>
@@ -106,10 +117,10 @@ const EventsTableModern = function EventsTableModern({ data, toggleScraping, sea
       width: '150px',
       cell: r => (
         <div className="text-center">
-          <div className="font-semibold text-slate-900 text-sm">
+          <div className="font-semibold text-slate-900 text-sm tabular-nums">
             {formatDate(r.Event_DateTime)}
           </div>
-          <div className="text-xs text-slate-500 mt-1">
+          <div className="text-xs text-slate-500 mt-1 tabular-nums">
             {formatTime(r.Event_DateTime)}
           </div>
         </div>
@@ -135,11 +146,11 @@ const EventsTableModern = function EventsTableModern({ data, toggleScraping, sea
         
         return (
           <div className="text-right">
-            <div className="font-bold text-slate-900 text-lg">
+            <div className="font-bold text-slate-900 text-lg tabular-nums" style={{ fontVariantNumeric: 'tabular-nums' }}>
               {(seatCount ?? availableSeats).toLocaleString()}
             </div>
             {seatCount !== undefined && seatCount !== availableSeats && (
-              <div className="text-xs text-slate-500">
+              <div className="text-xs text-slate-500 tabular-nums">
                 DB: {availableSeats.toLocaleString()}
               </div>
             )}
@@ -181,15 +192,15 @@ const EventsTableModern = function EventsTableModern({ data, toggleScraping, sea
         
         return (
           <div className="text-center">
-            <div className={`font-semibold text-sm ${fresh ? 'text-blue-700' : 'text-amber-700'}`}>
+            <div className={`font-semibold text-sm tabular-nums ${fresh ? 'text-blue-700' : 'text-amber-700'}`}>
               {timeAgo(lastUpdated)}
             </div>
-            <div className="text-xs text-slate-500 mt-1">
+            <div className="text-xs text-slate-500 mt-1 tabular-nums">
               {formatDate(lastUpdated)}
             </div>
             {!fresh && (
-              <div className="flex items-center justify-center mt-1">
-                <div className="w-1 h-1 bg-amber-500 rounded-full mr-1"></div>
+              <div className="flex items-center justify-center mt-1" role="status" aria-label="Stale data">
+                <div className="w-1 h-1 bg-amber-500 rounded-full mr-1" aria-hidden="true"></div>
                 <span className="text-[10px] text-amber-600 font-medium">Stale</span>
               </div>
             )}
@@ -205,43 +216,52 @@ const EventsTableModern = function EventsTableModern({ data, toggleScraping, sea
         <div className="flex gap-1 justify-end pr-4">
           <Link 
             href={`/dashboard/events/${r._id}/edit`} 
-            className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors duration-200 hover:shadow-sm" 
-            title="Edit Event"
+            className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-[background-color,color] duration-200 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1"
+            aria-label={`Edit ${r.Event_Name}`}
           >
-            <Edit size={16} />
+            <Edit size={16} aria-hidden="true" />
           </Link>
           <button
-            className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors duration-200 hover:shadow-sm"
-            title="Delete Event"
+            className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-[background-color,color] duration-200 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-1 touch-action-manipulation"
+            aria-label={`Delete ${r.Event_Name}`}
             onClick={() => onDeleteEvent && onDeleteEvent(r._id, r.Event_Name)}
+            style={{ touchAction: 'manipulation' }}
           >
-            <Trash2 size={16} />
+            <Trash2 size={16} aria-hidden="true" />
           </button>
           <button
             onClick={() => toggleScraping(r._id, r.Skip_Scraping)}
             disabled={togglingEvents.has(r._id)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all duration-200 hover:shadow-sm disabled:opacity-50 disabled:cursor-not-allowed ${
+            aria-label={
               togglingEvents.has(r._id)
-                ? 'bg-gray-400 text-white'
+                ? `Updating ${r.Event_Name}…`
+                : r.Skip_Scraping
+                ? `Start scraping ${r.Event_Name}`
+                : `Stop scraping ${r.Event_Name}`
+            }
+            aria-busy={togglingEvents.has(r._id)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-[background-color,box-shadow,opacity] duration-200 hover:shadow-sm disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 ${
+              togglingEvents.has(r._id)
+                ? 'bg-gray-400 text-white focus-visible:ring-gray-400'
                 : r.Skip_Scraping 
-                ? 'bg-gradient-to-r from-blue-500 to-purple-600 text-white hover:from-blue-600 hover:to-purple-700 shadow-blue-200' 
-                : 'bg-red-600 text-white hover:bg-red-700 shadow-red-200'
+                ? 'bg-gradient-to-r from-blue-500 to-purple-600 text-white hover:from-blue-600 hover:to-purple-700 shadow-blue-200 focus-visible:ring-blue-500' 
+                : 'bg-red-600 text-white hover:bg-red-700 shadow-red-200 focus-visible:ring-red-500'
             }`}
-            title={togglingEvents.has(r._id) ? 'Processing...' : (r.Skip_Scraping ? 'Start Scraping' : 'Stop Scraping')}
+            style={{ touchAction: 'manipulation' }}
           >
             {togglingEvents.has(r._id) ? (
               <>
-                <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                <span>...</span>
+                <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" aria-hidden="true"></div>
+                <span aria-hidden="true">…</span>
               </>
             ) : r.Skip_Scraping ? (
               <>
-                <Play size={12} />
+                <Play size={12} aria-hidden="true" />
                 <span>Start</span>
               </>
             ) : (
               <>
-                <Square size={12} />
+                <Square size={12} aria-hidden="true" />
                 <span>Stop</span>
               </>
             )}
@@ -275,9 +295,12 @@ const EventsTableModern = function EventsTableModern({ data, toggleScraping, sea
         borderBottom: '1px solid #f1f5f9',
         '&:hover': {
           background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)',
-          transform: 'translateY(-1px)',
+          // Use transform only when motion is allowed
+          ...(prefersReducedMotion ? {} : {
+            transform: 'translateY(-1px)',
+            transition: 'transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out, background 0.2s ease-in-out',
+          }),
           boxShadow: '0 4px 12px rgba(0, 0, 0, 0.05)',
-          transition: 'all 0.2s ease-in-out',
         }
       }
     },
@@ -329,8 +352,13 @@ const EventsTableModern = function EventsTableModern({ data, toggleScraping, sea
     }
   ];
 
+  // Live region for async update announcements
+  const liveRegion = togglingEvents.size > 0 ? 'Updating scraping status…' : '';
+
   return (
     <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      {/* Announce async scraping-toggle changes to screen readers */}
+      <div aria-live="polite" aria-atomic="true" className="sr-only">{liveRegion}</div>
       <DataTable
         columns={columns}
         data={sortedData}
@@ -341,12 +369,12 @@ const EventsTableModern = function EventsTableModern({ data, toggleScraping, sea
         conditionalRowStyles={conditionalRowStyles}
         pagination={false}
         noDataComponent={
-          <div className="flex flex-col items-center justify-center p-16">
+          <div className="flex flex-col items-center justify-center p-16" role="status">
             <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-4">
-              <AlertCircle className="h-8 w-8 text-slate-400" />
+              <AlertCircle className="h-8 w-8 text-slate-400" aria-hidden="true" />
             </div>
-            <h3 className="text-lg font-semibold text-slate-700 mb-2">No events found</h3>
-            <p className="text-slate-500 text-center max-w-sm">
+            <h3 className="text-lg font-semibold text-slate-700 mb-2 text-balance">No Events Found</h3>
+            <p className="text-slate-500 text-center max-w-sm text-pretty">
               There are no events matching your current filters. Try adjusting your search criteria or create a new event.
             </p>
           </div>

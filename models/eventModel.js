@@ -45,6 +45,14 @@ const eventSchema = new mongoose.Schema(
       type: Number,
       default: 25, // Default 25% markup
     },
+    standardMarkupAdjustment: {
+      type: Number,
+      default: 0, // +/- offset on top of scraper default for STANDARD tickets
+    },
+    resaleMarkupAdjustment: {
+      type: Number,
+      default: 0, // +/- offset on top of scraper default for RESALE tickets
+    },
     Last_Updated: {
       type: Date,
       default: Date.now,
