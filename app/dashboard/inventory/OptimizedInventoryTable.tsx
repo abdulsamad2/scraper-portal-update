@@ -65,6 +65,7 @@ const TableHeader = {
 };
 
 // Row status variants instead of boolean conditions
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const RowStatus = {
   Active: ({ children }: { children: React.ReactNode }) => (
     <div className="opacity-100">{children}</div>

@@ -120,7 +120,7 @@ export default function EventDetailActions({ eventId, eventName, isScrapingActiv
         >
           <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6">
             <h2 id="delete-dialog-title" className="text-lg font-bold text-slate-900 mb-2 text-balance">
-              Delete "{eventName}"?
+              Delete &ldquo;{eventName}&rdquo;?
             </h2>
             <p className="text-slate-600 text-sm mb-6 text-pretty">
               This permanently removes the event and all associated seat inventory. This action cannot be undone.

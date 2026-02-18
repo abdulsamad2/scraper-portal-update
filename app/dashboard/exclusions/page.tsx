@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { 
   Filter, Search, Calendar, 
   MapPin, Users, TrendingUp, AlertTriangle, 
-  CheckCircle, X, Eye
+  Eye
 } from 'lucide-react';
 
 interface EventData {
@@ -40,7 +40,7 @@ export default function ExclusionRulesPage() {
   const [exclusionRules, setExclusionRules] = useState<ExclusionRule[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
-  const [notification, setNotification] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+  const [, setNotification] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
   
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);

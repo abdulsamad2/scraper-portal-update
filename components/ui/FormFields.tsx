@@ -101,6 +101,7 @@ export const FormField = {
   },
   
   Checkbox: ({ 
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     status, 
     ...props 
   }: { 

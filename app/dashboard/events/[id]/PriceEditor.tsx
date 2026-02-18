@@ -104,6 +104,7 @@ export default function PriceEditor({ eventId, initialPct, initialStandardAdj = 
     });
   };
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const pctColor = value > 0 ? 'text-rose-600' : value < 0 ? 'text-blue-600' : 'text-gray-700';
 
   return (

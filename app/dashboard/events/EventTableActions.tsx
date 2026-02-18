@@ -186,7 +186,7 @@ export default function EventTableActions({
               Delete Event
             </h3>
             <p className="text-gray-600 mb-6">
-              Are you sure you want to delete "{eventName}"? This action cannot be undone and will also delete all associated seat inventory data.
+              Are you sure you want to delete &ldquo;{eventName}&rdquo;? This action cannot be undone and will also delete all associated seat inventory data.
             </p>
             <div className="flex gap-3 justify-end">
               <button

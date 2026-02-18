@@ -80,12 +80,12 @@ const validationRules: {
   Venue: (value: string) => value.length > 0,
   Zone: (value: string) => value.length > 0,
   Available_Seats: (value: number) => value >= 0,
-  Skip_Scraping: (_value: boolean) => true, // Always valid
+  Skip_Scraping: () => true, // Always valid
   inHandDate: (value: string) => Boolean(value),
   mapping_id: (value: string) => value.length > 0,
   Percentage_Increase_ListCost: (value: number) => value >= 0,
-  standardMarkupAdjustment: (_value: number) => true,
-  resaleMarkupAdjustment: (_value: number) => true,
+  standardMarkupAdjustment: () => true,
+  resaleMarkupAdjustment: () => true,
 };
 
 const errorMessages = {
@@ -106,6 +106,7 @@ const errorMessages = {
 
 export function EventFormProvider({ children, initialData }: { 
   children: ReactNode; 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   initialData?: Record<string, any> | null;
 }) {
   const [formState, setFormState] = useState<FormState>('idle');

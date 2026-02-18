@@ -34,6 +34,7 @@ interface EventsTableControlsProps {
 
 export default function EventsTableControls({
   currentPage,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   totalPages,
   totalEvents,
   eventsPerPage,

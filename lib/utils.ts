@@ -19,7 +19,7 @@ export function formatEventDate(dateString?: string): string {
       hour: '2-digit',
       minute: '2-digit'
     });
-  } catch (error) {
+  } catch {
     return '—';
   }
 }
@@ -38,7 +38,7 @@ export function formatTime(dateString?: string): string {
       hour: '2-digit',
       minute: '2-digit'
     });
-  } catch (error) {
+  } catch {
     return '—';
   }
 }
@@ -67,7 +67,7 @@ export function formatLastUpdated(dateString?: string): string {
       month: 'short',
       day: 'numeric'
     });
-  } catch (error) {
+  } catch {
     return 'Error';
   }
 }

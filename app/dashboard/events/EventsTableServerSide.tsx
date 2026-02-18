@@ -1,7 +1,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { 
-  Calendar, MapPin, Users, Eye, Edit, 
+  Calendar, MapPin, Users,
   AlertCircle, Clock, TrendingUp 
 } from 'lucide-react';
 import { getPaginatedEventsAdvanced, getEventCounts, getInventoryCountsByType } from '@/actions/eventActions';
@@ -212,7 +212,7 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-100">
-                {events.map((event, index) => {
+                {events.map((event) => {
                   const lastUpdated = event.Last_Updated || event.updatedAt;
                   const fresh = lastUpdated
                     ? Date.now() - new Date(lastUpdated).getTime() < 4 * 60 * 1000
@@ -345,7 +345,7 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
 
           {/* Mobile/Tablet Card Layout */}
           <div className="md:hidden divide-y divide-gray-200">
-            {events.map((event, index) => {
+            {events.map((event) => {
               const lastUpdated = event.Last_Updated || event.updatedAt;
               const fresh = lastUpdated
                 ? Date.now() - new Date(lastUpdated).getTime() < 4 * 60 * 1000
