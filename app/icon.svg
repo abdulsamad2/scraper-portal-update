@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1e1b4b"/>
+      <stop offset="100%" style="stop-color:#312e81"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#818cf8"/>
+      <stop offset="50%" style="stop-color:#6366f1"/>
+      <stop offset="100%" style="stop-color:#4f46e5"/>
+    </linearGradient>
+  </defs>
+  <!-- Rounded square background -->
+  <rect width="512" height="512" rx="96" ry="96" fill="url(#bg)"/>
+  <!-- Subtle ticket shape behind text -->
+  <rect x="56" y="120" width="400" height="272" rx="24" ry="24" fill="url(#shine)" opacity="0.15"/>
+  <!-- Ticket notches -->
+  <circle cx="56" cy="256" r="20" fill="#1e1b4b"/>
+  <circle cx="456" cy="256" r="20" fill="#1e1b4b"/>
+  <!-- Dashed line between notches -->
+  <line x1="80" y1="256" x2="432" y2="256" stroke="#818cf8" stroke-width="2" stroke-dasharray="8,6" opacity="0.3"/>
+  <!-- TMC letters -->
+  <text x="256" y="290" font-family="Arial, Helvetica, sans-serif" font-weight="900" font-size="160" fill="white" text-anchor="middle" letter-spacing="-4">TMC</text>
+  <!-- Subtle underline accent -->
+  <rect x="116" y="320" width="280" height="4" rx="2" fill="#818cf8" opacity="0.6"/>
+  <!-- Bottom tagline -->
+  <text x="256" y="420" font-family="Arial, Helvetica, sans-serif" font-weight="600" font-size="36" fill="#a5b4fc" text-anchor="middle" letter-spacing="10" opacity="0.8">PORTAL</text>
+</svg>
