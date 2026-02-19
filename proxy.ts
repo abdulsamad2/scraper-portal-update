@@ -1,24 +1,28 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
+import { verifySession } from '@/lib/auth';
 
-export function proxy(request: NextRequest) {
-  // Temporarily disable authentication for testing
-  // return NextResponse.next();
-  
-  // Check if the request is for a dashboard route
+export default async function proxy(request: NextRequest) {
+  // Only protect dashboard routes
   if (request.nextUrl.pathname.startsWith('/dashboard')) {
-    // Check for authentication cookie or session
-    const isAuthenticated = request.cookies.get('authenticated')?.value === 'true';
-    
+    const isAuthenticated = await verifySession(request);
+
     if (!isAuthenticated) {
-      // Redirect to login if not authenticated
       return NextResponse.redirect(new URL('/login', request.url));
     }
   }
-  
+
+  // If authenticated user visits login page, redirect to dashboard
+  if (request.nextUrl.pathname === '/login') {
+    const isAuthenticated = await verifySession(request);
+    if (isAuthenticated) {
+      return NextResponse.redirect(new URL('/dashboard', request.url));
+    }
+  }
+
   return NextResponse.next();
 }
 
 export const config = {
-  matcher: '/dashboard/:path*'
+  matcher: ['/dashboard/:path*', '/login'],
 };

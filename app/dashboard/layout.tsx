@@ -23,11 +23,14 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
   const router = useRouter();
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
-  const handleLogout = () => {
-    // Clear authentication cookie
-    document.cookie = 'authenticated=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
-    // Redirect to login
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch {
+      // Even if the API call fails, redirect to login
+    }
     router.push('/login');
+    router.refresh();
   };
 
   const navItems = [
