@@ -155,6 +155,7 @@ export async function getPaginatedEventsAdvanced(page: number = 1, limit: number
     }
 
     // Build sort criteria - Default to last updated (most recent first)
+    const orderMul = filters.sortOrder === 'asc' ? 1 : -1;
     let sortCriteria: any = { Last_Updated: -1, updatedAt: -1 }; // Default sort by last updated
     switch (filters.sortBy) {
       case 'newest':
@@ -164,17 +165,20 @@ export async function getPaginatedEventsAdvanced(page: number = 1, limit: number
         sortCriteria = { createdAt: 1 };
         break;
       case 'name':
-        sortCriteria = { Event_Name: 1 };
+        sortCriteria = { Event_Name: orderMul };
         break;
       case 'seats':
-        sortCriteria = { Available_Seats: -1 };
+        sortCriteria = { Available_Seats: -orderMul };
         break;
       case 'date':
-        sortCriteria = { Event_DateTime: -1 };
+        sortCriteria = { Event_DateTime: -orderMul };
+        break;
+      case 'markup':
+        sortCriteria = { priceIncreasePercentage: -orderMul };
         break;
       case 'updated':
       default:
-        sortCriteria = { Last_Updated: -1, updatedAt: -1 };
+        sortCriteria = { Last_Updated: -orderMul, updatedAt: -orderMul };
     }
 
     // Get total count for pagination

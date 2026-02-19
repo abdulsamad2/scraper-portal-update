@@ -2,7 +2,8 @@ import React from 'react';
 import Link from 'next/link';
 import { 
   Calendar, MapPin, Users,
-  AlertCircle, Clock, TrendingUp 
+  AlertCircle, Clock, TrendingUp,
+  ChevronUp, ChevronDown, ChevronsUpDown
 } from 'lucide-react';
 import { getPaginatedEventsAdvanced, getEventCounts, getInventoryCountsByType } from '@/actions/eventActions';
 import EventsTableControls from './EventsTableControls';
@@ -38,8 +39,58 @@ interface ResolvedSearchParams {
   venue?: string;
   scrapingStatus?: string;
   sortBy?: string;
+  sortOrder?: string;
   seatMin?: string;
   seatMax?: string;
+}
+
+// Sortable column header (server-renderable link)
+function SortableHeader({
+  children,
+  sortKey,
+  currentSortBy,
+  currentSortOrder,
+  sp,
+  className,
+}: {
+  children: React.ReactNode;
+  sortKey: string;
+  currentSortBy: string;
+  currentSortOrder: string;
+  sp: ResolvedSearchParams;
+  className?: string;
+}) {
+  const isActive = currentSortBy === sortKey;
+  const nextOrder = isActive && currentSortOrder === 'asc' ? 'desc' : 'asc';
+
+  const params = new URLSearchParams();
+  params.set('page', '1');
+  if (sp.search) params.set('search', sp.search);
+  if (sp.limit) params.set('limit', sp.limit);
+  if (sp.dateFrom) params.set('dateFrom', sp.dateFrom);
+  if (sp.dateTo) params.set('dateTo', sp.dateTo);
+  if (sp.venue) params.set('venue', sp.venue);
+  if (sp.scrapingStatus) params.set('scrapingStatus', sp.scrapingStatus);
+  if (sp.seatMin) params.set('seatMin', sp.seatMin);
+  if (sp.seatMax) params.set('seatMax', sp.seatMax);
+  params.set('sortBy', sortKey);
+  params.set('sortOrder', nextOrder);
+
+  return (
+    <Link
+      href={`?${params.toString()}`}
+      className={`inline-flex items-center gap-1 group hover:text-blue-600 transition-colors ${className ?? ''}`}
+    >
+      {children}
+      {isActive && currentSortOrder === 'asc' ? (
+        <ChevronUp size={12} className="text-blue-500 shrink-0" />
+      ) : isActive && currentSortOrder === 'desc' ? (
+        <ChevronDown size={12} className="text-blue-500 shrink-0" />
+      ) : (
+        <ChevronsUpDown size={12} className="text-gray-300 group-hover:text-gray-400 shrink-0" />
+      )}
+    </Link>
+  );
 }
 
 interface PageProps {
@@ -98,12 +149,16 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
   const search = sp.search || '';
   
   // Build filters from search params
+  const sortBy = sp.sortBy || 'updated';
+  const sortOrder = sp.sortOrder || 'asc';
+
   const filters = {
     dateFrom: sp.dateFrom,
     dateTo: sp.dateTo,
     venue: sp.venue,
     scrapingStatus: sp.scrapingStatus || 'all',
-    sortBy: sp.sortBy || 'updated',
+    sortBy,
+    sortOrder,
     seatRange: {
       min: sp.seatMin,
       max: sp.seatMax,
@@ -189,22 +244,32 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                     Status
                   </th>
                   <th className="px-3 py-2.5 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">
-                    Event Details
+                    <SortableHeader sortKey="name" currentSortBy={sortBy} currentSortOrder={sortOrder} sp={sp}>
+                      Event Details
+                    </SortableHeader>
                   </th>
                   <th className="px-3 py-2.5 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">
-                    Date
+                    <SortableHeader sortKey="date" currentSortBy={sortBy} currentSortOrder={sortOrder} sp={sp}>
+                      Date
+                    </SortableHeader>
                   </th>
                   <th className="px-3 py-2.5 text-right text-xs font-bold text-gray-600 uppercase tracking-wider">
-                    Qty
+                    <SortableHeader sortKey="seats" currentSortBy={sortBy} currentSortOrder={sortOrder} sp={sp} className="justify-end">
+                      Qty
+                    </SortableHeader>
                   </th>
                   <th className="px-3 py-2.5 text-right text-xs font-bold text-gray-600 uppercase tracking-wider">
                     Rows
                   </th>
                   <th className="px-3 py-2.5 text-right text-xs font-bold text-gray-600 uppercase tracking-wider">
-                    Markup
+                    <SortableHeader sortKey="markup" currentSortBy={sortBy} currentSortOrder={sortOrder} sp={sp} className="justify-end">
+                      Markup
+                    </SortableHeader>
                   </th>
                   <th className="px-3 py-2.5 text-center text-xs font-bold text-gray-600 uppercase tracking-wider">
-                    Updated
+                    <SortableHeader sortKey="updated" currentSortBy={sortBy} currentSortOrder={sortOrder} sp={sp} className="justify-center">
+                      Updated
+                    </SortableHeader>
                   </th>
                   <th className="px-3 py-2.5 text-right text-xs font-bold text-gray-600 uppercase tracking-wider">
                     Actions

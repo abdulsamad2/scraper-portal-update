@@ -49,6 +49,9 @@ export default function EventsTableControls({
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
   // Initialise from module-level timestamp so remounts pick up correct remaining time
   const [countdown, setCountdown] = useState(getRemaining);
+  // Suppress countdown rendering until after hydration to avoid SSR mismatch
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => setHydrated(true), []);
 
   // Local state for form inputs
   const [localSearchTerm, setLocalSearchTerm] = useState(searchTerm);
@@ -158,13 +161,13 @@ export default function EventsTableControls({
         <button
           onClick={handleRefresh}
           disabled={isPending}
-          aria-label={isPending ? 'Refreshing…' : `Refresh (auto in ${countdown}s)`}
+          aria-label={isPending ? 'Refreshing…' : hydrated ? `Refresh (auto in ${countdown}s)` : 'Refresh'}
           className="px-3 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60 transition-[background-color,opacity] flex items-center gap-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1"
           style={{ touchAction: 'manipulation' }}
         >
           <RefreshCw className={`h-3.5 w-3.5 ${isPending ? 'animate-spin' : ''}`} aria-hidden="true" />
           <span className="hidden sm:inline">Refresh</span>
-          {!isPending && (
+          {!isPending && hydrated && (
             <span
               className={`text-[11px] font-mono tabular-nums leading-none px-1.5 py-0.5 rounded ${
                 countdown <= 5 ? 'bg-blue-400 text-white' : 'bg-blue-500/60 text-blue-100'
