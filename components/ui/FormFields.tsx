@@ -1,6 +1,6 @@
 'use client';
 import React from 'react';
-import { AlertCircle, CheckCircle, Globe, Hash, Tag, Calendar, Clock, MapPin, Ticket, Minus, Plus } from 'lucide-react';
+import { AlertCircle, CheckCircle, Hash, Tag, Calendar, Clock, MapPin, Ticket, Minus, Plus, Globe } from 'lucide-react';
 
 // Explicit validation status variants instead of boolean props
 const FieldStatus = {

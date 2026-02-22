@@ -34,9 +34,9 @@ async function startAutoDeleteScheduler() {
 
   try {
     const settings = await getAutoDeleteSettings();
-    const intervalMs = settings.scheduleIntervalHours * 60 * 60 * 1000; // Convert hours to milliseconds
+    const intervalMs = settings.scheduleIntervalMinutes * 60 * 1000; // Convert minutes to milliseconds
 
-    console.log(`Starting auto-delete scheduler with ${settings.scheduleIntervalHours} hour interval`);
+    console.log(`Starting auto-delete scheduler with ${settings.scheduleIntervalMinutes} minute interval`);
 
     autoDeleteInterval = setInterval(async () => {
       console.log('Auto-delete scheduler running...');
@@ -49,7 +49,7 @@ async function startAutoDeleteScheduler() {
           errorType: 'AUTO_DELETE_SCHEDULER_ERROR',
           errorMessage: `Auto-delete scheduler failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
           stackTrace: error instanceof Error ? error.stack || '' : '',
-          metadata: { schedulerInterval: settings.scheduleIntervalHours }
+          metadata: { schedulerIntervalMinutes: settings.scheduleIntervalMinutes }
         });
       }
     }, intervalMs);
@@ -85,8 +85,8 @@ export async function GET() {
       success: true,
       settings: {
         isEnabled: settings.isEnabled,
-        graceHours: settings.graceHours,
-        scheduleIntervalHours: settings.scheduleIntervalHours,
+        stopBeforeHours: settings.stopBeforeHours,
+        scheduleIntervalMinutes: settings.scheduleIntervalMinutes,
         lastRunAt: settings.lastRunAt,
         nextRunAt: settings.nextRunAt,
         totalRuns: settings.totalRuns,
@@ -107,14 +107,14 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { action, graceHours, scheduleIntervalHours } = body;
+    const { action, stopBeforeHours, scheduleIntervalMinutes } = body;
 
     switch (action) {
       case 'start':
         await updateAutoDeleteSettings({
           isEnabled: true,
-          graceHours: graceHours || 15,
-          scheduleIntervalHours: scheduleIntervalHours || 24
+          stopBeforeHours: stopBeforeHours || 2,
+          scheduleIntervalMinutes: scheduleIntervalMinutes || 15
         });
         await startAutoDeleteScheduler();
         
@@ -139,7 +139,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json(result);
 
       case 'preview':
-        const preview = await getAutoDeletePreview(graceHours);
+        const preview = await getAutoDeletePreview(stopBeforeHours);
         return NextResponse.json(preview);
 
       case 'update-settings':

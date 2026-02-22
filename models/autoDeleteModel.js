@@ -5,17 +5,17 @@ const autoDeleteSettingsSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
-  graceHours: {
+  stopBeforeHours: {
     type: Number,
-    min: 1,
+    min: 0,
     max: 168, // 7 days max
-    default: 15 // 15 hours default (9pm event -> 12pm next day deletion)
+    default: 2 // 2 hours before event time (e.g., 7pm event -> stop/delete at 5pm)
   },
-  scheduleIntervalHours: {
+  scheduleIntervalMinutes: {
     type: Number,
     min: 1,
-    max: 168,
-    default: 24 // Run every 24 hours
+    max: 1440,
+    default: 15 // Run every 15 minutes (check frequently for pre-event deletions)
   },
   lastRunAt: {
     type: Date,
@@ -39,6 +39,10 @@ const autoDeleteSettingsSchema = new mongoose.Schema({
       default: 0
     },
     eventsDeleted: {
+      type: Number,
+      default: 0
+    },
+    eventsStopped: {
       type: Number,
       default: 0
     },
@@ -67,8 +71,8 @@ autoDeleteSettingsSchema.statics.getSettings = async function() {
   if (!settings) {
     settings = await this.create({
       isEnabled: false,
-      graceHours: 15,
-      scheduleIntervalHours: 24
+      stopBeforeHours: 2,
+      scheduleIntervalMinutes: 15
     });
   }
   return settings;

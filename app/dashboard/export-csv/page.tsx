@@ -36,8 +36,8 @@ interface CsvStatus {
 
 interface AutoDeleteSettings {
   isEnabled: boolean;
-  graceHours: number;
-  scheduleIntervalHours: number;
+  stopBeforeHours: number;
+  scheduleIntervalMinutes: number;
   lastRunAt: string | null;
   nextRunAt: string | null;
   totalRuns: number;
@@ -51,18 +51,24 @@ interface EventPreview {
   name: string;
   dateTime: string;
   venue?: string;
+  isStopped?: boolean;
+  detectedTimezone?: string;
+  localTimeNow?: string;
 }
 
 interface AutoDeletePreview {
   count: number;
+  totalEvents: number;
+  skippedCount?: number;
   events: EventPreview[];
-  graceHours: number;
-  cutoffTime: string;
+  skippedEvents?: EventPreview[];
+  stopBeforeHours: number;
 }
 
 interface LastRunStats {
   eventsChecked: number;
   eventsDeleted: number;
+  eventsStopped: number;
   errors?: string[];
 }
 
@@ -112,8 +118,8 @@ const ExportCsvPage: React.FC = () => {
   // Auto-delete state
   const [autoDeleteSettings, setAutoDeleteSettings] = useState<AutoDeleteSettings>({
     isEnabled: false,
-    graceHours: 15,
-    scheduleIntervalHours: 24,
+    stopBeforeHours: 2,
+    scheduleIntervalMinutes: 15,
     lastRunAt: null,
     nextRunAt: null,
     totalRuns: 0,
@@ -430,8 +436,8 @@ const ExportCsvPage: React.FC = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           action: enabled ? 'start' : 'stop',
-          graceHours: autoDeleteSettings.graceHours,
-          scheduleIntervalHours: autoDeleteSettings.scheduleIntervalHours
+          stopBeforeHours: autoDeleteSettings.stopBeforeHours,
+          scheduleIntervalMinutes: autoDeleteSettings.scheduleIntervalMinutes
         })
       });
 
@@ -489,7 +495,7 @@ const ExportCsvPage: React.FC = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           action: 'preview',
-          graceHours: autoDeleteSettings.graceHours
+          stopBeforeHours: autoDeleteSettings.stopBeforeHours
         })
       });
 
@@ -726,50 +732,50 @@ const ExportCsvPage: React.FC = () => {
 
       {/* Auto-Delete Past Events Section */}
       <div className="bg-white rounded-lg shadow-md p-6 mb-5">
-        <h3 className="text-lg font-semibold mb-4 border-b pb-2">Auto-Delete Past Events</h3>
+        <h3 className="text-lg font-semibold mb-4 border-b pb-2">Auto Stop & Delete Events</h3>
         <div className="space-y-4">
           <div className="bg-yellow-50 p-4 rounded-lg">
             <p className="text-yellow-800 text-sm">
-              <strong>Auto-Delete Feature:</strong> Automatically deletes events that have already taken place after a configurable grace period. 
-              Example: An event on September 11th at 9pm EST will be deleted 15 hours later (default) on September 12th at 12pm EST.
+              <strong>Auto Stop & Delete:</strong> Automatically stops scraping and deletes events a configurable number of hours BEFORE the event takes place. 
+              Example: An event at 7pm today with &quot;Stop Before&quot; set to 2 hours will be stopped and deleted at 5pm today.
             </p>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                Grace Period (Hours)
+                Stop & Delete Before Event (Hours)
               </label>
               <input
                 type="number"
-                value={autoDeleteSettings.graceHours}
+                value={autoDeleteSettings.stopBeforeHours}
                 onChange={(e) => setAutoDeleteSettings((prev: AutoDeleteSettings) => ({ 
                   ...prev, 
-                  graceHours: parseInt(e.target.value) || 15 
+                  stopBeforeHours: parseInt(e.target.value) || 2 
                 }))}
-                min="1"
+                min="0"
                 max="168"
                 className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
               />
-              <p className="text-xs text-gray-500 mt-1">Hours to wait after event time before deletion (1-168 hours)</p>
+              <p className="text-xs text-gray-500 mt-1">Hours before event time to stop scraping and delete (0 = at event time, 2 = 2 hours before)</p>
             </div>
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                Check Interval (Hours)
+                Check Interval (Minutes)
               </label>
               <input
                 type="number"
-                value={autoDeleteSettings.scheduleIntervalHours}
+                value={autoDeleteSettings.scheduleIntervalMinutes}
                 onChange={(e) => setAutoDeleteSettings((prev: AutoDeleteSettings) => ({ 
                   ...prev, 
-                  scheduleIntervalHours: parseInt(e.target.value) || 24 
+                  scheduleIntervalMinutes: parseInt(e.target.value) || 15 
                 }))}
                 min="1"
-                max="168"
+                max="1440"
                 className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
               />
-              <p className="text-xs text-gray-500 mt-1">How often to check for expired events (1-168 hours)</p>
+              <p className="text-xs text-gray-500 mt-1">How often to check for events to stop and delete (default: 15 minutes)</p>
             </div>
           </div>
 
@@ -786,8 +792,8 @@ const ExportCsvPage: React.FC = () => {
             <div className="flex space-x-2">
               <button
                 onClick={() => handleAutoDeleteSettingsUpdate({
-                  graceHours: autoDeleteSettings.graceHours,
-                  scheduleIntervalHours: autoDeleteSettings.scheduleIntervalHours
+                  stopBeforeHours: autoDeleteSettings.stopBeforeHours,
+                  scheduleIntervalMinutes: autoDeleteSettings.scheduleIntervalMinutes
                 })}
                 disabled={isLoadingAutoDelete}
                 className="bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded-md transition-colors disabled:bg-gray-400"
@@ -867,7 +873,7 @@ const ExportCsvPage: React.FC = () => {
                 <div className="mt-3 pt-3 border-t">
                   <div className="text-xs text-gray-600">
                     Last run: Checked {autoDeleteSettings.lastRunStats.eventsChecked} events, 
-                    deleted {autoDeleteSettings.lastRunStats.eventsDeleted} expired events
+                    stopped {autoDeleteSettings.lastRunStats.eventsStopped || 0} and deleted {autoDeleteSettings.lastRunStats.eventsDeleted} events
                     {autoDeleteSettings.lastRunStats.errors && autoDeleteSettings.lastRunStats.errors.length > 0 && (
                       <span className="text-red-600 ml-2">
                         ({autoDeleteSettings.lastRunStats.errors.length} errors)
@@ -1058,26 +1064,34 @@ const ExportCsvPage: React.FC = () => {
               
               <div className="mb-4">
                 <p className="text-sm text-gray-600">
-                  Grace period: <strong>{autoDeletePreview.graceHours} hours</strong>
+                  Stop & delete before event: <strong>{autoDeletePreview.stopBeforeHours} hours</strong>
                   <br />
-                  Cutoff time: <strong>{moment(autoDeletePreview.cutoffTime).format('YYYY-MM-DD HH:mm:ss')}</strong>
+                  <span className="text-gray-500">Each event is checked against its venue&apos;s local timezone (auto-detected from venue/city/state).</span>
+                  <br />
+                  <span className="text-gray-500">Total events checked: <strong>{autoDeletePreview.totalEvents || '—'}</strong></span>
+                  {(autoDeletePreview.skippedCount ?? 0) > 0 && (
+                    <>
+                      <br />
+                      <span className="text-orange-600">⚠ {autoDeletePreview.skippedCount} events skipped — timezone could not be detected from venue</span>
+                    </>
+                  )}
                 </p>
               </div>
 
               {autoDeletePreview.count === 0 ? (
                 <div className="text-center py-8">
                   <div className="text-green-600 text-lg font-medium mb-2">
-                    ✅ No events to delete
+                    ✅ No events to stop & delete
                   </div>
                   <p className="text-gray-500">
-                    All events are still within the grace period or are scheduled for the future.
+                    No events fall within the stop window. All events are still far enough from their event time.
                   </p>
                 </div>
               ) : (
                 <div>
                   <div className="mb-4">
                     <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-red-100 text-red-800">
-                      {autoDeletePreview.count} events will be deleted
+                      {autoDeletePreview.count} events will be stopped & deleted
                     </span>
                   </div>
                   
@@ -1087,19 +1101,36 @@ const ExportCsvPage: React.FC = () => {
                         <tr>
                           <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Event ID</th>
                           <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Event Name</th>
-                          <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Date/Time</th>
+                          <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Event Time</th>
                           <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Venue</th>
+                          <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">TZ</th>
+                          <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Local Now</th>
+                          <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Scraping</th>
                         </tr>
                       </thead>
                       <tbody className="bg-white divide-y divide-gray-200">
                         {autoDeletePreview.events.map((event: EventPreview, index: number) => (
                           <tr key={index} className="hover:bg-gray-50">
                             <td className="px-4 py-2 text-sm font-medium text-gray-900">{event.id}</td>
-                            <td className="px-4 py-2 text-sm text-gray-900">{event.name}</td>
-                            <td className="px-4 py-2 text-sm text-gray-500">
+                            <td className="px-4 py-2 text-sm text-gray-900 max-w-[200px] truncate" title={event.name}>{event.name}</td>
+                            <td className="px-4 py-2 text-sm text-gray-500 whitespace-nowrap">
                               {moment(event.dateTime).format('YYYY-MM-DD HH:mm')}
                             </td>
-                            <td className="px-4 py-2 text-sm text-gray-500">{event.venue || 'N/A'}</td>
+                            <td className="px-4 py-2 text-sm text-gray-500 max-w-[150px] truncate" title={event.venue}>{event.venue || '—'}</td>
+                            <td className="px-4 py-2 text-sm">
+                              <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${
+                                event.detectedTimezone === 'N/A' ? 'bg-orange-100 text-orange-700' : 'bg-blue-100 text-blue-700'
+                              }`}>
+                                {event.detectedTimezone || 'N/A'}
+                              </span>
+                            </td>
+                            <td className="px-4 py-2 text-sm">
+                              <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${
+                                event.isStopped ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'
+                              }`}>
+                                {event.isStopped ? 'Stopped' : 'Active'}
+                              </span>
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -1108,10 +1139,28 @@ const ExportCsvPage: React.FC = () => {
 
                   <div className="mt-4 p-3 bg-yellow-50 rounded-lg">
                     <p className="text-yellow-800 text-sm">
-                      <strong>Warning:</strong> These events and all their associated seat inventory will be permanently deleted.
+                      <strong>Warning:</strong> These events will first have scraping stopped, then they and all their associated seat inventory will be permanently deleted.
                       This action cannot be undone.
                     </p>
                   </div>
+
+                  {(autoDeletePreview.skippedEvents?.length ?? 0) > 0 && (
+                    <div className="mt-4 p-3 bg-orange-50 rounded-lg">
+                      <p className="text-orange-800 text-sm font-medium mb-2">
+                        ⚠ Events skipped (timezone not detected from venue):
+                      </p>
+                      <div className="max-h-32 overflow-y-auto text-sm text-orange-700">
+                        {autoDeletePreview.skippedEvents!.map((e, i) => (
+                          <div key={i} className="py-0.5">
+                            {e.id} — {e.name} — Venue: &quot;{e.venue || '(empty)'}&quot;
+                          </div>
+                        ))}
+                      </div>
+                      <p className="text-orange-600 text-xs mt-1">
+                        These events were NOT checked because their venue text does not contain a recognizable state, city, or venue name.
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
 

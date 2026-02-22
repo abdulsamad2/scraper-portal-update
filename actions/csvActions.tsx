@@ -870,16 +870,16 @@ export async function updateSchedulerSettings(updates: {
 export async function getAutoDeleteSettings() {
   await dbConnect();
   try {
-    // Use the statics method properly
-    const settings = await AutoDeleteSettings.findOne();
+    const settings = await AutoDeleteSettings.findOne().lean();
     if (!settings) {
-      return await AutoDeleteSettings.create({
+      const created = await AutoDeleteSettings.create({
         isEnabled: false,
-        graceHours: 15,
-        scheduleIntervalHours: 24
+        stopBeforeHours: 2,
+        scheduleIntervalMinutes: 15
       });
+      return JSON.parse(JSON.stringify(created));
     }
-    return settings;
+    return JSON.parse(JSON.stringify(settings));
   } catch (error) {
     console.error('Error getting auto-delete settings:', error);
     throw error;
@@ -888,8 +888,8 @@ export async function getAutoDeleteSettings() {
 
 export async function updateAutoDeleteSettings(updates: {
   isEnabled?: boolean;
-  graceHours?: number;
-  scheduleIntervalHours?: number;
+  stopBeforeHours?: number;
+  scheduleIntervalMinutes?: number;
   lastRunAt?: Date;
   nextRunAt?: Date;
   totalRuns?: number;
@@ -897,15 +897,19 @@ export async function updateAutoDeleteSettings(updates: {
   lastRunStats?: {
     eventsChecked: number;
     eventsDeleted: number;
+    eventsStopped: number;
     deletedEventIds: string[];
     errors: string[];
   };
 }) {
   await dbConnect();
   try {
-    const settings = await getAutoDeleteSettings();
-    Object.assign(settings, updates, { updatedAt: new Date() });
-    return await settings.save();
+    const result = await AutoDeleteSettings.findOneAndUpdate(
+      {},
+      { ...updates, updatedAt: new Date() },
+      { new: true, upsert: true }
+    ).lean();
+    return JSON.parse(JSON.stringify(result));
   } catch (error) {
     console.error('Error updating auto-delete settings:', error);
     throw error;
@@ -923,17 +927,18 @@ export async function runAutoDelete() {
       };
     }
 
-    const stats = await deleteExpiredEvents(settings.graceHours);
+    const stats = await deleteExpiredEvents(settings.stopBeforeHours);
     
     // Update settings with run statistics
     await updateAutoDeleteSettings({
       lastRunAt: new Date(),
-      nextRunAt: new Date(Date.now() + settings.scheduleIntervalHours * 60 * 60 * 1000),
+      nextRunAt: new Date(Date.now() + settings.scheduleIntervalMinutes * 60 * 1000),
       totalRuns: settings.totalRuns + 1,
       totalEventsDeleted: settings.totalEventsDeleted + stats.eventsDeleted,
       lastRunStats: {
         eventsChecked: stats.totalEventsChecked,
         eventsDeleted: stats.eventsDeleted,
+        eventsStopped: stats.eventsStopped,
         deletedEventIds: stats.deletedEventIds,
         errors: stats.errors
       }
@@ -941,7 +946,7 @@ export async function runAutoDelete() {
 
     return {
       success: true,
-      message: `Auto-delete completed. Deleted ${stats.eventsDeleted} events.`,
+      message: `Auto-delete completed. Stopped ${stats.eventsStopped} and deleted ${stats.eventsDeleted} events.`,
       stats
     };
   } catch (error) {
@@ -954,15 +959,15 @@ export async function runAutoDelete() {
   }
 }
 
-export async function getAutoDeletePreview(graceHours?: number) {
+export async function getAutoDeletePreview(stopBeforeHours?: number) {
   try {
     const settings = await getAutoDeleteSettings();
-    const hours = graceHours ?? settings.graceHours;
+    const hours = stopBeforeHours ?? settings.stopBeforeHours;
     const preview = await getExpiredEventsStats(hours);
     
     return {
       ...preview,
-      graceHours: hours
+      stopBeforeHours: hours
     };
   } catch (error) {
     console.error('Error getting auto-delete preview:', error);

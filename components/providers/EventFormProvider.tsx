@@ -19,6 +19,7 @@ interface FormData {
   Event_Name: FormField;
   Event_DateTime: FormField;
   Venue: FormField;
+
   Zone: FormField;
   Available_Seats: FormField;
   Skip_Scraping: FormField;
@@ -78,6 +79,7 @@ const validationRules: {
   Event_Name: (value: string) => value.length >= 3,
   Event_DateTime: (value: string) => Boolean(value),
   Venue: (value: string) => value.length > 0,
+
   Zone: (value: string) => value.length > 0,
   Available_Seats: (value: number) => value >= 0,
   Skip_Scraping: () => true, // Always valid
@@ -94,6 +96,7 @@ const errorMessages = {
   Event_Name: "Name must be at least 3 characters long",
   Event_DateTime: "Please select an event date and time",
   Venue: "Please enter the venue name",
+
   Zone: "Please enter a zone",
   Available_Seats: "Must be 0 or greater",
   Skip_Scraping: "",
@@ -126,6 +129,7 @@ export function EventFormProvider({ children, initialData }: {
       Event_Name: { value: initialData?.Event_Name || "", status: 'untouched' },
       Event_DateTime: { value: formatDateForInput(initialData?.Event_DateTime), status: 'untouched' },
       Venue: { value: initialData?.Venue || "", status: 'untouched' },
+
       Zone: { value: initialData?.Zone || "General", status: 'untouched' },
       Available_Seats: { value: initialData?.Available_Seats || 0, status: 'untouched' },
       Skip_Scraping: { value: initialData?.Skip_Scraping !== undefined ? initialData.Skip_Scraping : true, status: 'untouched' },
