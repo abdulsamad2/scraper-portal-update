@@ -1,6 +1,9 @@
 /**
  * Timezone Utilities for Event Location-Based Time Handling
  * 
+ * Uses the `city-timezones` open-source library (7,300+ cities worldwide)
+ * for automatic timezone detection from venue text.
+ * 
  * The auto-delete system needs to know the CURRENT time at the event's location
  * to decide if it's close enough to event time to stop/delete.
  * 
@@ -9,6 +12,8 @@
  * 
  * TIMEZONE IS AUTO-DETECTED from the Venue field — no manual input needed.
  */
+
+import cityTimezones from 'city-timezones';
 
 export const US_TIMEZONES = [
   { value: 'America/New_York', label: 'Eastern Time (ET)', abbr: 'ET' },
@@ -22,11 +27,153 @@ export const US_TIMEZONES = [
 export type USTimezone = typeof US_TIMEZONES[number]['value'];
 
 // ══════════════════════════════════════════════════════════════════════════════
-// VENUE → TIMEZONE AUTO-DETECTION
-// Comprehensive mapping of US states, cities, and venue names to timezones
+// TIMEZONE NAME NORMALIZATION
+// The library returns city-specific IANA names (e.g., America/Detroit).
+// We normalize to standard US timezone names for consistency.
 // ══════════════════════════════════════════════════════════════════════════════
 
-/** US State abbreviations and full names → timezone */
+const TIMEZONE_NORMALIZE_MAP: Record<string, string> = {
+  // Eastern Time variants
+  'America/Detroit': 'America/New_York',
+  'America/Toronto': 'America/New_York',
+  'America/Montreal': 'America/New_York',
+  'America/Nassau': 'America/New_York',
+  'America/Iqaluit': 'America/New_York',
+  'America/Nipigon': 'America/New_York',
+  'America/Thunder_Bay': 'America/New_York',
+  'America/Pangnirtung': 'America/New_York',
+  'America/Indiana/Indianapolis': 'America/New_York',
+  'America/Indiana/Marengo': 'America/New_York',
+  'America/Indiana/Vevay': 'America/New_York',
+  'America/Kentucky/Louisville': 'America/New_York',
+  'America/Kentucky/Monticello': 'America/New_York',
+
+  // Central Time variants
+  'America/Winnipeg': 'America/Chicago',
+  'America/Regina': 'America/Chicago',
+  'America/Rainy_River': 'America/Chicago',
+  'America/Rankin_Inlet': 'America/Chicago',
+  'America/Resolute': 'America/Chicago',
+  'America/Menominee': 'America/Chicago',
+  'America/Indiana/Knox': 'America/Chicago',
+  'America/Indiana/Tell_City': 'America/Chicago',
+  'America/North_Dakota/Center': 'America/Chicago',
+  'America/North_Dakota/New_Salem': 'America/Chicago',
+  'America/North_Dakota/Beulah': 'America/Chicago',
+  'America/Matamoros': 'America/Chicago',
+
+  // Mountain Time variants
+  'America/Phoenix': 'America/Denver',
+  'America/Edmonton': 'America/Denver',
+  'America/Boise': 'America/Denver',
+  'America/Cambridge_Bay': 'America/Denver',
+  'America/Yellowknife': 'America/Denver',
+  'America/Inuvik': 'America/Denver',
+  'America/Ojinaga': 'America/Denver',
+
+  // Pacific Time variants
+  'America/Vancouver': 'America/Los_Angeles',
+  'America/Dawson_Creek': 'America/Los_Angeles',
+  'America/Tijuana': 'America/Los_Angeles',
+  'America/Whitehorse': 'America/Los_Angeles',
+
+  // Alaska
+  'America/Juneau': 'America/Anchorage',
+  'America/Sitka': 'America/Anchorage',
+  'America/Yakutat': 'America/Anchorage',
+  'America/Nome': 'America/Anchorage',
+  'America/Metlakatla': 'America/Anchorage',
+
+  // Hawaii
+  'Pacific/Johnston': 'Pacific/Honolulu',
+};
+
+function normalizeTimezone(tz: string): string {
+  return TIMEZONE_NORMALIZE_MAP[tz] || tz;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CITY-TIMEZONES LIBRARY INDEX
+// Build a normalized, accent-stripped, population-sorted lookup from 7,300+ cities
+// ══════════════════════════════════════════════════════════════════════════════
+
+interface CityEntry {
+  city: string;
+  province: string;
+  iso2: string;
+  pop: number;
+  timezone: string;
+}
+
+/** Strip accents and lowercase for matching */
+function normalizeText(s: string): string {
+  return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+}
+
+/** Pre-built city lookup index: normalized name → sorted city entries (US first, CA second, then all others by population) */
+const CITY_INDEX = buildCityIndex();
+
+function buildCityIndex(): Map<string, CityEntry[]> {
+  const index = new Map<string, CityEntry[]>();
+
+  for (const c of cityTimezones.cityMapping) {
+    const entry: CityEntry = {
+      city: c.city,
+      province: c.province || '',
+      iso2: c.iso2,
+      pop: c.pop || 0,
+      timezone: c.timezone,
+    };
+
+    // Index by normalized full city name
+    const fullName = normalizeText(c.city);
+    if (!index.has(fullName)) index.set(fullName, []);
+    index.get(fullName)!.push(entry);
+
+    // Also index by the main part before comma/period (e.g., "Washington, D.C." → "washington")
+    const mainPart = normalizeText(c.city.split(/[,.]/)[0]);
+    if (mainPart !== fullName && mainPart.length > 2) {
+      if (!index.has(mainPart)) index.set(mainPart, []);
+      index.get(mainPart)!.push(entry);
+    }
+
+    // Also index by ascii name if available and different
+    if (c.city_ascii) {
+      const asciiName = normalizeText(c.city_ascii);
+      if (asciiName !== fullName && asciiName.length > 2) {
+        if (!index.has(asciiName)) index.set(asciiName, []);
+        index.get(asciiName)!.push(entry);
+      }
+    }
+  }
+
+  // Sort each entry list: US first, CA second, then by population descending
+  for (const [, entries] of index) {
+    entries.sort((a, b) => {
+      const countryRank = (iso: string) => iso === 'US' ? 0 : iso === 'CA' ? 1 : 2;
+      const rankDiff = countryRank(a.iso2) - countryRank(b.iso2);
+      if (rankDiff !== 0) return rankDiff;
+      return b.pop - a.pop;
+    });
+  }
+
+  return index;
+}
+
+/** Look up a city name in the library index, returns normalized timezone or null */
+function lookupCityTimezone(cityName: string): string | null {
+  const normalized = normalizeText(cityName);
+  const entries = CITY_INDEX.get(normalized);
+  if (entries && entries.length > 0) {
+    return normalizeTimezone(entries[0].timezone);
+  }
+  return null;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// STATE / PROVINCE ABBREVIATION MAP (library doesn't support 2-letter codes)
+// ══════════════════════════════════════════════════════════════════════════════
+
 const STATE_TIMEZONE_MAP: Record<string, string> = {
   // Eastern Time
   'ct': 'America/New_York', 'connecticut': 'America/New_York',
@@ -88,83 +235,25 @@ const STATE_TIMEZONE_MAP: Record<string, string> = {
   // Alaska & Hawaii
   'ak': 'America/Anchorage', 'alaska': 'America/Anchorage',
   'hi': 'Pacific/Honolulu', 'hawaii': 'Pacific/Honolulu',
+
+  // Canadian Provinces
+  'on': 'America/New_York', 'ontario': 'America/New_York',
+  'qc': 'America/New_York', 'quebec': 'America/New_York',
+  'ns': 'America/New_York', 'nova scotia': 'America/New_York',
+  'nb': 'America/New_York', 'new brunswick': 'America/New_York',
+  'pe': 'America/New_York', 'prince edward island': 'America/New_York',
+  'nl': 'America/New_York', 'newfoundland': 'America/New_York',
+  'mb': 'America/Chicago', 'manitoba': 'America/Chicago',
+  'sk': 'America/Chicago', 'saskatchewan': 'America/Chicago',
+  'ab': 'America/Denver', 'alberta': 'America/Denver',
+  'bc': 'America/Los_Angeles', 'british columbia': 'America/Los_Angeles',
 };
 
-/** Major US cities → timezone (covers most venue locations) */
-const CITY_TIMEZONE_MAP: Record<string, string> = {
-  // Eastern Time cities
-  'miami': 'America/New_York', 'fort lauderdale': 'America/New_York', 'orlando': 'America/New_York',
-  'tampa': 'America/New_York', 'jacksonville': 'America/New_York', 'west palm beach': 'America/New_York',
-  'sunrise': 'America/New_York', 'hollywood': 'America/New_York',
-  'new york': 'America/New_York', 'nyc': 'America/New_York', 'brooklyn': 'America/New_York',
-  'bronx': 'America/New_York', 'queens': 'America/New_York', 'manhattan': 'America/New_York',
-  'long island': 'America/New_York', 'elmont': 'America/New_York',
-  'boston': 'America/New_York', 'cambridge': 'America/New_York', 'foxborough': 'America/New_York',
-  'philadelphia': 'America/New_York', 'philly': 'America/New_York', 'pittsburgh': 'America/New_York',
-  'atlanta': 'America/New_York', 'savannah': 'America/New_York',
-  'charlotte': 'America/New_York', 'raleigh': 'America/New_York', 'durham': 'America/New_York',
-  'washington': 'America/New_York', 'baltimore': 'America/New_York', 'arlington': 'America/New_York',
-  'richmond': 'America/New_York', 'norfolk': 'America/New_York', 'virginia beach': 'America/New_York',
-  'detroit': 'America/New_York', 'grand rapids': 'America/New_York',
-  'cleveland': 'America/New_York', 'columbus': 'America/New_York', 'cincinnati': 'America/New_York',
-  'indianapolis': 'America/New_York', 'indy': 'America/New_York',
-  'newark': 'America/New_York', 'east rutherford': 'America/New_York', 'atlantic city': 'America/New_York',
-  'hartford': 'America/New_York', 'uncasville': 'America/New_York',
-  'charleston': 'America/New_York', 'greenville': 'America/New_York',
-  'louisville': 'America/New_York', 'lexington': 'America/New_York',
-  'buffalo': 'America/New_York', 'rochester': 'America/New_York', 'albany': 'America/New_York',
-  'providence': 'America/New_York', 'portland me': 'America/New_York',
+// ══════════════════════════════════════════════════════════════════════════════
+// VENUE NAME MAP (specific venue names → timezone)
+// The library has cities, but can't map "Madison Square Garden" → timezone.
+// ══════════════════════════════════════════════════════════════════════════════
 
-  // Central Time cities
-  'chicago': 'America/Chicago', 'evanston': 'America/Chicago', 'rosemont': 'America/Chicago',
-  'dallas': 'America/Chicago', 'fort worth': 'America/Chicago', 'arlington tx': 'America/Chicago',
-  'houston': 'America/Chicago', 'san antonio': 'America/Chicago', 'austin': 'America/Chicago',
-  'nashville': 'America/Chicago', 'memphis': 'America/Chicago', 'knoxville': 'America/Chicago',
-  'new orleans': 'America/Chicago', 'baton rouge': 'America/Chicago',
-  'milwaukee': 'America/Chicago', 'madison': 'America/Chicago', 'green bay': 'America/Chicago',
-  'minneapolis': 'America/Chicago', 'st paul': 'America/Chicago', 'saint paul': 'America/Chicago',
-  'st louis': 'America/Chicago', 'saint louis': 'America/Chicago', 'kansas city': 'America/Chicago',
-  'oklahoma city': 'America/Chicago', 'tulsa': 'America/Chicago',
-  'omaha': 'America/Chicago', 'lincoln': 'America/Chicago',
-  'des moines': 'America/Chicago', 'cedar rapids': 'America/Chicago',
-  'birmingham': 'America/Chicago', 'mobile': 'America/Chicago', 'huntsville': 'America/Chicago',
-  'little rock': 'America/Chicago', 'jackson': 'America/Chicago',
-  'wichita': 'America/Chicago', 'fargo': 'America/Chicago', 'sioux falls': 'America/Chicago',
-
-  // Mountain Time cities
-  'denver': 'America/Denver', 'colorado springs': 'America/Denver', 'boulder': 'America/Denver',
-  'phoenix': 'America/Denver', 'scottsdale': 'America/Denver', 'tempe': 'America/Denver',
-  'tucson': 'America/Denver', 'glendale az': 'America/Denver',
-  'salt lake city': 'America/Denver', 'provo': 'America/Denver',
-  'albuquerque': 'America/Denver', 'santa fe': 'America/Denver',
-  'boise': 'America/Denver', 'billings': 'America/Denver',
-  'cheyenne': 'America/Denver', 'missoula': 'America/Denver',
-  'el paso': 'America/Denver', // El Paso is Mountain Time despite being in TX
-
-  // Pacific Time cities
-  'los angeles': 'America/Los_Angeles', 'la': 'America/Los_Angeles',
-  'san francisco': 'America/Los_Angeles', 'sf': 'America/Los_Angeles',
-  'san diego': 'America/Los_Angeles', 'san jose': 'America/Los_Angeles',
-  'sacramento': 'America/Los_Angeles', 'oakland': 'America/Los_Angeles',
-  'anaheim': 'America/Los_Angeles', 'inglewood': 'America/Los_Angeles',
-  'long beach': 'America/Los_Angeles', 'fresno': 'America/Los_Angeles',
-  'irvine': 'America/Los_Angeles', 'santa clara': 'America/Los_Angeles',
-  'seattle': 'America/Los_Angeles', 'tacoma': 'America/Los_Angeles',
-  'portland': 'America/Los_Angeles', 'portland or': 'America/Los_Angeles',
-  'eugene': 'America/Los_Angeles', 'spokane': 'America/Los_Angeles',
-  'las vegas': 'America/Los_Angeles', 'vegas': 'America/Los_Angeles', 'reno': 'America/Los_Angeles',
-  'paradise': 'America/Los_Angeles', // Las Vegas venues often list Paradise, NV
-
-  // Alaska & Hawaii cities
-  'anchorage': 'America/Anchorage', 'fairbanks': 'America/Anchorage', 'juneau': 'America/Anchorage',
-  'honolulu': 'Pacific/Honolulu', 'maui': 'Pacific/Honolulu', 'kailua': 'Pacific/Honolulu',
-
-  // Standalone city names that may appear without state
-  'york': 'America/New_York', // York, PA
-  'stateline': 'America/Los_Angeles', // Stateline, NV (Lake Tahoe)
-};
-
-/** Well-known venue names → timezone */
 const VENUE_NAME_TIMEZONE_MAP: Record<string, string> = {
   // Eastern
   'madison square garden': 'America/New_York', 'msg': 'America/New_York',
@@ -233,25 +322,65 @@ const VENUE_NAME_TIMEZONE_MAP: Record<string, string> = {
   'kia forum': 'America/Los_Angeles',
   'greek theatre': 'America/Los_Angeles', 'hollywood bowl': 'America/Los_Angeles',
   'the wiltern': 'America/Los_Angeles', 'rose bowl': 'America/Los_Angeles',
+
+  // Canadian venues
+  'centre bell': 'America/New_York', 'bell centre': 'America/New_York',
+  'canadian tire centre': 'America/New_York',
+  'scotiabank arena': 'America/New_York', 'rogers centre': 'America/New_York',
+  'bmo field': 'America/New_York',
+  'bell center': 'America/New_York',
+  'place bell': 'America/New_York',
+  'videotron centre': 'America/New_York',
+  'td place': 'America/New_York',
+  'scotiabank centre': 'America/New_York',
+  'canada life centre': 'America/Chicago',
+  'saddledome': 'America/Denver', 'scotiabank saddledome': 'America/Denver',
+  'rogers place': 'America/Denver',
+  'rogers arena': 'America/Los_Angeles',
+  'bc place': 'America/Los_Angeles',
 };
+
+// ══════════════════════════════════════════════════════════════════════════════
+// FRAGMENT / KEYWORD MAP
+// Some venue fields contain only partial location words (e.g., "Carolina",
+// "Columbia", "Jersey"). These won't match in the city-timezones library.
+// ══════════════════════════════════════════════════════════════════════════════
+
+const FRAGMENT_TIMEZONE_MAP: Record<string, string> = {
+  'carolina': 'America/New_York',      // North/South Carolina → ET
+  'columbia': 'America/New_York',      // District of Columbia → ET
+  'jersey': 'America/New_York',        // New Jersey → ET
+  'york': 'America/New_York',          // New York / York, PA → ET
+  'hampshire': 'America/New_York',     // New Hampshire → ET
+  'england': 'America/New_York',       // New England → ET
+  'virginia': 'America/New_York',      // Virginia / West Virginia → ET
+  'dakota': 'America/Chicago',         // North/South Dakota → CT
+  'mexico': 'America/Denver',          // New Mexico → MT
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
+// MAIN DETECTION FUNCTION
+// ══════════════════════════════════════════════════════════════════════════════
 
 /**
  * Auto-detect timezone from venue text.
- * Checks venue name, then city, then state abbreviation/name from every segment.
- * Returns null if no timezone can be determined — callers must handle this.
  * 
- * @param venue - The venue string from the event (e.g., "Hard Rock Stadium, Miami, FL")
- * @returns IANA timezone string or null if undetectable
+ * Detection order:
+ *   1. Known venue names (MSG, TD Garden, etc.)
+ *   2. City lookup via city-timezones library (7,300+ cities, population-sorted)
+ *   3. State/province abbreviations and full names
+ *   4. Fragment keywords (carolina, columbia, jersey, etc.)
+ * 
+ * Returns null if no timezone can be determined — callers must handle this.
  */
 export function detectTimezoneFromVenue(venue: string): string | null {
   if (!venue || venue.trim().length === 0) {
     return null;
   }
 
-  const venueLC = venue.toLowerCase().trim();
+  const venueNorm = normalizeText(venue);
 
-  // Helper: match a term against text — short terms (<=3 chars) require word boundaries
-  // to avoid false matches (e.g. "la" matching inside "maryland")
+  // Helper: short terms (<=3 chars) require word boundaries to avoid false matches
   const matchesTerm = (text: string, term: string): boolean => {
     if (term.length <= 3) {
       const regex = new RegExp(`\\b${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
@@ -260,25 +389,25 @@ export function detectTimezoneFromVenue(venue: string): string | null {
     return text.includes(term);
   };
 
-  // 1) Check known venue names first (most specific match)
+  // ── Step 1: Check known venue names (most specific match) ──
   for (const [venueName, tz] of Object.entries(VENUE_NAME_TIMEZONE_MAP)) {
-    if (venueLC.includes(venueName)) {
+    if (venueNorm.includes(venueName)) {
       return tz;
     }
   }
 
-  // 2) Check city names against full venue text (word-boundary safe)
-  for (const [city, tz] of Object.entries(CITY_TIMEZONE_MAP)) {
-    if (matchesTerm(venueLC, city)) {
-      return tz;
-    }
-  }
+  // ── Step 2: City lookup via library (full text, then segments) ──
+  const fullLookup = lookupCityTimezone(venueNorm);
+  if (fullLookup) return fullLookup;
 
-  // 3) Split by commas, hyphens, pipes and check each segment
-  const segments = venueLC.split(/[,|–\-]+/).map(s => s.trim()).filter(Boolean);
-
+  const segments = venueNorm.split(/[,|–\-]+/).map(s => s.trim()).filter(Boolean);
   for (const segment of segments) {
-    // Check each segment for a 2-letter state abbreviation (as a standalone word)
+    const segLookup = lookupCityTimezone(segment);
+    if (segLookup) return segLookup;
+  }
+
+  // ── Step 3: State/province abbreviation and full name check ──
+  for (const segment of segments) {
     const words = segment.split(/\s+/);
     for (const word of words) {
       const clean = word.replace(/[^a-z]/g, '');
@@ -286,61 +415,51 @@ export function detectTimezoneFromVenue(venue: string): string | null {
         return STATE_TIMEZONE_MAP[clean];
       }
     }
-
-    // Check each segment for a full state name
     for (const [state, tz] of Object.entries(STATE_TIMEZONE_MAP)) {
       if (state.length > 2 && segment.includes(state)) {
         return tz;
       }
     }
-
-    // Check each segment as a potential city name (word-boundary safe)
-    for (const [city, tz] of Object.entries(CITY_TIMEZONE_MAP)) {
-      if (matchesTerm(segment, city)) {
-        return tz;
-      }
-    }
   }
 
-  // 4) Last resort: check the whole text for any 2-letter state abbreviation as a standalone word
-  const allWords = venueLC.split(/\s+/);
+  // Full text fallback for state abbreviations
+  const allWords = venueNorm.split(/\s+/);
   for (const word of allWords) {
     const clean = word.replace(/[^a-z]/g, '');
     if (clean.length === 2 && STATE_TIMEZONE_MAP[clean]) {
       return STATE_TIMEZONE_MAP[clean];
     }
   }
-
-  // 5) Check for full state names anywhere in the full text
   for (const [state, tz] of Object.entries(STATE_TIMEZONE_MAP)) {
-    if (state.length > 2 && venueLC.includes(state)) {
+    if (state.length > 2 && venueNorm.includes(state)) {
       return tz;
     }
   }
 
-  // No match found — return null so callers can handle it (skip event, log warning)
+  // ── Step 4: Fragment/keyword fallback ──
+  for (const [fragment, tz] of Object.entries(FRAGMENT_TIMEZONE_MAP)) {
+    if (matchesTerm(venueNorm, fragment)) {
+      return tz;
+    }
+  }
+
   console.warn(`Timezone auto-detect: Could not determine timezone from venue "${venue}"`);
   return null;
 }
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TIME UTILITIES
+// ══════════════════════════════════════════════════════════════════════════════
 
 /**
  * Get the current date/time in a specific timezone, returned as a "fake UTC" Date object.
  * 
  * Since Event_DateTime is stored as-if-UTC (e.g., 7pm event stored as 7pm UTC),
- * we need to get "what time is it NOW in Florida?" and express that as a UTC Date
+ * we need to get "what time is it NOW at the venue?" and express that as a UTC Date
  * so we can directly compare with Event_DateTime.
- * 
- * Example: 
- *   - It's 5:00pm in New York (which is 10:00pm UTC)
- *   - Event is at 7:00pm stored as 2025-06-15T19:00:00.000Z
- *   - getCurrentTimeInTimezone('America/New_York') returns Date for 2025-06-15T17:00:00.000Z
- *   - So we can compare: 17:00 + 2 hours = 19:00, event at 19:00 → should be stopped
  */
 export function getCurrentTimeInTimezone(timezone: string): Date {
-  // Get current time formatted in the target timezone
   const now = new Date();
-  
-  // Use Intl.DateTimeFormat to get the date/time components in the target timezone
   const formatter = new Intl.DateTimeFormat('en-US', {
     timeZone: timezone,
     year: 'numeric',
@@ -351,52 +470,36 @@ export function getCurrentTimeInTimezone(timezone: string): Date {
     second: '2-digit',
     hour12: false,
   });
-  
+
   const parts = formatter.formatToParts(now);
   const get = (type: string) => parts.find(p => p.type === type)?.value || '0';
-  
+
   const year = parseInt(get('year'));
-  const month = parseInt(get('month')) - 1; // Date months are 0-indexed
+  const month = parseInt(get('month')) - 1;
   const day = parseInt(get('day'));
   const hour = parseInt(get('hour')) === 24 ? 0 : parseInt(get('hour'));
   const minute = parseInt(get('minute'));
   const second = parseInt(get('second'));
-  
-  // Create a UTC Date that represents the local time in that timezone
-  // This makes it directly comparable with Event_DateTime (which is also stored as-if-UTC)
+
   return new Date(Date.UTC(year, month, day, hour, minute, second));
 }
 
 /**
  * Check if an event should be stopped/deleted based on its timezone-aware local time.
  * Auto-detects timezone from venue text.
- * Returns null if timezone cannot be detected — the event should be SKIPPED (not deleted).
- * 
- * @param eventDateTime - The event's datetime (stored as-if-UTC, representing local time)
- * @param venue - The venue text from the event (used to auto-detect timezone)
- * @param stopBeforeHours - Hours before event to trigger stop/delete
- * @returns result object or null if timezone undetectable
+ * Returns null if timezone cannot be detected — the event should be SKIPPED.
  */
 export function shouldStopEvent(
   eventDateTime: Date,
   venue: string,
   stopBeforeHours: number
 ): { shouldStop: boolean; timezone: string; localNow: Date; cutoff: Date } | null {
-  // Auto-detect timezone from venue
   const timezone = detectTimezoneFromVenue(venue);
-  
-  if (!timezone) {
-    // Cannot determine timezone — skip this event
-    return null;
-  }
-  
-  // Get current time in the event's timezone (as fake-UTC for comparison)
+  if (!timezone) return null;
+
   const nowInEventTz = getCurrentTimeInTimezone(timezone);
-  
-  // Add stopBeforeHours to current local time
   const cutoffTime = new Date(nowInEventTz.getTime() + stopBeforeHours * 60 * 60 * 1000);
-  
-  // If event time <= cutoff time, it should be stopped
+
   return {
     shouldStop: eventDateTime.getTime() <= cutoffTime.getTime(),
     timezone,
@@ -406,19 +509,41 @@ export function shouldStopEvent(
 }
 
 /**
- * Get the timezone abbreviation for display
+ * Get the timezone abbreviation for display.
+ * Returns standard US abbreviation if known, otherwise derives from IANA name.
  */
 export function getTimezoneAbbr(timezone: string): string {
   const tz = US_TIMEZONES.find(t => t.value === timezone);
-  return tz?.abbr || 'ET';
+  if (tz) return tz.abbr;
+  // For international timezones, derive a short abbreviation
+  try {
+    const now = new Date();
+    const short = new Intl.DateTimeFormat('en-US', { timeZone: timezone, timeZoneName: 'short' })
+      .formatToParts(now)
+      .find(p => p.type === 'timeZoneName')?.value;
+    return short || timezone.split('/').pop()?.replace(/_/g, ' ') || timezone;
+  } catch {
+    return timezone.split('/').pop()?.replace(/_/g, ' ') || timezone;
+  }
 }
 
 /**
- * Get the timezone label for display
+ * Get the timezone label for display.
+ * Returns standard US label if known, otherwise a formatted IANA name.
  */
 export function getTimezoneLabel(timezone: string): string {
   const tz = US_TIMEZONES.find(t => t.value === timezone);
-  return tz?.label || 'Eastern Time (ET)';
+  if (tz) return tz.label;
+  // For international timezones, format the IANA name
+  try {
+    const now = new Date();
+    const long = new Intl.DateTimeFormat('en-US', { timeZone: timezone, timeZoneName: 'long' })
+      .formatToParts(now)
+      .find(p => p.type === 'timeZoneName')?.value;
+    return long || timezone.replace(/_/g, ' ');
+  } catch {
+    return timezone.replace(/_/g, ' ');
+  }
 }
 
 /**
