@@ -53,6 +53,18 @@ const autoDeleteSettingsSchema = new mongoose.Schema({
       type: String
     }]
   },
+  // Last 4 events deleted by auto-delete (for dashboard display)
+  lastDeletedEvents: [{
+    eventId: String,
+    eventName: String,
+    venue: String,
+    eventDateTime: Date,
+    deletedAt: Date,
+    detectedTimezone: String,        // IANA timezone e.g. "America/New_York"
+    timezoneAbbr: String,            // Short abbr e.g. "ET"
+    localTimeAtDeletion: String,     // Local time at event location when deleted
+    pktTimeAtDeletion: String,       // Pakistan Standard Time when deleted
+  }],
   createdAt: {
     type: Date,
     default: Date.now

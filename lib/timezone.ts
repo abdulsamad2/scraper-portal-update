@@ -14,6 +14,7 @@
  */
 
 import cityTimezones from 'city-timezones';
+import { getAccurateNow } from './timeSync';
 
 export const US_TIMEZONES = [
   { value: 'America/New_York', label: 'Eastern Time (ET)', abbr: 'ET' },
@@ -362,14 +363,19 @@ const FRAGMENT_TIMEZONE_MAP: Record<string, string> = {
 // MAIN DETECTION FUNCTION
 // ══════════════════════════════════════════════════════════════════════════════
 
+// Cache for live API results: venue → IANA timezone (or 'NONE' if API returned nothing)
+const _liveApiCache = new Map<string, string>();
+
 /**
- * Auto-detect timezone from venue text.
+ * Auto-detect timezone from venue text (synchronous — static data only).
  * 
  * Detection order:
  *   1. Known venue names (MSG, TD Garden, etc.)
  *   2. City lookup via city-timezones library (7,300+ cities, population-sorted)
- *   3. State/province abbreviations and full names
- *   4. Fragment keywords (carolina, columbia, jersey, etc.)
+ *   3. Individual words from venue tried as city names
+ *   4. Multi-word combinations (e.g., "San Francisco", "New York")
+ *   5. State/province abbreviations and full names
+ *   6. Fragment keywords (carolina, columbia, jersey, etc.)
  * 
  * Returns null if no timezone can be determined — callers must handle this.
  */
@@ -377,6 +383,11 @@ export function detectTimezoneFromVenue(venue: string): string | null {
   if (!venue || venue.trim().length === 0) {
     return null;
   }
+
+  // Check live API cache first
+  const cacheKey = venue.trim().toLowerCase();
+  const cached = _liveApiCache.get(cacheKey);
+  if (cached) return cached === 'NONE' ? null : cached;
 
   const venueNorm = normalizeText(venue);
 
@@ -406,6 +417,31 @@ export function detectTimezoneFromVenue(venue: string): string | null {
     if (segLookup) return segLookup;
   }
 
+  // ── Step 2b: Try individual words as city names (≥3 chars to avoid noise) ──
+  const allWords = venueNorm.split(/\s+/).filter(w => w.length >= 3);
+  for (const word of allWords) {
+    const clean = word.replace(/[^a-z]/g, '');
+    if (clean.length >= 3) {
+      const wordLookup = lookupCityTimezone(clean);
+      if (wordLookup) return wordLookup;
+    }
+  }
+
+  // ── Step 2c: Try consecutive 2-word and 3-word combinations ──
+  // Catches "San Francisco", "Los Angeles", "New York", "Salt Lake City", etc.
+  const rawWords = venueNorm.split(/\s+/);
+  for (let i = 0; i < rawWords.length - 1; i++) {
+    const twoWord = rawWords[i] + ' ' + rawWords[i + 1];
+    const twoLookup = lookupCityTimezone(twoWord);
+    if (twoLookup) return twoLookup;
+
+    if (i < rawWords.length - 2) {
+      const threeWord = twoWord + ' ' + rawWords[i + 2];
+      const threeLookup = lookupCityTimezone(threeWord);
+      if (threeLookup) return threeLookup;
+    }
+  }
+
   // ── Step 3: State/province abbreviation and full name check ──
   for (const segment of segments) {
     const words = segment.split(/\s+/);
@@ -423,7 +459,6 @@ export function detectTimezoneFromVenue(venue: string): string | null {
   }
 
   // Full text fallback for state abbreviations
-  const allWords = venueNorm.split(/\s+/);
   for (const word of allWords) {
     const clean = word.replace(/[^a-z]/g, '');
     if (clean.length === 2 && STATE_TIMEZONE_MAP[clean]) {
@@ -443,8 +478,150 @@ export function detectTimezoneFromVenue(venue: string): string | null {
     }
   }
 
-  console.warn(`Timezone auto-detect: Could not determine timezone from venue "${venue}"`);
+  console.warn(`Timezone auto-detect: Could not determine timezone from venue "${venue}" (static lookup failed)`);
   return null;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ASYNC DETECTION WITH LIVE API FALLBACK
+// Uses free TimeAPI.io to geocode city/state → timezone when static lookup fails
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Async version of detectTimezoneFromVenue that falls back to a live API
+ * (TimeAPI.io — free, no API key required) when the static lookup can't find a match.
+ * 
+ * Results are cached so repeated calls for the same venue won't hit the API again.
+ */
+export async function detectTimezoneFromVenueAsync(venue: string): Promise<string | null> {
+  // Try static detection first
+  const staticResult = detectTimezoneFromVenue(venue);
+  if (staticResult) return staticResult;
+
+  if (!venue || venue.trim().length === 0) return null;
+
+  const cacheKey = venue.trim().toLowerCase();
+
+  // Check cache for prior API result
+  const cached = _liveApiCache.get(cacheKey);
+  if (cached) return cached === 'NONE' ? null : cached;
+
+  // Extract potential city/location words from venue text
+  const venueNorm = normalizeText(venue);
+  const searchTerms: string[] = [];
+
+  // Add full venue, each comma/dash segment, and multi-word combos
+  searchTerms.push(venueNorm);
+  const segments = venueNorm.split(/[,|–\-]+/).map(s => s.trim()).filter(Boolean);
+  searchTerms.push(...segments);
+
+  const rawWords = venueNorm.split(/\s+/);
+  // Add 2-word and 3-word combinations
+  for (let i = 0; i < rawWords.length - 1; i++) {
+    searchTerms.push(rawWords[i] + ' ' + rawWords[i + 1]);
+    if (i < rawWords.length - 2) {
+      searchTerms.push(rawWords[i] + ' ' + rawWords[i + 1] + ' ' + rawWords[i + 2]);
+    }
+  }
+  // Add individual words ≥ 4 chars
+  searchTerms.push(...rawWords.filter(w => w.replace(/[^a-z]/g, '').length >= 4));
+
+  // Try each search term against the live API
+  for (const term of searchTerms) {
+    const tz = await fetchTimezoneFromLiveAPI(term);
+    if (tz) {
+      const normalized = normalizeTimezone(tz);
+      _liveApiCache.set(cacheKey, normalized);
+      console.log(`Timezone live-API: "${venue}" → ${normalized} (matched on "${term}")`);
+      return normalized;
+    }
+  }
+
+  // All attempts failed
+  _liveApiCache.set(cacheKey, 'NONE');
+  console.warn(`Timezone auto-detect: Could not determine timezone from venue "${venue}" (static + API both failed)`);
+  return null;
+}
+
+/**
+ * Call TimeAPI.io's free timezone-by-zone endpoint to resolve a location string.
+ * Tries to find US IANA timezones by searching city names against known US zones.
+ * Falls back to WorldTimeAPI search if needed.
+ */
+async function fetchTimezoneFromLiveAPI(searchTerm: string): Promise<string | null> {
+  try {
+    // Use TimeAPI.io search endpoint (free, no key required)
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 6000);
+
+    const encoded = encodeURIComponent(searchTerm);
+    const res = await fetch(
+      `https://timeapi.io/api/timezone/zone?timeZone=${encoded}`,
+      { signal: controller.signal, cache: 'no-store' }
+    );
+    clearTimeout(timer);
+
+    if (res.ok) {
+      const data = await res.json();
+      // If the API recognizes this as a valid IANA timezone, return it
+      if (data?.timeZone && typeof data.timeZone === 'string') {
+        return data.timeZone;
+      }
+    }
+  } catch {
+    // Timeout or network error — silently fail
+  }
+
+  // Fallback: try WorldTimeAPI search
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 6000);
+
+    const res = await fetch(
+      `http://worldtimeapi.org/api/timezone`,
+      { signal: controller.signal, cache: 'no-store' }
+    );
+    clearTimeout(timer);
+
+    if (res.ok) {
+      const zones: string[] = await res.json();
+      // Search for a zone that contains the search term
+      const termLower = searchTerm.toLowerCase().replace(/\s+/g, '_');
+      const match = zones.find(z => z.toLowerCase().includes(termLower));
+      if (match) return match;
+    }
+  } catch {
+    // Timeout or network error — silently fail
+  }
+
+  return null;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ASYNC shouldStopEvent — uses live API fallback for better coverage
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Async version of shouldStopEvent that uses detectTimezoneFromVenueAsync
+ * for better timezone detection coverage (live API fallback).
+ */
+export async function shouldStopEventAsync(
+  eventDateTime: Date,
+  venue: string,
+  stopBeforeHours: number
+): Promise<{ shouldStop: boolean; timezone: string; localNow: Date; cutoff: Date } | null> {
+  const timezone = await detectTimezoneFromVenueAsync(venue);
+  if (!timezone) return null;
+
+  const nowInEventTz = getCurrentTimeInTimezone(timezone);
+  const cutoffTime = new Date(nowInEventTz.getTime() + stopBeforeHours * 60 * 60 * 1000);
+
+  return {
+    shouldStop: eventDateTime.getTime() <= cutoffTime.getTime(),
+    timezone,
+    localNow: nowInEventTz,
+    cutoff: cutoffTime,
+  };
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -459,7 +636,7 @@ export function detectTimezoneFromVenue(venue: string): string | null {
  * so we can directly compare with Event_DateTime.
  */
 export function getCurrentTimeInTimezone(timezone: string): Date {
-  const now = new Date();
+  const now = getAccurateNow();
   const formatter = new Intl.DateTimeFormat('en-US', {
     timeZone: timezone,
     year: 'numeric',
@@ -517,7 +694,7 @@ export function getTimezoneAbbr(timezone: string): string {
   if (tz) return tz.abbr;
   // For international timezones, derive a short abbreviation
   try {
-    const now = new Date();
+    const now = getAccurateNow();
     const short = new Intl.DateTimeFormat('en-US', { timeZone: timezone, timeZoneName: 'short' })
       .formatToParts(now)
       .find(p => p.type === 'timeZoneName')?.value;
@@ -536,7 +713,7 @@ export function getTimezoneLabel(timezone: string): string {
   if (tz) return tz.label;
   // For international timezones, format the IANA name
   try {
-    const now = new Date();
+    const now = getAccurateNow();
     const long = new Intl.DateTimeFormat('en-US', { timeZone: timezone, timeZoneName: 'long' })
       .formatToParts(now)
       .find(p => p.type === 'timeZoneName')?.value;
@@ -550,7 +727,7 @@ export function getTimezoneLabel(timezone: string): string {
  * Format a time showing what the current local time is in a timezone
  */
 export function formatCurrentTimeInTimezone(timezone: string): string {
-  const now = new Date();
+  const now = getAccurateNow();
   return now.toLocaleString('en-US', {
     timeZone: timezone,
     hour: '2-digit',

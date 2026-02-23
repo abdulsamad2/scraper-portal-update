@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { getAllEvents } from '@/actions/eventActions';
 import { getConsecutiveGroupsPaginated } from '@/actions/seatActions';
 import { getAutoDeleteSettings, getAutoDeletePreview } from '@/actions/csvActions';
+import { getLastDeletedEvents } from '@/actions/autoDeleteActions';
 import { 
   Calendar,
   Package,
@@ -83,6 +84,20 @@ interface AutoDeleteEvent {
   venue?: string;
   isStopped?: boolean;
   detectedTimezone?: string;
+  localTimeDisplay?: string;
+  pktTimeDisplay?: string;
+}
+
+interface LastDeletedEvent {
+  eventId: string;
+  eventName: string;
+  venue: string;
+  eventDateTime: string;
+  deletedAt: string;
+  detectedTimezone: string;
+  timezoneAbbr: string;
+  localTimeAtDeletion: string;
+  pktTimeAtDeletion: string;
 }
 
 interface AutoDeleteInfo {
@@ -123,6 +138,7 @@ export default function DashboardPage() {
     loading: true,
   });
   const [showAllDeleteEvents, setShowAllDeleteEvents] = useState(false);
+  const [lastDeletedEvents, setLastDeletedEvents] = useState<LastDeletedEvent[]>([]);
 
   useEffect(() => {
     async function fetchData() {
@@ -210,6 +226,19 @@ export default function DashboardPage() {
       }
     }
     fetchAutoDeleteData();
+  }, []);
+
+  // Fetch last 4 deleted events
+  useEffect(() => {
+    async function fetchLastDeleted() {
+      try {
+        const data = await getLastDeletedEvents();
+        setLastDeletedEvents(data || []);
+      } catch (err) {
+        console.error('Error loading last deleted events:', err);
+      }
+    }
+    fetchLastDeleted();
   }, []);
 
   // Calculate events created in the last 7 days
@@ -951,6 +980,78 @@ export default function DashboardPage() {
           )}
         </div>
       </div>
+
+      {/* Last 4 Deleted Events by Auto-Delete Timer */}
+      {lastDeletedEvents.length > 0 && (
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+          <div className="px-6 py-5 border-b border-slate-100 bg-gradient-to-r from-rose-50 via-pink-50 to-purple-50">
+            <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-rose-500 to-purple-500 flex items-center justify-center">
+                <Trash2 className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-slate-800">Recently Auto-Deleted</h3>
+                <p className="text-sm text-slate-500">Last {lastDeletedEvents.length} events removed by the auto-delete timer</p>
+              </div>
+            </div>
+          </div>
+          <div className="p-6">
+            <div className="space-y-3">
+              {lastDeletedEvents.map((evt, i) => (
+                <div
+                  key={`${evt.eventId}-${i}`}
+                  className="p-4 rounded-xl bg-gradient-to-r from-slate-50 to-rose-50/30 border border-slate-100 hover:border-rose-200 transition-colors"
+                >
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1 min-w-0">
+                      <h4 className="text-sm font-semibold text-slate-800 truncate">{evt.eventName}</h4>
+                      {evt.venue && (
+                        <div className="flex items-center mt-1">
+                          <MapPin className="w-3 h-3 mr-1 text-slate-400 flex-shrink-0" />
+                          <span className="text-xs text-slate-500 truncate">{evt.venue}</span>
+                        </div>
+                      )}
+                    </div>
+                    <span className="ml-3 inline-flex px-2 py-0.5 rounded-full text-[10px] font-medium bg-rose-100 text-rose-700 flex-shrink-0">
+                      Deleted
+                    </span>
+                  </div>
+
+                  {/* Dual Timezone Display */}
+                  <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {/* Pakistan Time */}
+                    <div className="flex items-center space-x-2 px-3 py-2 rounded-lg bg-green-50 border border-green-100">
+                      <div className="w-6 h-6 rounded-md bg-green-500 flex items-center justify-center flex-shrink-0">
+                        <span className="text-[9px] font-bold text-white">PKT</span>
+                      </div>
+                      <div>
+                        <div className="text-[10px] text-green-600 font-medium">Pakistan Time</div>
+                        <div className="text-xs font-semibold text-green-800 tabular-nums">{evt.pktTimeAtDeletion}</div>
+                      </div>
+                    </div>
+                    {/* Event Location Time */}
+                    <div className="flex items-center space-x-2 px-3 py-2 rounded-lg bg-blue-50 border border-blue-100">
+                      <div className="w-6 h-6 rounded-md bg-blue-500 flex items-center justify-center flex-shrink-0">
+                        <span className="text-[9px] font-bold text-white">{evt.timezoneAbbr || 'TZ'}</span>
+                      </div>
+                      <div>
+                        <div className="text-[10px] text-blue-600 font-medium">Event Location</div>
+                        <div className="text-xs font-semibold text-blue-800 tabular-nums">{evt.localTimeAtDeletion}</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Event date + deleted time */}
+                  <div className="mt-2 flex items-center justify-between text-[10px] text-slate-400">
+                    <span>Event: {formatDateTime(evt.eventDateTime)}</span>
+                    <span>Deleted: {formatDateTime(evt.deletedAt)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Recent Events */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">

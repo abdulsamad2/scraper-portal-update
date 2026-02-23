@@ -23,7 +23,41 @@ import dbConnect from '@/lib/dbConnect';
 import { Event } from '@/models/eventModel';
 import { deleteConsecutiveGroupsByEventIds } from './seatActions';
 import { createErrorLog } from './errorLogActions';
-import { shouldStopEvent, detectTimezoneFromVenue, getTimezoneAbbr, getCurrentTimeInTimezone } from '@/lib/timezone';
+import { shouldStopEvent, shouldStopEventAsync, detectTimezoneFromVenue, detectTimezoneFromVenueAsync, getTimezoneAbbr, getCurrentTimeInTimezone } from '@/lib/timezone';
+import { ensureTimeSynced, getTimeSyncStatus, getAccurateNow } from '@/lib/timeSync';
+import { AutoDeleteSettings } from '@/models/autoDeleteModel';
+
+/**
+ * Format a Date as Pakistan Standard Time string (PKT = UTC+5)
+ */
+function formatAsPKT(date: Date): string {
+  return date.toLocaleString('en-US', {
+    timeZone: 'Asia/Karachi',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true,
+  }) + ' PKT';
+}
+
+/**
+ * Format a Date in a specific timezone for display
+ */
+function formatInTimezone(date: Date, timezone: string, abbr: string): string {
+  return date.toLocaleString('en-US', {
+    timeZone: timezone,
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true,
+  }) + ` ${abbr}`;
+}
 
 export interface AutoDeleteStats {
   totalEventsChecked: number;
@@ -43,6 +77,11 @@ export interface AutoDeleteStats {
  */
 export async function deleteExpiredEvents(stopBeforeHours: number = 2): Promise<AutoDeleteStats> {
   await dbConnect();
+  
+  // Sync clock with external time API before checking events
+  await ensureTimeSynced();
+  const syncStatus = getTimeSyncStatus();
+  console.log(`Auto-delete: Clock sync status — offset: ${syncStatus.offsetSeconds}s, synced: ${syncStatus.isSynced}`);
   
   const stats: AutoDeleteStats = {
     totalEventsChecked: 0,
@@ -65,12 +104,13 @@ export async function deleteExpiredEvents(stopBeforeHours: number = 2): Promise<
       return stats;
     }
 
-    // Check each event against its venue's timezone
+    // Check each event against its venue's timezone (async — with live API fallback)
     const eventsToDelete = [];
     const skippedEvents = [];
     for (const event of allEvents) {
       const venue = event.Venue || '';
-      const result = shouldStopEvent(event.Event_DateTime, venue, stopBeforeHours);
+      // Use async version for live API fallback covering all US cities
+      const result = await shouldStopEventAsync(event.Event_DateTime, venue, stopBeforeHours);
       
       if (!result) {
         // Timezone could not be detected from venue — skip this event
@@ -110,11 +150,13 @@ export async function deleteExpiredEvents(stopBeforeHours: number = 2): Promise<
     const notYetStopped = eventsToDelete.filter(e => !e.event.Skip_Scraping);
     stats.eventsStopped = notYetStopped.length;
 
-    // Log what we're doing with timezone info
-    console.log(`Auto-delete (timezone-aware): Found ${eventsToDelete.length} events to stop & delete:`);
+    // Log what we're doing with timezone info (including PKT)
+    const pktNow = formatAsPKT(getAccurateNow());
+    console.log(`Auto-delete (timezone-aware): Found ${eventsToDelete.length} events to stop & delete (Current PKT: ${pktNow}):`);
     for (const e of eventsToDelete) {
       const tz = getTimezoneAbbr(e.timezone);
-      console.log(`  → ${e.event.Event_ID} | ${e.event.Event_Name} | Event: ${e.event.Event_DateTime.toISOString()} | Venue: ${e.event.Venue} | TZ: ${tz} | Local now: ${e.localNow.toISOString()} | Cutoff: ${e.cutoff.toISOString()}`);
+      const localTimeStr = formatInTimezone(getAccurateNow(), e.timezone, tz);
+      console.log(`  → ${e.event.Event_ID} | ${e.event.Event_Name} | Event: ${e.event.Event_DateTime.toISOString()} | Venue: ${e.event.Venue} | TZ: ${tz} | Local now: ${localTimeStr} | PKT now: ${pktNow} | Cutoff: ${e.cutoff.toISOString()}`);
     }
 
     // Stop scraping first
@@ -156,21 +198,58 @@ export async function deleteExpiredEvents(stopBeforeHours: number = 2): Promise<
 
     console.log(`Auto-delete: Successfully stopped and deleted ${deleteResult.deletedCount} events`);
 
-    // Log successful deletion with timezone details
+    // Build last-deleted records with dual timezone info
+    const nowAccurate = getAccurateNow();
+    const deletedRecords = eventsToDelete.map(e => {
+      const tz = getTimezoneAbbr(e.timezone);
+      return {
+        eventId: e.event.Event_ID,
+        eventName: e.event.Event_Name,
+        venue: e.event.Venue || '',
+        eventDateTime: e.event.Event_DateTime,
+        deletedAt: nowAccurate,
+        detectedTimezone: e.timezone,
+        timezoneAbbr: tz,
+        localTimeAtDeletion: formatInTimezone(nowAccurate, e.timezone, tz),
+        pktTimeAtDeletion: formatAsPKT(nowAccurate),
+      };
+    });
+
+    // Save last 4 deleted events to settings (prepend new, keep max 4)
+    try {
+      const currentSettings = await AutoDeleteSettings.findOne();
+      const existing = currentSettings?.lastDeletedEvents || [];
+      const merged = [...deletedRecords, ...existing].slice(0, 4);
+      await AutoDeleteSettings.findOneAndUpdate(
+        {},
+        { $set: { lastDeletedEvents: merged } },
+        { upsert: true }
+      );
+    } catch (saveErr) {
+      console.error('Auto-delete: Failed to save lastDeletedEvents:', saveErr);
+    }
+
+    // Log successful deletion with timezone details (including PKT)
     await createErrorLog({
       errorType: 'AUTO_DELETE_SUCCESS',
       errorMessage: `Auto-deleted ${deleteResult.deletedCount} events (${stopBeforeHours}h before event time, timezone-aware)`,
       stackTrace: '',
       metadata: { 
-        deletedEvents: eventsToDelete.map(e => ({
-          id: e.event.Event_ID,
-          name: e.event.Event_Name,
-          dateTime: e.event.Event_DateTime,
-          venue: e.event.Venue,
-          detectedTimezone: e.timezone,
-          localTimeAtDeletion: e.localNow.toISOString(),
-        })),
+        deletedEvents: eventsToDelete.map(e => {
+          const tz = getTimezoneAbbr(e.timezone);
+          return {
+            id: e.event.Event_ID,
+            name: e.event.Event_Name,
+            dateTime: e.event.Event_DateTime,
+            venue: e.event.Venue,
+            detectedTimezone: e.timezone,
+            timezoneAbbr: tz,
+            localTimeAtDeletion: formatInTimezone(nowAccurate, e.timezone, tz),
+            pktTimeAtDeletion: formatAsPKT(nowAccurate),
+          };
+        }),
         stopBeforeHours,
+        clockOffset: getTimeSyncStatus().offsetSeconds,
       }
     });
 
@@ -200,6 +279,9 @@ export async function deleteExpiredEvents(stopBeforeHours: number = 2): Promise<
 export async function getExpiredEventsStats(stopBeforeHours: number = 2) {
   await dbConnect();
   
+  // Sync clock for accurate preview
+  await ensureTimeSynced();
+  
   try {
     // Fetch all events and check each against its venue timezone
     const allEvents = await Event.find({})
@@ -211,8 +293,9 @@ export async function getExpiredEventsStats(stopBeforeHours: number = 2) {
 
     for (const event of allEvents) {
       const venue = event.Venue || '';
-      const result = shouldStopEvent(event.Event_DateTime, venue, stopBeforeHours);
-      const tz = detectTimezoneFromVenue(venue);
+      // Use async version for live API fallback covering all US cities
+      const tz = await detectTimezoneFromVenueAsync(venue);
+      const result = tz ? await shouldStopEventAsync(event.Event_DateTime, venue, stopBeforeHours) : null;
       
       if (!result || !tz) {
         // Timezone undetectable — show in preview as skipped
@@ -229,6 +312,8 @@ export async function getExpiredEventsStats(stopBeforeHours: number = 2) {
       }
 
       const localNow = getCurrentTimeInTimezone(tz);
+      const tzAbbr = getTimezoneAbbr(tz);
+      const accurateNow = getAccurateNow();
       
       const eventInfo = {
         id: event.Event_ID,
@@ -236,8 +321,11 @@ export async function getExpiredEventsStats(stopBeforeHours: number = 2) {
         dateTime: event.Event_DateTime,
         venue: event.Venue,
         isStopped: event.Skip_Scraping,
-        detectedTimezone: getTimezoneAbbr(tz),
+        detectedTimezone: tzAbbr,
+        detectedTimezoneIana: tz,
         localTimeNow: localNow.toISOString(),
+        localTimeDisplay: formatInTimezone(accurateNow, tz, tzAbbr),
+        pktTimeDisplay: formatAsPKT(accurateNow),
       };
 
       if (result.shouldStop) {
@@ -265,5 +353,22 @@ export async function getExpiredEventsStats(stopBeforeHours: number = 2) {
       count: 0,
       events: []
     };
+  }
+}
+
+/**
+ * Get the last 4 events deleted by the auto-delete timer.
+ * Each record includes both PKT and event-local timezone info.
+ */
+export async function getLastDeletedEvents() {
+  await dbConnect();
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const settings: any = await AutoDeleteSettings.findOne().lean();
+    const lastDeleted = settings?.lastDeletedEvents || [];
+    return JSON.parse(JSON.stringify(lastDeleted));
+  } catch (error) {
+    console.error('Error getting last deleted events:', error);
+    return [];
   }
 }
