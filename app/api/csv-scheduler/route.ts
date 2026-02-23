@@ -42,13 +42,36 @@ function formatUptime(ms: number): string {
   return `${seconds}s`;
 }
 
-// Store the interval instance
-let scheduledInterval: NodeJS.Timeout | null = null;
-let isInitialized = false;
+// ═══════════════════════════════════════════════════════════════════
+// Use globalThis to persist state across module re-evaluations.
+// Without this, PM2/Next.js can re-import this module and create
+// duplicate intervals (the old ones never get cleared).
+// ═══════════════════════════════════════════════════════════════════
+
+const CSV_SCHEDULER_KEY = '__csvScheduler__';
+
+interface CsvSchedulerState {
+  interval: NodeJS.Timeout | null;
+  initialized: boolean;
+  running: boolean;
+}
+
+function getCsvState(): CsvSchedulerState {
+  if (!(globalThis as Record<string, unknown>)[CSV_SCHEDULER_KEY]) {
+    (globalThis as Record<string, unknown>)[CSV_SCHEDULER_KEY] = {
+      interval: null,
+      initialized: false,
+      running: false,
+    };
+  }
+  return (globalThis as Record<string, unknown>)[CSV_SCHEDULER_KEY] as CsvSchedulerState;
+}
 
 // Initialize scheduler on server start
 async function initializeScheduler() {
-  if (isInitialized) return;
+  const csvState = getCsvState();
+  if (csvState.initialized) return;
+  csvState.initialized = true;
   
   try {
     const settings = await getSchedulerSettings();
@@ -58,20 +81,21 @@ async function initializeScheduler() {
       console.log('🔄 Restoring scheduler from database settings...');
       await startScheduler(settings.scheduleRateMinutes, settings.uploadToSync, settings.eventUpdateFilterMinutes);
     }
-    
-    isInitialized = true;
   } catch (error) {
     console.error('Failed to initialize scheduler:', error);
+    csvState.initialized = false;
   }
 }
 
 // Helper function to start the scheduler
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 async function startScheduler(intervalMinutes: number, uploadToSync: boolean, eventUpdateFilterMinutes: number = 0) {
+  const csvState = getCsvState();
+  
   // Stop existing interval if running
-  if (scheduledInterval) {
-    clearInterval(scheduledInterval);
-    scheduledInterval = null;
+  if (csvState.interval) {
+    clearInterval(csvState.interval);
+    csvState.interval = null;
   }
 
   // Validate interval
@@ -92,6 +116,14 @@ async function startScheduler(intervalMinutes: number, uploadToSync: boolean, ev
   const intervalMs = intervalMinutes * 60 * 1000;
   
   const scheduledTask = async () => {
+    const csvSt = getCsvState();
+    // Prevent overlapping runs
+    if (csvSt.running) {
+      console.log('CSV scheduler: previous run still in progress, skipping...');
+      return;
+    }
+    csvSt.running = true;
+    
     const startTime = Date.now();
     const timestamp = new Date().toISOString();
     let generationTime = 0;
@@ -193,13 +225,15 @@ async function startScheduler(intervalMinutes: number, uploadToSync: boolean, ev
           timestamp: new Date()
         }
       });
+    } finally {
+      getCsvState().running = false;
     }
   };
   
   // Set up the interval
-  scheduledInterval = setInterval(scheduledTask, intervalMs);
+  csvState.interval = setInterval(scheduledTask, intervalMs);
   
-  console.log(`📅 Scheduler started with ${intervalMinutes} minute interval`);
+  console.log(`📅 Scheduler started with ${intervalMinutes} minute interval (${intervalMs}ms)`);
   
   return {
     success: true,
@@ -250,7 +284,7 @@ export async function GET(request: Request) {
     const response: SchedulerResponse = {
       success: true,
       settings: {
-        isRunning: !!scheduledInterval,
+        isRunning: !!getCsvState().interval,
         scheduleRateMinutes: settings.scheduleRateMinutes,
         uploadToSync: settings.uploadToSync,
         eventUpdateFilterMinutes: settings.eventUpdateFilterMinutes,
@@ -325,9 +359,10 @@ export async function POST(req: NextRequest) {
       
       if (currentSettings.isScheduled) {
         // Clear the interval if it exists in memory
-        if (scheduledInterval) {
-          clearInterval(scheduledInterval);
-          scheduledInterval = null;
+        const stopState = getCsvState();
+        if (stopState.interval) {
+          clearInterval(stopState.interval);
+          stopState.interval = null;
         }
         
         // Log final metrics before stopping
