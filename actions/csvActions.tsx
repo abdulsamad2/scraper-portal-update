@@ -930,10 +930,12 @@ export async function runAutoDelete() {
     const stats = await deleteExpiredEvents(settings.stopBeforeHours);
     
     // Update settings with run statistics
+    const intervalMinutes = settings.scheduleIntervalMinutes || 15;
+    const nextRunDate = new Date(Date.now() + intervalMinutes * 60 * 1000);
     await updateAutoDeleteSettings({
       lastRunAt: new Date(),
-      nextRunAt: new Date(Date.now() + settings.scheduleIntervalMinutes * 60 * 1000),
-      totalRuns: settings.totalRuns + 1,
+      ...(isNaN(nextRunDate.getTime()) ? {} : { nextRunAt: nextRunDate }),
+      totalRuns: (settings.totalRuns || 0) + 1,
       totalEventsDeleted: settings.totalEventsDeleted + stats.eventsDeleted,
       lastRunStats: {
         eventsChecked: stats.totalEventsChecked,

@@ -18,15 +18,20 @@ const GLOBAL_KEY = '__autoDeleteScheduler__';
 interface SchedulerState {
   interval: NodeJS.Timeout | null;
   initialized: boolean;
-  running: boolean; // guard against overlapping runs
+  runningStartedAt: number; // 0 = not running, timestamp = when it started
+  lastSkipLog: number;      // throttle "skipping" logs
 }
+
+const RUNNING_TIMEOUT_MS = 5 * 60 * 1000; // Force-reset running flag after 5 minutes
+const SKIP_LOG_INTERVAL_MS = 60 * 1000;    // Only log "skipping" once per minute
 
 function getState(): SchedulerState {
   if (!(globalThis as Record<string, unknown>)[GLOBAL_KEY]) {
     (globalThis as Record<string, unknown>)[GLOBAL_KEY] = {
       interval: null,
       initialized: false,
-      running: false,
+      runningStartedAt: 0,
+      lastSkipLog: 0,
     };
   }
   return (globalThis as Record<string, unknown>)[GLOBAL_KEY] as SchedulerState;
@@ -61,18 +66,30 @@ async function startAutoDeleteScheduler() {
 
   try {
     const settings = await getAutoDeleteSettings();
-    const intervalMs = settings.scheduleIntervalMinutes * 60 * 1000;
+    const minutes = settings.scheduleIntervalMinutes || 15; // fallback to 15 min
+    const intervalMs = minutes * 60 * 1000;
 
-    console.log(`Starting auto-delete scheduler with ${settings.scheduleIntervalMinutes} minute interval (${intervalMs}ms)`);
+    console.log(`Starting auto-delete scheduler with ${minutes} minute interval (${intervalMs}ms)`);
 
     state.interval = setInterval(async () => {
-      // Prevent overlapping runs
-      if (state.running) {
-        console.log('Auto-delete scheduler: previous run still in progress, skipping...');
-        return;
+      const now = Date.now();
+
+      // Prevent overlapping runs — with safety timeout (force-reset after 5 min)
+      if (state.runningStartedAt > 0) {
+        const elapsed = now - state.runningStartedAt;
+        if (elapsed < RUNNING_TIMEOUT_MS) {
+          // Throttle skip logs to once per minute
+          if (now - state.lastSkipLog > SKIP_LOG_INTERVAL_MS) {
+            console.log(`Auto-delete scheduler: previous run still in progress (${Math.round(elapsed / 1000)}s), skipping...`);
+            state.lastSkipLog = now;
+          }
+          return;
+        }
+        // Stale flag — force reset
+        console.warn(`Auto-delete scheduler: force-resetting stale running flag (was stuck for ${Math.round(elapsed / 1000)}s)`);
       }
 
-      state.running = true;
+      state.runningStartedAt = now;
       console.log('Auto-delete scheduler running...');
       try {
         const result = await runAutoDelete();
@@ -83,17 +100,18 @@ async function startAutoDeleteScheduler() {
           errorType: 'AUTO_DELETE_SCHEDULER_ERROR',
           errorMessage: `Auto-delete scheduler failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
           stackTrace: error instanceof Error ? error.stack || '' : '',
-          metadata: { schedulerIntervalMinutes: settings.scheduleIntervalMinutes }
+          metadata: { schedulerIntervalMinutes: minutes }
         });
       } finally {
-        state.running = false;
+        state.runningStartedAt = 0;
       }
     }, intervalMs);
 
-    // Update next run time
-    await updateAutoDeleteSettings({
-      nextRunAt: new Date(Date.now() + intervalMs)
-    });
+    // Update next run time (safe — intervalMs is guaranteed valid)
+    const nextRun = new Date(Date.now() + intervalMs);
+    if (!isNaN(nextRun.getTime())) {
+      await updateAutoDeleteSettings({ nextRunAt: nextRun });
+    }
 
   } catch (error) {
     console.error('Failed to start auto-delete scheduler:', error);
