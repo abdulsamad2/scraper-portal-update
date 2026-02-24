@@ -141,13 +141,20 @@ const EventFormContent = ({ mode, onCancel, onSuccess, initialData }) => {
           }
         }
         
-        // Calculate in-hand date (1 day before event)
+        // Calculate in-hand date:
+        // If event is today or in the past (in venue's local timezone), in-hand date = event date
+        // If event is in the future, in-hand date = event date - 1 day
         let inHandDate = "";
         if (eventDate) {
           const eventDateTime = new Date(eventDate);
           if (!isNaN(eventDateTime.getTime())) {
+            const eventDateOnly = eventDateTime.toISOString().slice(0, 10);
+            // Get today's date — use UTC as a reasonable default for the form
+            const todayStr = new Date().toISOString().slice(0, 10);
             const inHandDateTime = new Date(eventDateTime);
-            inHandDateTime.setDate(inHandDateTime.getDate() - 1);
+            if (eventDateOnly > todayStr) {
+              inHandDateTime.setDate(inHandDateTime.getDate() - 1);
+            }
             inHandDate = inHandDateTime.toISOString().slice(0, 10);
           }
         }

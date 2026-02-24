@@ -2,15 +2,20 @@ import { NextResponse } from 'next/server';
 import dbConnect from '@/lib/dbConnect';
 import { Event } from '@/models/eventModel';
 
+// Escape special regex characters to prevent ReDoS and injection
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 export async function GET(request: Request) {
   try {
     await dbConnect();
-    
+
     const { searchParams } = new URL(request.url);
-    const page = parseInt(searchParams.get('page') || '1');
-    const limit = parseInt(searchParams.get('limit') || '1000');
+    const page = Math.max(1, parseInt(searchParams.get('page') || '1') || 1);
+    const limit = Math.min(Math.max(1, parseInt(searchParams.get('limit') || '1000') || 1000), 5000);
     const search = searchParams.get('search') || '';
-    
+
     // Build search filter
     interface SearchFilter {
       $or?: Array<{
@@ -18,21 +23,22 @@ export async function GET(request: Request) {
         Venue?: { $regex: string; $options: string };
       }>;
     }
-    
+
     const filter: SearchFilter = {};
     if (search) {
+      const escapedSearch = escapeRegex(search);
       filter.$or = [
-        { Event_Name: { $regex: search, $options: 'i' } },
-        { Venue: { $regex: search, $options: 'i' } }
+        { Event_Name: { $regex: escapedSearch, $options: 'i' } },
+        { Venue: { $regex: escapedSearch, $options: 'i' } }
       ];
     }
-    
+
     // Calculate skip value
     const skip = (page - 1) * limit;
-    
+
     // Get total count for pagination
     const total = await Event.countDocuments(filter);
-    
+
     // Get events with pagination
     const events = await Event.find(filter, {
       mapping_id: 1,

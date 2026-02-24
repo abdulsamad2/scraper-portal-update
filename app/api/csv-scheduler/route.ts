@@ -321,7 +321,17 @@ export async function GET(request: Request) {
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const { action, intervalMinutes, uploadToSync, eventUpdateFilterMinutes } = body;
+  const { action } = body;
+
+  // Validate action
+  if (!action || !['start', 'stop', 'update-settings'].includes(action)) {
+    return NextResponse.json({ message: 'Invalid action. Use "start", "stop", or "update-settings".' }, { status: 400 });
+  }
+
+  // Validate and sanitize numeric inputs
+  const intervalMinutes = typeof body.intervalMinutes === 'number' ? Math.min(Math.max(body.intervalMinutes, 1), 1440) : undefined;
+  const uploadToSync = typeof body.uploadToSync === 'boolean' ? body.uploadToSync : undefined;
+  const eventUpdateFilterMinutes = typeof body.eventUpdateFilterMinutes === 'number' ? Math.max(body.eventUpdateFilterMinutes, 0) : 0;
 
   try {
     if (action === 'start') {
@@ -397,25 +407,20 @@ export async function POST(req: NextRequest) {
       }
       
     } else if (action === 'update-settings') {
-      // Update settings without starting/stopping scheduler
-      const { intervalMinutes, uploadToSync, eventUpdateFilterMinutes } = body;
-      
-      const updates: unknown = {};
-      if (intervalMinutes !== undefined) (updates as { scheduleRateMinutes?: number }).scheduleRateMinutes = intervalMinutes;
-      if (uploadToSync !== undefined) (updates as { uploadToSync?: boolean }).uploadToSync = uploadToSync;
-      if (eventUpdateFilterMinutes !== undefined) (updates as { eventUpdateFilterMinutes?: number }).eventUpdateFilterMinutes = eventUpdateFilterMinutes;
-      
-      await updateSchedulerSettings(updates as {
+      // Update settings with validated inputs (already sanitized above)
+      const updates: {
         scheduleRateMinutes?: number;
         uploadToSync?: boolean;
         eventUpdateFilterMinutes?: number;
-      });
-      
-      console.log('Scheduler settings updated:', updates);
+      } = {};
+      if (intervalMinutes !== undefined) updates.scheduleRateMinutes = intervalMinutes;
+      if (uploadToSync !== undefined) updates.uploadToSync = uploadToSync;
+      if (eventUpdateFilterMinutes !== undefined) updates.eventUpdateFilterMinutes = eventUpdateFilterMinutes;
+
+      await updateSchedulerSettings(updates);
+
+      console.log('Scheduler settings updated');
       return NextResponse.json({ message: 'Settings updated successfully.' });
-      
-    } else {
-      return NextResponse.json({ message: 'Invalid action. Use "start", "stop", or "update-settings".' }, { status: 400 });
     }
     
   } catch (error) {

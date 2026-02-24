@@ -28,6 +28,8 @@ interface EventData {
   resaleQty?: number;
   standardRows?: number;
   resaleRows?: number;
+  includeStandardSeats?: boolean;
+  includeResaleSeats?: boolean;
 }
 
 interface ResolvedSearchParams {
@@ -283,6 +285,8 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                     ? Date.now() - new Date(lastUpdated).getTime() < 4 * 60 * 1000
                     : false;
                   const isActive = !event.Skip_Scraping;
+                  const stdIncluded = event.includeStandardSeats !== false;
+                  const resIncluded = event.includeResaleSeats !== false;
 
                   return (
                     <tr 
@@ -328,10 +332,14 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                       
                       <td className="px-3 py-2 whitespace-nowrap text-right">
                         <div className="flex flex-col items-end gap-0.5">
-                          <span className="inline-flex items-center text-[11px] font-semibold px-1.5 py-0.5 rounded border tabular-nums border-blue-200 bg-blue-50 text-blue-700">
+                          <span className={`inline-flex items-center text-[11px] font-semibold px-1.5 py-0.5 rounded border tabular-nums ${
+                            stdIncluded ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-slate-200 bg-slate-50 text-slate-400 line-through opacity-50'
+                          }`}>
                             <span className="mr-0.5 opacity-50 text-[9px]">S</span>{(event.standardQty ?? 0).toLocaleString()}
                           </span>
-                          <span className="inline-flex items-center text-[11px] font-semibold px-1.5 py-0.5 rounded border tabular-nums border-red-200 bg-red-50 text-red-700">
+                          <span className={`inline-flex items-center text-[11px] font-semibold px-1.5 py-0.5 rounded border tabular-nums ${
+                            resIncluded ? 'border-red-200 bg-red-50 text-red-700' : 'border-slate-200 bg-slate-50 text-slate-400 line-through opacity-50'
+                          }`}>
                             <span className="mr-0.5 opacity-50 text-[9px]">R</span>{(event.resaleQty ?? 0).toLocaleString()}
                           </span>
                         </div>
@@ -339,10 +347,14 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
 
                       <td className="px-3 py-2 whitespace-nowrap text-right">
                         <div className="flex flex-col items-end gap-0.5">
-                          <span className="inline-flex items-center text-[11px] font-semibold px-1.5 py-0.5 rounded border tabular-nums border-blue-200 bg-blue-50 text-blue-700">
+                          <span className={`inline-flex items-center text-[11px] font-semibold px-1.5 py-0.5 rounded border tabular-nums ${
+                            stdIncluded ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-slate-200 bg-slate-50 text-slate-400 line-through opacity-50'
+                          }`}>
                             <span className="mr-0.5 opacity-50 text-[9px]">S</span>{(event.standardRows ?? 0).toLocaleString()}
                           </span>
-                          <span className="inline-flex items-center text-[11px] font-semibold px-1.5 py-0.5 rounded border tabular-nums border-red-200 bg-red-50 text-red-700">
+                          <span className={`inline-flex items-center text-[11px] font-semibold px-1.5 py-0.5 rounded border tabular-nums ${
+                            resIncluded ? 'border-red-200 bg-red-50 text-red-700' : 'border-slate-200 bg-slate-50 text-slate-400 line-through opacity-50'
+                          }`}>
                             <span className="mr-0.5 opacity-50 text-[9px]">R</span>{(event.resaleRows ?? 0).toLocaleString()}
                           </span>
                         </div>
@@ -416,9 +428,11 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                 ? Date.now() - new Date(lastUpdated).getTime() < 4 * 60 * 1000
                 : false;
               const isActive = !event.Skip_Scraping;
+              const stdIncluded = event.includeStandardSeats !== false;
+              const resIncluded = event.includeResaleSeats !== false;
 
               return (
-                <div 
+                <div
                   key={event._id}
                   className={`p-4 ${isActive && fresh ? 'bg-blue-50 border-l-4 border-blue-500' : 
                     isActive && !fresh ? 'bg-yellow-50 border-l-4 border-yellow-500' :
@@ -469,19 +483,27 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                       <div className="space-y-2 text-right">
                         <div className="flex items-center justify-end gap-1">
                           <Users size={14} className="text-gray-400" />
-                          <span className="inline-flex items-center text-[11px] font-semibold px-1.5 py-0.5 rounded border tabular-nums border-blue-200 bg-blue-50 text-blue-700">
+                          <span className={`inline-flex items-center text-[11px] font-semibold px-1.5 py-0.5 rounded border tabular-nums ${
+                            stdIncluded ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-slate-200 bg-slate-50 text-slate-400 line-through opacity-50'
+                          }`}>
                             <span className="mr-0.5 opacity-50 text-[9px]">S</span>{(event.standardQty ?? 0).toLocaleString()}
                           </span>
-                          <span className="inline-flex items-center text-[11px] font-semibold px-1.5 py-0.5 rounded border tabular-nums border-red-200 bg-red-50 text-red-700">
+                          <span className={`inline-flex items-center text-[11px] font-semibold px-1.5 py-0.5 rounded border tabular-nums ${
+                            resIncluded ? 'border-red-200 bg-red-50 text-red-700' : 'border-slate-200 bg-slate-50 text-slate-400 line-through opacity-50'
+                          }`}>
                             <span className="mr-0.5 opacity-50 text-[9px]">R</span>{(event.resaleQty ?? 0).toLocaleString()}
                           </span>
                         </div>
                         <div className="flex items-center justify-end gap-1">
                           <span className="text-[10px] text-gray-400 mr-0.5">rows</span>
-                          <span className="inline-flex items-center text-[11px] font-semibold px-1.5 py-0.5 rounded border tabular-nums border-blue-200 bg-blue-50 text-blue-700">
+                          <span className={`inline-flex items-center text-[11px] font-semibold px-1.5 py-0.5 rounded border tabular-nums ${
+                            stdIncluded ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-slate-200 bg-slate-50 text-slate-400 line-through opacity-50'
+                          }`}>
                             <span className="mr-0.5 opacity-50 text-[9px]">S</span>{(event.standardRows ?? 0).toLocaleString()}
                           </span>
-                          <span className="inline-flex items-center text-[11px] font-semibold px-1.5 py-0.5 rounded border tabular-nums border-red-200 bg-red-50 text-red-700">
+                          <span className={`inline-flex items-center text-[11px] font-semibold px-1.5 py-0.5 rounded border tabular-nums ${
+                            resIncluded ? 'border-red-200 bg-red-50 text-red-700' : 'border-slate-200 bg-slate-50 text-slate-400 line-through opacity-50'
+                          }`}>
                             <span className="mr-0.5 opacity-50 text-[9px]">R</span>{(event.resaleRows ?? 0).toLocaleString()}
                           </span>
                         </div>

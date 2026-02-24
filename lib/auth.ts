@@ -1,18 +1,32 @@
 import { SignJWT, jwtVerify, type JWTPayload } from 'jose';
 import { NextRequest } from 'next/server';
+import { timingSafeEqual } from 'crypto';
 
 const COOKIE_NAME = 'session_token';
 
 /**
  * Get the JWT secret from environment variable.
- * Falls back to NEXT_SERVER_ACTIONS_ENCRYPTION_KEY if AUTH_SECRET is not set.
  */
 function getSecret(): Uint8Array {
-  const secret = process.env.AUTH_SECRET || process.env.NEXT_SERVER_ACTIONS_ENCRYPTION_KEY;
+  const secret = process.env.AUTH_SECRET;
   if (!secret) {
     throw new Error('AUTH_SECRET environment variable is not set');
   }
   return new TextEncoder().encode(secret);
+}
+
+/**
+ * Constant-time string comparison to prevent timing attacks.
+ */
+function safeCompare(a: string, b: string): boolean {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) {
+    // Compare a against itself to spend constant time, then return false
+    timingSafeEqual(bufA, bufA);
+    return false;
+  }
+  return timingSafeEqual(bufA, bufB);
 }
 
 /**
@@ -28,9 +42,8 @@ export function validateCredentials(username: string, password: string): boolean
     return false;
   }
 
-  // Constant-time-ish comparison to mitigate timing attacks
-  const usernameMatch = username === validUsername;
-  const passwordMatch = password === validPassword;
+  const usernameMatch = safeCompare(username, validUsername);
+  const passwordMatch = safeCompare(password, validPassword);
   return usernameMatch && passwordMatch;
 }
 

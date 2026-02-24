@@ -163,7 +163,18 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { action, stopBeforeHours, scheduleIntervalMinutes } = body;
+    const { action } = body;
+
+    // Validate action
+    if (!action || !['start', 'stop', 'run-now', 'preview', 'update-settings'].includes(action)) {
+      return NextResponse.json({ success: false, error: 'Invalid action' }, { status: 400 });
+    }
+
+    // Validate and sanitize numeric inputs
+    const stopBeforeHours = typeof body.stopBeforeHours === 'number'
+      ? Math.min(Math.max(body.stopBeforeHours, 0), 168) : undefined;
+    const scheduleIntervalMinutes = typeof body.scheduleIntervalMinutes === 'number'
+      ? Math.min(Math.max(body.scheduleIntervalMinutes, 1), 1440) : undefined;
 
     switch (action) {
       case 'start':
@@ -198,13 +209,25 @@ export async function POST(request: NextRequest) {
         const preview = await getAutoDeletePreview(stopBeforeHours);
         return NextResponse.json(preview);
 
-      case 'update-settings':
-        const { isEnabled, ...settingsToUpdate } = body;
-        
-        await updateAutoDeleteSettings(settingsToUpdate);
-        
-        if (isEnabled !== undefined) {
-          if (isEnabled) {
+      case 'update-settings': {
+        // Whitelist allowed fields to prevent mass assignment
+        const allowedUpdates: {
+          stopBeforeHours?: number;
+          scheduleIntervalMinutes?: number;
+        } = {};
+        if (typeof body.stopBeforeHours === 'number' && body.stopBeforeHours >= 0 && body.stopBeforeHours <= 168) {
+          allowedUpdates.stopBeforeHours = body.stopBeforeHours;
+        }
+        if (typeof body.scheduleIntervalMinutes === 'number' && body.scheduleIntervalMinutes >= 1 && body.scheduleIntervalMinutes <= 1440) {
+          allowedUpdates.scheduleIntervalMinutes = body.scheduleIntervalMinutes;
+        }
+
+        if (Object.keys(allowedUpdates).length > 0) {
+          await updateAutoDeleteSettings(allowedUpdates);
+        }
+
+        if (body.isEnabled !== undefined) {
+          if (body.isEnabled) {
             await updateAutoDeleteSettings({ isEnabled: true });
             await startAutoDeleteScheduler();
           } else {
@@ -217,6 +240,7 @@ export async function POST(request: NextRequest) {
           success: true,
           message: 'Auto-delete settings updated successfully'
         });
+      }
 
       default:
         return NextResponse.json({
@@ -228,7 +252,7 @@ export async function POST(request: NextRequest) {
     console.error('Error in auto-delete API:', error);
     return NextResponse.json({
       success: false,
-      error: `Auto-delete operation failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+      error: 'Auto-delete operation failed'
     }, { status: 500 });
   }
 }

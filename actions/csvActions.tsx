@@ -9,6 +9,7 @@ import { ExclusionRules } from '../models/exclusionRulesModel';
 import SyncService from '../lib/syncService';
 import { createErrorLog } from './errorLogActions';
 import { deleteExpiredEvents, getExpiredEventsStats } from './autoDeleteActions';
+import { detectTimezoneFromVenueAsync, getCurrentTimeInTimezone } from '../lib/timezone';
 import { PipelineStage } from 'mongoose';
 
 interface CsvRow {
@@ -233,13 +234,19 @@ async function withRetry<T>(
   throw lastError!;
 }
 
+// Cache for resolved venue timezones within a CSV generation run
+const _venueTzCache = new Map<string, string | null>();
+
 export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0) {
   return withRetry(async () => {
     await dbConnect();
-    
+
     const mongoose = await import('mongoose');
-    
+
     const startTime = Date.now();
+
+    // Clear venue timezone cache at the start of each CSV generation run
+    _venueTzCache.clear();
 
     try {
       let eventFilter = {};
@@ -328,13 +335,28 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
             as: 'eventDetails'
           }
         },
-        // Add the event URL + markup adjustment fields to the document
+        // Add the event URL + markup adjustment fields + CSV export toggles to the document
         {
           $addFields: {
             event_url: { $arrayElemAt: ['$eventDetails.URL', 0] },
             event_std_adj: { $ifNull: [{ $arrayElemAt: ['$eventDetails.standardMarkupAdjustment', 0] }, 0] },
             event_resale_adj: { $ifNull: [{ $arrayElemAt: ['$eventDetails.resaleMarkupAdjustment', 0] }, 0] },
             event_default_pct: { $ifNull: [{ $arrayElemAt: ['$eventDetails.priceIncreasePercentage', 0] }, 0] },
+            event_include_standard: { $ifNull: [{ $arrayElemAt: ['$eventDetails.includeStandardSeats', 0] }, true] },
+            event_include_resale: { $ifNull: [{ $arrayElemAt: ['$eventDetails.includeResaleSeats', 0] }, true] },
+          }
+        },
+        // Filter out seats based on per-event CSV export toggles
+        // Standard = splitType NEVERLEAVEONE, Resale = everything else
+        {
+          $match: {
+            $expr: {
+              $cond: {
+                if: { $eq: ['$inventory.splitType', 'NEVERLEAVEONE'] },
+                then: { $ne: ['$event_include_standard', false] },
+                else: { $ne: ['$event_include_resale', false] }
+              }
+            }
           }
         },
         { $project: projection },
@@ -514,8 +536,17 @@ function calculateSplitConfiguration(quantity: number, splitType?: string): {
   }
 }
 
-// Helper function to process batches in parallel
+// Helper function to process batches
 async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]> {
+  // Resolve timezones for all unique venues in this batch (async, with API fallback)
+  const uniqueVenues = [...new Set(batch.map(d => d.venue_name).filter(Boolean))] as string[];
+  await Promise.all(uniqueVenues.map(async (venue) => {
+    if (!_venueTzCache.has(venue)) {
+      const tz = await detectTimezoneFromVenueAsync(venue);
+      _venueTzCache.set(venue, tz);
+    }
+  }));
+
   return batch.map(doc => {
     const inventory = doc.inventory;
     const isResale = inventory?.splitType !== 'NEVERLEAVEONE';
@@ -528,14 +559,30 @@ async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]
     const adjustedListPrice = defaultPct !== 0 || adj !== 0
       ? rawListPrice * (1 + (defaultPct + adj) / 100) / (1 + defaultPct / 100)
       : rawListPrice;
-    
+
     // Pre-compute expensive operations with null safety
     const seatsString = doc.seats && doc.seats.length > 0 ?
       doc.seats.map((seat: { number: string | number }) => String(seat.number)).join(',') : '';
-    const eventDateString = doc.event_date ? 
+    const eventDateString = doc.event_date ?
       new Date(doc.event_date).toISOString() : '';
-    const inHandDateString = inventory?.inHandDate ? 
-      new Date(inventory.inHandDate).toISOString().slice(0, 10) : '';
+
+    // In-hand date logic: if event is today or in the past (in venue's timezone),
+    // use the event date as in-hand date so Sync doesn't reject it.
+    // Otherwise use the stored inHandDate (typically event date - 1 day).
+    let inHandDateString = inventory?.inHandDate
+      ? new Date(inventory.inHandDate).toISOString().slice(0, 10) : '';
+    if (doc.event_date) {
+      const eventDateOnly = new Date(doc.event_date).toISOString().slice(0, 10);
+      const venueTz = doc.venue_name ? _venueTzCache.get(doc.venue_name) ?? null : null;
+      if (venueTz) {
+        const nowInVenueTz = getCurrentTimeInTimezone(venueTz);
+        const todayInVenueTz = nowInVenueTz.toISOString().slice(0, 10);
+        if (eventDateOnly <= todayInVenueTz) {
+          inHandDateString = eventDateOnly;
+        }
+      }
+      // No fallback — if timezone can't be detected even with live API, keep the stored inHandDate
+    }
 
     // Calculate split configuration based on quantity and split type
     const { finalSplitType, customSplit } = calculateSplitConfiguration(

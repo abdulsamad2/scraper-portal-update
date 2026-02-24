@@ -25,7 +25,7 @@ export async function POST() {
     console.error('Error in clear inventory API:', error);
     return NextResponse.json({
       success: false,
-      message: `Internal server error: ${error instanceof Error ? error.message : 'Unknown error'}`
+      message: 'Internal server error'
     }, { status: 500 });
   }
 }

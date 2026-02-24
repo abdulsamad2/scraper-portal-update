@@ -20,6 +20,11 @@ import { Event } from '@/models/eventModel'; // Assuming models are aliased to @
 import { ConsecutiveGroup } from '@/models/seatModel';
 import { deleteConsecutiveGroupsByEventId, deleteConsecutiveGroupsByEventIds } from './seatActions';
 
+// Escape special regex characters to prevent ReDoS and injection
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /**
  * Creates a new event.
  * @param {object} eventData - The data for the new event.
@@ -90,7 +95,7 @@ export async function getPaginatedEventsAdvanced(page: number = 1, limit: number
     // Build search query
     const searchConditions = [];
     if (search.trim()) {
-      const searchRegex = { $regex: search.trim(), $options: 'i' };
+      const searchRegex = { $regex: escapeRegex(search.trim()), $options: 'i' };
       searchConditions.push({
         $or: [
           { Event_Name: searchRegex },
@@ -118,11 +123,8 @@ export async function getPaginatedEventsAdvanced(page: number = 1, limit: number
     }
 
     // Venue filter (only when not already covered by search)
-    if (filters.venue && !search.trim()) {
-      filterConditions.push({ Venue: { $regex: filters.venue.trim(), $options: 'i' } });
-    } else if (filters.venue && search.trim()) {
-      // venue filter is separate from free-text search
-      filterConditions.push({ Venue: { $regex: filters.venue.trim(), $options: 'i' } });
+    if (filters.venue) {
+      filterConditions.push({ Venue: { $regex: escapeRegex(filters.venue.trim()), $options: 'i' } });
     }
 
     // Scraping status filter
@@ -424,6 +426,40 @@ export async function deleteEvent(eventId: string) {
   } catch (error) {
     console.error('Error deleting event:', error);
     return { error: (error as Error).message || 'Failed to delete event', success: false };
+  }
+}
+
+/**
+ * Toggle CSV export setting (includeStandardSeats or includeResaleSeats) for an event.
+ */
+export async function toggleCsvExportSetting(
+  eventId: string,
+  field: 'includeStandardSeats' | 'includeResaleSeats',
+  value: boolean
+) {
+  if (!eventId || typeof eventId !== 'string') {
+    return { error: 'Invalid event ID provided' };
+  }
+  if (field !== 'includeStandardSeats' && field !== 'includeResaleSeats') {
+    return { error: 'Invalid field' };
+  }
+
+  await dbConnect();
+  try {
+    const updatedEvent = await Event.findByIdAndUpdate(
+      eventId,
+      { [field]: value },
+      { new: true, runValidators: true }
+    ).maxTimeMS(5000);
+
+    if (!updatedEvent) {
+      return { error: 'Event not found' };
+    }
+
+    return JSON.parse(JSON.stringify(updatedEvent));
+  } catch (error) {
+    console.error('Error toggling CSV export setting:', error);
+    return { error: (error as Error).message || 'Failed to toggle setting' };
   }
 }
 

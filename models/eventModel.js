@@ -53,6 +53,14 @@ const eventSchema = new mongoose.Schema(
       type: Number,
       default: 0, // +/- offset on top of scraper default for RESALE tickets
     },
+    includeStandardSeats: {
+      type: Boolean,
+      default: true, // Include STANDARD seats in CSV export
+    },
+    includeResaleSeats: {
+      type: Boolean,
+      default: true, // Include RESALE seats in CSV export
+    },
     Last_Updated: {
       type: Date,
       default: Date.now,
