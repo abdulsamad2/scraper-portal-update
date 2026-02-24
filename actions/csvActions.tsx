@@ -387,7 +387,7 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
           batch = []; // Clear batch to free memory
           
           // Yield control to event loop to prevent blocking
-          await new Promise(resolve => setImmediate(resolve));
+          await new Promise(resolve => (typeof setImmediate !== 'undefined' ? setImmediate : setTimeout)(resolve, 0));
         }
       }
       
@@ -662,7 +662,7 @@ async function generateCsvString(records: CsvRow[]): Promise<string> {
     
     // Yield control periodically
     if (i % (CHUNK_SIZE * 5) === 0) {
-      await new Promise(resolve => setImmediate(resolve));
+      await new Promise(resolve => (typeof setImmediate !== 'undefined' ? setImmediate : setTimeout)(resolve, 0));
     }
   }
   
