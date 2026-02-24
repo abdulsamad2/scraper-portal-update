@@ -39,3 +39,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# test files with sensitive data
+test-csv-real.mjs
+test-output.csv
