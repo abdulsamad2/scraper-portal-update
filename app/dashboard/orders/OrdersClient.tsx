@@ -10,7 +10,7 @@ import {
   FileText, Clock, XCircle, Package, Ticket,
   Flag, FlagOff, MessageSquareWarning,
 } from 'lucide-react';
-import { getPaginatedOrders, getOrderTabCounts } from '@/actions/orderActions';
+import { getPaginatedOrders, getOrderTabCounts, flagOrderIssue, unflagOrderIssue } from '@/actions/orderActions';
 import { useOrderAlert } from './useOrderAlert';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -147,6 +147,8 @@ export default function OrdersClient({ initialOrders, initialTabCounts, initialU
   const [flagOrder, setFlagOrder] = useState<OrderData | null>(null);
   const [flagNote, setFlagNote] = useState('');
   const [flagLoading, setFlagLoading] = useState(false);
+  // Track locally flagged order IDs so fetchOrders doesn't overwrite them
+  const localFlagsRef = useRef<Map<string, { hasIssue: boolean; issueNote: string; issueFlaggedAt: string | null }>>(new Map());
 
   const perPage = 20;
 
@@ -159,7 +161,13 @@ export default function OrdersClient({ initialOrders, initialTabCounts, initialU
         getPaginatedOrders(1, 10000, f as any, 'order_date', 'desc'),
         getOrderTabCounts(),
       ]);
-      setOrders(result.orders);
+      // Merge local flag overrides into fetched orders
+      const merged = result.orders.map((o: OrderData) => {
+        const localFlag = localFlagsRef.current.get(o._id);
+        if (localFlag) return { ...o, ...localFlag };
+        return o;
+      });
+      setOrders(merged);
       setUnackCount(result.unacknowledgedCount);
       setTabCounts(counts);
     } catch (err) {
@@ -231,17 +239,46 @@ export default function OrdersClient({ initialOrders, initialTabCounts, initialU
   const handleFlag = async () => {
     if (!flagOrder || !flagNote.trim()) return;
     setFlagLoading(true);
+    const orderId = flagOrder._id;
+    const note = flagNote.trim();
+    const flagData = { hasIssue: true, issueNote: note, issueFlaggedAt: new Date().toISOString() };
     try {
-      await fetch('/api/orders/flag-issue', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ orderId: flagOrder._id, note: flagNote.trim() }) });
+      // Close modal
       setFlagOrder(null);
       setFlagNote('');
-      await fetchOrders();
+      // Save to local override ref so fetchOrders preserves it
+      localFlagsRef.current.set(orderId, flagData);
+      // Update local state immediately
+      setOrders(prev => prev.map(o =>
+        o._id === orderId ? { ...o, ...flagData } : o
+      ));
+      // Persist to DB
+      const result = await flagOrderIssue(orderId, note);
+      console.log('Flag result:', result);
+      // Clear local override after successful DB write — DB now has it
+      setTimeout(() => localFlagsRef.current.delete(orderId), 5000);
+    } catch (err) {
+      console.error('Flag error:', err);
     } finally { setFlagLoading(false); }
   };
 
   const handleUnflag = async (id: string) => {
-    await fetch('/api/orders/flag-issue', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ orderId: id, unflag: true }) });
-    await fetchOrders();
+    const unflagData = { hasIssue: false, issueNote: '', issueFlaggedAt: null };
+    try {
+      // Save to local override ref
+      localFlagsRef.current.set(id, unflagData);
+      // Update local state immediately
+      setOrders(prev => prev.map(o =>
+        o._id === id ? { ...o, ...unflagData } : o
+      ));
+      // Persist to DB
+      const result = await unflagOrderIssue(id);
+      console.log('Unflag result:', result);
+      // Clear local override after successful DB write
+      setTimeout(() => localFlagsRef.current.delete(id), 5000);
+    } catch (err) {
+      console.error('Unflag error:', err);
+    }
   };
 
   const openModal = (order: OrderData, action: 'confirm' | 'reject') => {
@@ -503,21 +540,21 @@ export default function OrdersClient({ initialOrders, initialTabCounts, initialU
       ) : (
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full divide-y divide-gray-200 table-fixed">
+            <table className="w-full table-fixed">
               <colgroup><col className="w-[130px]" /><col /><col className="w-[140px]" /><col className="w-[110px]" /><col className="w-[110px]" /><col className="w-[90px]" /><col className="w-[120px]" /></colgroup>
-              <thead className="bg-gradient-to-r from-gray-50 to-gray-100">
+              <thead className="bg-gray-50/80 border-b-2 border-gray-200">
                 <tr>
-                  <th className="px-3 py-2.5 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Status</th>
-                  <th className="px-3 py-2.5 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Event Details</th>
-                  <th className="px-3 py-2.5 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Event Date</th>
-                  <th className="px-3 py-2.5 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Tickets</th>
-                  <th className="px-3 py-2.5 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Delivery</th>
-                  <th className="px-3 py-2.5 text-right text-xs font-bold text-gray-600 uppercase tracking-wider">Price</th>
-                  <th className="px-3 py-2.5 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Ordered</th>
+                  <th className="px-3 py-3 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">Status</th>
+                  <th className="px-3 py-3 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">Event Details</th>
+                  <th className="px-3 py-3 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">Event Date</th>
+                  <th className="px-3 py-3 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">Tickets</th>
+                  <th className="px-3 py-3 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">Delivery</th>
+                  <th className="px-3 py-3 text-right text-[11px] font-semibold text-gray-500 uppercase tracking-wider">Price</th>
+                  <th className="px-3 py-3 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">Ordered</th>
                 </tr>
               </thead>
-              <tbody className="bg-white divide-y divide-gray-100">
-                {displayedOrders.map(o => {
+              <tbody>
+                {displayedOrders.map((o, idx) => {
                   const sc = ST[o.status] || ST.pending;
                   const mp = MP[o.marketplace];
                   const isNew = !o.acknowledged;
@@ -525,33 +562,55 @@ export default function OrdersClient({ initialOrders, initialTabCounts, initialU
                   const isInvoiced = ['invoiced', 'pending', 'problem'].includes(o.status);
                   const isConfirmed = ['confirmed', 'confirmed_delay'].includes(o.status);
 
+                  // Status-based row styling
+                  const statusRowStyles: Record<string, string> = {
+                    invoiced: 'border-l-[3px] border-l-blue-500 bg-blue-50/30',
+                    pending: 'border-l-[3px] border-l-blue-400 bg-blue-50/20',
+                    problem: 'border-l-[3px] border-l-blue-400 bg-blue-50/20',
+                    rejected: 'border-l-[3px] border-l-red-500 bg-red-50/40',
+                    confirmed: 'border-l-[3px] border-l-amber-500 bg-amber-50/30',
+                    confirmed_delay: 'border-l-[3px] border-l-amber-400 bg-amber-50/25',
+                    delivered: 'border-l-[3px] border-l-green-500 bg-green-50/40',
+                    delivery_problem: 'border-l-[3px] border-l-red-500 bg-red-50/30',
+                  };
+                  const rowBase = statusRowStyles[o.status] || 'border-l-[3px] border-l-gray-300';
+
                   return (
                     <React.Fragment key={o._id}>
-                      <tr className={`hover:bg-gray-50 transition-[background-color] duration-150 ${
-                        isHi ? 'bg-red-50 animate-pulse'
-                          : isNew ? 'bg-blue-50/50'
-                          : ''
-                      }`}>
+                      <tr className={`transition-all duration-150 ${rowBase} ${
+                        isHi ? '!bg-red-50 animate-pulse ring-1 ring-inset ring-red-200'
+                          : isNew ? '!bg-blue-50/60 ring-1 ring-inset ring-blue-100'
+                          : 'hover:brightness-[0.97]'
+                      } ${idx > 0 ? (isInvoiced ? 'border-t-2 border-t-gray-300' : 'border-t border-gray-200') : ''}`}>
                         {/* Status + Marketplace */}
-                        <td className="px-3 py-2 whitespace-nowrap">
+                        <td className="px-3 py-3 whitespace-nowrap">
                           <div className="flex items-center gap-1.5 mb-2">
-                            <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold ${sc.bg} ${sc.text}`}>
-                              <sc.icon className="w-3.5 h-3.5" />
+                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold border ${{
+                              invoiced: 'bg-blue-50 text-blue-700 border-blue-200',
+                              pending: 'bg-blue-50 text-blue-600 border-blue-200',
+                              problem: 'bg-blue-50 text-blue-600 border-blue-200',
+                              rejected: 'bg-red-50 text-red-700 border-red-200',
+                              confirmed: 'bg-amber-50 text-amber-700 border-amber-200',
+                              confirmed_delay: 'bg-amber-50 text-amber-700 border-amber-200',
+                              delivered: 'bg-green-50 text-green-700 border-green-200',
+                              delivery_problem: 'bg-red-50 text-red-700 border-red-200',
+                            }[o.status] || 'bg-gray-50 text-gray-600 border-gray-200'}`}>
+                              <sc.icon className="w-3 h-3" />
                               {sc.label}
                             </span>
                           </div>
-                          <div className="flex items-center gap-2">
-                            <span className={`${mp?.bg || 'bg-gray-500'} ${mp?.text || 'text-white'} text-[11px] font-bold px-1.5 py-0.5 h-6 rounded flex items-center justify-center shrink-0`}>
+                          <div className="flex items-center gap-1.5">
+                            <span className={`${mp?.bg || 'bg-gray-500'} ${mp?.text || 'text-white'} text-[10px] font-bold px-1.5 py-0.5 rounded flex items-center justify-center shrink-0`}>
                               {mp?.abbr || o.marketplace?.slice(0, 2).toUpperCase() || '??'}
                             </span>
-                            <span className="text-xs font-medium text-gray-600 truncate">
+                            <span className="text-[11px] text-gray-500 truncate">
                               {mp?.label || o.marketplace || '—'}
                             </span>
                           </div>
                         </td>
 
                         {/* Event Details */}
-                        <td className="px-3 py-2">
+                        <td className="px-3 py-3">
                           <div className="min-w-0">
                             {o.ticketmasterUrl ? (
                               <a href={o.ticketmasterUrl} target="_blank" rel="noopener noreferrer"
@@ -561,56 +620,75 @@ export default function OrdersClient({ initialOrders, initialTabCounts, initialU
                             ) : (
                               <span className="font-semibold text-sm text-gray-900 block truncate">{o.event_name || '—'}</span>
                             )}
-                            <div className="flex items-center gap-2 text-xs text-gray-500 mt-0.5 min-w-0">
+                            <div className="flex items-center gap-2 text-xs text-gray-500 mt-1 min-w-0">
                               {o.venue && (
                                 <div className="flex items-center gap-0.5 min-w-0">
-                                  <MapPin size={11} className="shrink-0" />
+                                  <MapPin size={11} className="shrink-0 text-gray-400" />
                                   <span className="truncate max-w-[160px]">{o.venue}</span>
                                 </div>
                               )}
-                              <span className="font-mono shrink-0 text-gray-400">{o.order_id}</span>
+                              <span className="font-mono shrink-0 text-gray-400 text-[11px]">{o.order_id}</span>
                             </div>
                           </div>
                         </td>
 
                         {/* Event Date */}
-                        <td className="px-3 py-2 whitespace-nowrap">
+                        <td className="px-3 py-3 whitespace-nowrap">
                           <div className="font-medium text-gray-900 text-xs tabular-nums">{fmtDate(o.occurs_at)}</div>
-                          <div className="text-[11px] text-gray-500 tabular-nums">{fmtTime(o.occurs_at)}</div>
+                          <div className="text-[11px] text-gray-400 tabular-nums mt-0.5">{fmtTime(o.occurs_at)}</div>
                         </td>
 
                         {/* Tickets */}
-                        <td className="px-3 py-2 whitespace-nowrap">
+                        <td className="px-3 py-3 whitespace-nowrap">
                           <div className="flex items-center gap-1.5 mb-1.5">
-                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-100 text-indigo-700 text-sm font-bold">
-                              <Ticket className="w- h-4" /> {o.quantity}x
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 text-sm font-bold border border-indigo-100">
+                              <Ticket className="w-4 h-4" /> {o.quantity}x
                             </span>
                           </div>
                           <div className="flex flex-col gap-0.5">
-                            <div className="text-xs text-gray-500">
-                              Sec <span className="font-bold text-gray-800">{o.section || '—'}</span>
+                            <div className="text-[11px] text-gray-500">
+                              Sec <span className="font-semibold text-gray-700">{o.section || '—'}</span>
                             </div>
-                            <div className="text-xs text-gray-500">
-                              Row <span className="font-bold text-gray-800">{o.row || '—'}</span>
+                            <div className="text-[11px] text-gray-500">
+                              Row <span className="font-semibold text-gray-700">{o.row || '—'}</span>
                             </div>
                           </div>
                         </td>
 
                         {/* Delivery */}
-                        <td className="px-3 py-2 whitespace-nowrap">
+                        <td className="px-3 py-3 whitespace-nowrap">
                           <DeliveryBadge delivery={o.delivery} />
                         </td>
 
                         {/* Price */}
-                        <td className="px-3 py-2 whitespace-nowrap text-right">
+                        <td className="px-3 py-3 whitespace-nowrap text-right">
                           <div className="font-bold text-gray-900 text-sm tabular-nums">${o.total.toFixed(2)}</div>
-                          <div className="text-[11px] text-gray-500 tabular-nums">{o.quantity} &times; ${o.unit_price.toFixed(2)}</div>
+                          <div className="text-[11px] text-gray-400 tabular-nums mt-0.5">{o.quantity} &times; ${o.unit_price.toFixed(2)}</div>
                         </td>
 
-                        {/* Order Date */}
-                        <td className="px-3 py-2 whitespace-nowrap">
+                        {/* Order Date + Inline Actions */}
+                        <td className="px-3 py-3 whitespace-nowrap">
                           <div className="font-medium text-gray-900 text-xs tabular-nums">{fmtDate(o.order_date)}</div>
-                          <div className="text-[11px] text-gray-500 tabular-nums">{fmtTime(o.order_date)}</div>
+                          <div className="text-[11px] text-gray-400 tabular-nums mt-0.5">{fmtTime(o.order_date)}</div>
+                          {/* Inline action buttons for non-invoiced statuses */}
+                          {!isInvoiced && (
+                            <div className="flex items-center gap-1 mt-2 flex-wrap">
+                              {(isConfirmed || o.status === 'delivery_problem') && (
+                                <button onClick={() => handleRecheck(o)}
+                                  disabled={recheckingId === o._id || !o.sync_id}
+                                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 transition-all">
+                                  <RotateCw className={`w-3 h-3 ${recheckingId === o._id ? 'animate-spin' : ''}`} />
+                                  {recheckingId === o._id ? 'Checking…' : 'Recheck'}
+                                </button>
+                              )}
+                              {o.ticketmasterUrl && (
+                                <a href={o.ticketmasterUrl} target="_blank" rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-200 transition-all">
+                                  <ExternalLink className="w-3 h-3" /> Event
+                                </a>
+                              )}
+                            </div>
+                          )}
                         </td>
 
                       </tr>
@@ -618,16 +696,16 @@ export default function OrdersClient({ initialOrders, initialTabCounts, initialU
                       {/* Action bar for invoiced orders */}
                       {isInvoiced && (
                         <tr>
-                          <td colSpan={7} className={`px-4 py-2 border-l-4 ${o.hasIssue ? 'border-orange-400 bg-gradient-to-r from-orange-50 to-amber-50/40' : 'border-blue-400 bg-gradient-to-r from-blue-50 to-emerald-50/40'}`}>
+                          <td colSpan={7} className={`px-4 py-2.5 border-l-[3px] ${o.hasIssue ? 'border-l-orange-400 bg-orange-50/30 border-t border-t-orange-200/60' : 'border-l-blue-500 bg-blue-50/20 border-t border-t-blue-200/50'}`}>
                             {/* Issue banner */}
                             {o.hasIssue && (
-                              <div className="flex items-center justify-between gap-3 mb-2 px-3 py-2 rounded-lg bg-orange-100 border border-orange-200">
+                              <div className="flex items-center justify-between gap-3 mb-2 px-3 py-1.5 rounded-md bg-orange-100/70 border border-orange-200/80">
                                 <div className="flex items-center gap-2 min-w-0">
-                                  <MessageSquareWarning className="w-4 h-4 text-orange-600 shrink-0" />
-                                  <span className="text-sm font-semibold text-orange-800 truncate">{o.issueNote}</span>
+                                  <MessageSquareWarning className="w-3.5 h-3.5 text-orange-600 shrink-0" />
+                                  <span className="text-xs font-semibold text-orange-800 truncate">{o.issueNote}</span>
                                 </div>
                                 <button onClick={() => handleUnflag(o._id)}
-                                  className="px-2.5 py-1 rounded-lg border border-orange-300 bg-white text-orange-600 hover:bg-orange-50 transition-all text-xs font-medium flex items-center gap-1 shrink-0">
+                                  className="px-2 py-1 rounded-md border border-orange-200 bg-white text-orange-600 hover:bg-orange-50 transition-all text-[11px] font-medium flex items-center gap-1 shrink-0">
                                   <FlagOff className="w-3 h-3" /> Resolve
                                 </button>
                               </div>
@@ -640,17 +718,17 @@ export default function OrdersClient({ initialOrders, initialTabCounts, initialU
                                   </span>
                                 ) : (
                                   <button onClick={() => openModal(o, 'confirm')}
-                                    className="px-4 py-1.5 rounded-lg bg-gradient-to-r from-green-600 to-emerald-600 text-white hover:from-green-700 hover:to-emerald-700 transition-all text-sm font-bold flex items-center gap-1.5 animate-pulse shadow-md shadow-green-200/50">
+                                    className="px-4 py-1.5 rounded-md bg-green-600 text-white hover:bg-green-700 transition-all text-sm font-bold flex items-center gap-1.5 shadow-sm">
                                     <CheckCircle className="w-4 h-4" /> Confirm
                                   </button>
                                 )}
                                 <button onClick={() => openModal(o, 'reject')}
-                                  className="px-3 py-1.5 rounded-lg text-xs font-medium text-red-400 hover:text-red-600 hover:bg-red-50 border border-transparent hover:border-red-200 transition-all">
+                                  className="px-3 py-1.5 rounded-md text-xs font-medium text-red-500 hover:text-red-700 hover:bg-red-50 border border-gray-200 hover:border-red-200 transition-all">
                                   Reject
                                 </button>
                                 {!o.hasIssue && (
                                   <button onClick={() => { setFlagOrder(o); setFlagNote(''); }}
-                                    className="px-3 py-1.5 rounded-lg text-xs font-medium text-orange-500 hover:text-orange-700 hover:bg-orange-50 border border-transparent hover:border-orange-200 transition-all flex items-center gap-1">
+                                    className="px-3 py-1.5 rounded-md text-xs font-medium text-orange-500 hover:text-orange-700 hover:bg-orange-50 border border-gray-200 hover:border-orange-200 transition-all flex items-center gap-1">
                                     <Flag className="w-3 h-3" /> Flag Issue
                                   </button>
                                 )}
@@ -658,14 +736,14 @@ export default function OrdersClient({ initialOrders, initialTabCounts, initialU
                               <div className="flex items-center gap-2">
                                 {o.ticketmasterUrl && (
                                   <a href={o.ticketmasterUrl} target="_blank" rel="noopener noreferrer"
-                                    className="px-3 py-1.5 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 transition-[background-color] text-xs font-semibold flex items-center gap-1.5">
-                                    <ExternalLink className="w-3.5 h-3.5" /> View Event
+                                    className="px-3 py-1.5 rounded-md border border-gray-200 bg-white text-gray-600 hover:text-blue-700 hover:border-blue-200 hover:bg-blue-50 transition-all text-xs font-medium flex items-center gap-1.5">
+                                    <ExternalLink className="w-3 h-3" /> View Event
                                   </a>
                                 )}
                                 {!o.acknowledged ? (
                                   <button onClick={() => handleAck(o._id)}
-                                    className="px-3 py-1.5 rounded-lg bg-amber-500 text-white hover:bg-amber-600 transition-[background-color] text-xs font-bold flex items-center gap-1.5 shadow-sm shadow-amber-200/50">
-                                    <Bell className="w-3.5 h-3.5" /> Acknowledge
+                                    className="px-3 py-1.5 rounded-md bg-amber-500 text-white hover:bg-amber-600 transition-[background-color] text-xs font-semibold flex items-center gap-1.5">
+                                    <Bell className="w-3 h-3" /> Acknowledge
                                   </button>
                                 ) : (
                                   <div className="flex items-center gap-2">
@@ -673,7 +751,7 @@ export default function OrdersClient({ initialOrders, initialTabCounts, initialU
                                       Ack&apos;d {o.acknowledgedAt ? (() => { const m = Math.round((Date.now() - new Date(o.acknowledgedAt).getTime()) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m}m ago` : `${Math.round(m / 60)}h ago`; })() : ''}
                                     </span>
                                     <button onClick={() => handleUnack(o._id)}
-                                      className="px-2.5 py-1 rounded-lg border border-gray-200 bg-white text-gray-500 hover:text-amber-600 hover:border-amber-200 hover:bg-amber-50 transition-all text-[11px] font-medium flex items-center gap-1">
+                                      className="px-2 py-1 rounded-md border border-gray-200 bg-white text-gray-400 hover:text-amber-600 hover:border-amber-200 hover:bg-amber-50 transition-all text-[11px] font-medium flex items-center gap-1">
                                       <RotateCw className="w-3 h-3" /> Undo
                                     </button>
                                   </div>
@@ -684,111 +762,6 @@ export default function OrdersClient({ initialOrders, initialTabCounts, initialU
                         </tr>
                       )}
 
-                      {/* Action bar for confirmed orders */}
-                      {isConfirmed && (
-                        <tr>
-                          <td colSpan={7} className="px-4 py-2 border-l-4 border-amber-400 bg-gradient-to-r from-amber-50 to-blue-50/40">
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-2">
-                                <button onClick={() => handleRecheck(o)}
-                                  disabled={recheckingId === o._id || !o.sync_id}
-                                  className="px-4 py-1.5 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 text-white hover:from-blue-700 hover:to-indigo-700 disabled:opacity-60 transition-all text-sm font-bold flex items-center gap-1.5 shadow-md shadow-blue-200/50">
-                                  <RotateCw className={`w-4 h-4 ${recheckingId === o._id ? 'animate-spin' : ''}`} />
-                                  {recheckingId === o._id ? 'Rechecking…' : 'Recheck Transfer'}
-                                </button>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                {o.ticketmasterUrl && (
-                                  <a href={o.ticketmasterUrl} target="_blank" rel="noopener noreferrer"
-                                    className="px-3 py-1.5 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 transition-[background-color] text-xs font-semibold flex items-center gap-1.5">
-                                    <ExternalLink className="w-3.5 h-3.5" /> View Event
-                                  </a>
-                                )}
-                                {!o.acknowledged && (
-                                  <button onClick={() => handleAck(o._id)}
-                                    className="px-3 py-1.5 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition-[background-color] text-xs font-semibold flex items-center gap-1.5">
-                                    <Bell className="w-3.5 h-3.5" /> Acknowledge
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                          </td>
-                        </tr>
-                      )}
-
-                      {/* Action bar for rejected orders */}
-                      {o.status === 'rejected' && (
-                        <tr>
-                          <td colSpan={7} className="px-4 py-2 border-l-4 border-red-300 bg-gradient-to-r from-red-50 to-gray-50/40">
-                            <div className="flex items-center justify-end">
-                              <div className="flex items-center gap-2">
-                                {o.ticketmasterUrl && (
-                                  <a href={o.ticketmasterUrl} target="_blank" rel="noopener noreferrer"
-                                    className="px-3 py-1.5 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 transition-[background-color] text-xs font-semibold flex items-center gap-1.5">
-                                    <ExternalLink className="w-3.5 h-3.5" /> View Event
-                                  </a>
-                                )}
-                                {!o.acknowledged && (
-                                  <button onClick={() => handleAck(o._id)}
-                                    className="px-3 py-1.5 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition-[background-color] text-xs font-semibold flex items-center gap-1.5">
-                                    <Bell className="w-3.5 h-3.5" /> Acknowledge
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                          </td>
-                        </tr>
-                      )}
-
-                      {/* Action bar for delivery issue orders */}
-                      {o.status === 'delivery_problem' && (
-                        <tr>
-                          <td colSpan={7} className="px-4 py-2 border-l-4 border-red-400 bg-gradient-to-r from-red-50 to-orange-50/40">
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-2">
-                                <button onClick={() => handleRecheck(o)}
-                                  disabled={recheckingId === o._id || !o.sync_id}
-                                  className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-orange-500 to-red-500 text-white hover:from-orange-600 hover:to-red-600 disabled:opacity-60 transition-all text-xs font-bold flex items-center gap-1.5 shadow-md shadow-orange-200/50">
-                                  <RotateCw className={`w-3.5 h-3.5 ${recheckingId === o._id ? 'animate-spin' : ''}`} />
-                                  {recheckingId === o._id ? 'Rechecking…' : 'Recheck'}
-                                </button>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                {o.ticketmasterUrl && (
-                                  <a href={o.ticketmasterUrl} target="_blank" rel="noopener noreferrer"
-                                    className="px-3 py-1.5 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 transition-[background-color] text-xs font-semibold flex items-center gap-1.5">
-                                    <ExternalLink className="w-3.5 h-3.5" /> View Event
-                                  </a>
-                                )}
-                                {!o.acknowledged && (
-                                  <button onClick={() => handleAck(o._id)}
-                                    className="px-3 py-1.5 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition-[background-color] text-xs font-semibold flex items-center gap-1.5">
-                                    <Bell className="w-3.5 h-3.5" /> Acknowledge
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                          </td>
-                        </tr>
-                      )}
-
-                      {/* Action bar for delivered orders */}
-                      {o.status === 'delivered' && (
-                        <tr>
-                          <td colSpan={7} className="px-4 py-2 border-l-4 border-green-400 bg-gradient-to-r from-green-50 to-emerald-50/40">
-                            <div className="flex items-center justify-end">
-                              <div className="flex items-center gap-2">
-                                {o.ticketmasterUrl && (
-                                  <a href={o.ticketmasterUrl} target="_blank" rel="noopener noreferrer"
-                                    className="px-3 py-1.5 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 transition-[background-color] text-xs font-semibold flex items-center gap-1.5">
-                                    <ExternalLink className="w-3.5 h-3.5" /> View Event
-                                  </a>
-                                )}
-                              </div>
-                            </div>
-                          </td>
-                        </tr>
-                      )}
                     </React.Fragment>
                   );
                 })}
@@ -830,7 +803,7 @@ export default function OrdersClient({ initialOrders, initialTabCounts, initialU
 
       {/* ── Confirm/Reject Modal ── */}
       {modalOrder && modalAction && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm">
           <div className="bg-white rounded-xl shadow-2xl border border-gray-200 w-full max-w-md mx-4">
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
               <h3 className="text-lg font-bold text-gray-900">
@@ -912,7 +885,7 @@ export default function OrdersClient({ initialOrders, initialTabCounts, initialU
 
       {/* ── Flag Issue Modal ── */}
       {flagOrder && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm">
           <div className="bg-white rounded-xl shadow-2xl border border-gray-200 w-full max-w-md mx-4">
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
               <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">

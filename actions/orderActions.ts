@@ -2,6 +2,7 @@
 
 import dbConnect from '@/lib/dbConnect';
 import { Order } from '@/models/orderModel';
+import { revalidatePath } from 'next/cache';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -150,18 +151,20 @@ export async function getUnacknowledgedCount() {
 
 export async function flagOrderIssue(orderId: string, note: string) {
   await dbConnect();
-  await Order.updateOne(
+  const result = await Order.updateOne(
     { _id: orderId },
     { $set: { hasIssue: true, issueNote: note, issueFlaggedAt: new Date() } }
   );
-  return { success: true };
+  revalidatePath('/dashboard/orders');
+  return { success: true, matched: result.matchedCount, modified: result.modifiedCount };
 }
 
 export async function unflagOrderIssue(orderId: string) {
   await dbConnect();
-  await Order.updateOne(
+  const result = await Order.updateOne(
     { _id: orderId },
     { $set: { hasIssue: false, issueNote: '', issueFlaggedAt: null } }
   );
-  return { success: true };
+  revalidatePath('/dashboard/orders');
+  return { success: true, matched: result.matchedCount, modified: result.modifiedCount };
 }
