@@ -144,8 +144,9 @@ export async function GET() {
     const newOrderIds = incomingOrderIds.filter((id: string) => !existingSet.has(id));
 
     // Cross-reference unmatched orders with portal Events
-    // Also re-check orders that have pos_event_id but no URL (may have been missed before)
+    // Only check orders from this sync batch that still lack a URL (not the entire DB)
     const unmatchedOrders = await Order.find({
+      order_id: { $in: incomingOrderIds },
       $or: [
         { ticketmasterUrl: { $in: [null, ''] } },
         { ticketmasterUrl: { $exists: false } },
