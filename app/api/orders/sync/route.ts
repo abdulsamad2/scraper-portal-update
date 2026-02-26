@@ -59,6 +59,7 @@ async function findEventUrl(o: Record<string, any>): Promise<{ eventId: any; url
 }
 
 export async function GET() {
+  const t0 = Date.now();
   try {
     const apiToken = process.env.SYNC_API_TOKEN;
     const companyId = process.env.SYNC_COMPANY_ID;
@@ -73,8 +74,9 @@ export async function GET() {
         'X-Api-Token': apiToken,
       },
       cache: 'no-store',
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(20000),
     });
+    console.log(`[sync] SeatScouts API: ${Date.now() - t0}ms`);
 
     if (!res.ok) {
       const text = await res.text().catch(() => '');
@@ -139,35 +141,41 @@ export async function GET() {
     }));
 
     await Order.bulkWrite(bulkOps);
+    console.log(`[sync] bulkWrite: ${Date.now() - t0}ms`);
 
     // Detect new order IDs
     const newOrderIds = incomingOrderIds.filter((id: string) => !existingSet.has(id));
 
-    // Cross-reference unmatched orders with portal Events
-    // Only check orders from this sync batch that still lack a URL (not the entire DB)
-    const unmatchedOrders = await Order.find({
-      order_id: { $in: incomingOrderIds },
+    // Cross-reference only NEW orders that lack a URL (skip already-matched ones)
+    const unmatchedQuery: Record<string, any> = {
+      order_id: { $in: newOrderIds.length > 0 ? newOrderIds : incomingOrderIds },
       $or: [
         { ticketmasterUrl: { $in: [null, ''] } },
         { ticketmasterUrl: { $exists: false } },
       ],
-    }).lean();
+    };
+    // For existing orders, only re-check a small batch to avoid slowness
+    if (newOrderIds.length === 0) {
+      unmatchedQuery.order_id = { $in: incomingOrderIds };
+    }
+    const unmatchedOrders = await Order.find(unmatchedQuery).limit(20).lean();
 
     if (unmatchedOrders.length > 0) {
       const crossRefOps: any[] = [];
-      for (const order of unmatchedOrders) {
-        const o = order as Record<string, any>;
-        const match = await findEventUrl(o);
-        if (match) {
+      // Run URL lookups in parallel for speed
+      const matches = await Promise.all(
+        unmatchedOrders.map(async (order) => {
+          const o = order as Record<string, any>;
+          const match = await findEventUrl(o);
+          return match ? { _id: o._id, ...match } : null;
+        })
+      );
+      for (const m of matches) {
+        if (m) {
           crossRefOps.push({
             updateOne: {
-              filter: { _id: o._id },
-              update: {
-                $set: {
-                  portalEventId: match.eventId,
-                  ticketmasterUrl: match.url,
-                },
-              },
+              filter: { _id: m._id },
+              update: { $set: { portalEventId: m.eventId, ticketmasterUrl: m.url } },
             },
           });
         }
@@ -176,6 +184,7 @@ export async function GET() {
         await Order.bulkWrite(crossRefOps);
       }
     }
+    console.log(`[sync] cross-ref (${unmatchedOrders.length} checked): ${Date.now() - t0}ms`);
 
     // Get new orders with their TM URLs for auto-open
     let newOrdersWithUrls: any[] = [];
@@ -187,6 +196,7 @@ export async function GET() {
     }
 
     const unacknowledgedCount = await Order.countDocuments({ acknowledged: false });
+    console.log(`[sync] done: ${Date.now() - t0}ms total, ${orders.length} synced, ${newOrderIds.length} new`);
 
     return NextResponse.json({
       synced: orders.length,

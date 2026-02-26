@@ -136,7 +136,7 @@ export default function OrdersClient({ initialOrders, initialTotal, initialTotal
 
   const newIdsRef = useRef<Set<string>>(new Set());
   const { startAlert, stopAlert } = useOrderAlert();
-  const [countdown, setCountdown] = useState(10);
+  const [countdown, setCountdown] = useState(20);
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [localSearch, setLocalSearch] = useState('');
 
@@ -162,10 +162,7 @@ export default function OrdersClient({ initialOrders, initialTotal, initialTotal
       const f: Record<string, unknown> = { marketplace: mpFilter, acknowledged: ackFilter, search: search.trim() };
       const statuses = TAB_STATUSES[activeTab];
       if (statuses && statuses.length > 0) f.statusIn = statuses;
-      const [result, counts] = await Promise.all([
-        getPaginatedOrders(targetPage, perPage, f as any, 'order_date', 'desc'),
-        getOrderTabCounts(),
-      ]);
+      const result = await getPaginatedOrders(targetPage, perPage, f as any, 'order_date', 'desc');
       // Merge local flag overrides into fetched orders
       const merged = result.orders.map((o: OrderData) => {
         const localFlag = localFlagsRef.current.get(o._id);
@@ -176,7 +173,6 @@ export default function OrdersClient({ initialOrders, initialTotal, initialTotal
       setTotalOrders(result.total);
       setTotalPages(result.totalPages);
       setUnackCount(result.unacknowledgedCount);
-      setTabCounts(counts);
     } catch (err) {
       console.error('Fetch error:', err);
     }
@@ -203,7 +199,9 @@ export default function OrdersClient({ initialOrders, initialTotal, initialTotal
       setLastSync(new Date());
     } catch { setSyncError('Network error'); }
     finally { setSyncing(false); }
-    await fetchOrders();
+    // Refresh current page + tab counts after sync
+    const [, counts] = await Promise.all([fetchOrders(), getOrderTabCounts()]);
+    setTabCounts(counts);
   }, [fetchOrders, startAlert]);
 
   // Initial sync after mount (data already loaded server-side, just kick off first sync)
@@ -222,8 +220,8 @@ export default function OrdersClient({ initialOrders, initialTotal, initialTotal
   }, [unackCount]);
 
   // Polling
-  useEffect(() => { const iv = setInterval(syncOnly, 10000); return () => clearInterval(iv); }, [syncOnly]);
-  useEffect(() => { setCountdown(10); const iv = setInterval(() => setCountdown(c => c <= 1 ? 10 : c - 1), 1000); return () => clearInterval(iv); }, [lastSync]);
+  useEffect(() => { const iv = setInterval(syncOnly, 20000); return () => clearInterval(iv); }, [syncOnly]);
+  useEffect(() => { setCountdown(20); const iv = setInterval(() => setCountdown(c => c <= 1 ? 20 : c - 1), 1000); return () => clearInterval(iv); }, [lastSync]);
   useEffect(() => { fetchOrders(); }, [fetchOrders]);
 
   const handleSearchChange = (value: string) => {

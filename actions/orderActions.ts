@@ -131,16 +131,30 @@ export async function acknowledgeAllPending() {
 
 export async function getOrderTabCounts() {
   await dbConnect();
-  const [invoiced, confirmed, rejected, deliveryIssue, delivered, all, flagged] = await Promise.all([
-    Order.countDocuments({ status: { $in: ['invoiced', 'pending', 'problem'] } }),
-    Order.countDocuments({ status: { $in: ['confirmed', 'confirmed_delay'] } }),
-    Order.countDocuments({ status: 'rejected' }),
-    Order.countDocuments({ status: 'delivery_problem' }),
-    Order.countDocuments({ status: 'delivered' }),
-    Order.countDocuments(),
-    Order.countDocuments({ hasIssue: true, status: { $in: ['invoiced', 'pending', 'problem'] } }),
+  const pipeline = await Order.aggregate([
+    {
+      $facet: {
+        byStatus: [{ $group: { _id: '$status', count: { $sum: 1 } } }],
+        total: [{ $count: 'count' }],
+        flagged: [
+          { $match: { hasIssue: true, status: { $in: ['invoiced', 'pending', 'problem'] } } },
+          { $count: 'count' },
+        ],
+      },
+    },
   ]);
-  return { invoiced, confirmed, rejected, deliveryIssue, delivered, all, flagged };
+  const { byStatus, total, flagged } = pipeline[0];
+  const sc: Record<string, number> = {};
+  for (const s of byStatus) sc[s._id] = s.count;
+  return {
+    invoiced: (sc.invoiced || 0) + (sc.pending || 0) + (sc.problem || 0),
+    confirmed: (sc.confirmed || 0) + (sc.confirmed_delay || 0),
+    rejected: sc.rejected || 0,
+    deliveryIssue: sc.delivery_problem || 0,
+    delivered: sc.delivered || 0,
+    all: total[0]?.count || 0,
+    flagged: flagged[0]?.count || 0,
+  };
 }
 
 export async function getUnacknowledgedCount() {
