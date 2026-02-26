@@ -3,19 +3,20 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useState } from 'react';
-import { 
-  LayoutDashboard, 
-  Calendar, 
-  Plus, 
-  Menu, 
-  Package, 
-  Download, 
+import {
+  LayoutDashboard,
+  Calendar,
+  Plus,
+  Menu,
+  Package,
+  Download,
   LogOut,
   ShoppingCart,
   X,
   SignalHigh,
-  Filter
-  
+  Filter,
+  Search
+
 } from 'lucide-react';
 
 const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
@@ -59,9 +60,21 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
       isActive: true,
     },
     {
+      path: '/dashboard/import-events',
+      label: 'Import Events',
+      icon: <Search className="w-5 h-5" />,
+      isActive: true,
+    },
+    {
       path: '/dashboard/list-event',
       label: 'Add Event',
       icon: <Plus className="w-5 h-5" />,
+      isActive: true,
+    },
+    {
+      path: '/dashboard/orders',
+      label: 'Orders',
+      icon: <ShoppingCart className="w-5 h-5" />,
       isActive: true,
     },
     {
@@ -73,11 +86,6 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
   ];
 
   const comingSoonItems = [
-    {
-      label: 'Orders',
-      icon: <ShoppingCart className="w-5 h-5" />,
-      description: 'Manage customer orders'
-    },
      {
       label: 'Proxies',
       icon: <SignalHigh className="w-5 h-5" />,

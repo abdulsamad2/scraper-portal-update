@@ -365,12 +365,17 @@ export async function deleteStaleInventory() {
     
     if (inactiveEvents.length > 0) {
       const inactiveEventIds = inactiveEvents.map(event => event.Event_ID);
-      console.log('Inactive Event IDs to clean up:', inactiveEventIds);
-      
+      console.log('Inactive Event IDs to clean up:', inactiveEventIds.length);
+
       // Delete all consecutive groups for inactive events
       const inactiveDeleteResult = await deleteConsecutiveGroupsByEventIds(inactiveEventIds);
-      totalDeletedCount += inactiveDeleteResult.deletedCount || 0;
-      cleanupResults.push(`Deleted ${inactiveDeleteResult.deletedCount} groups for ${inactiveEventIds.length} inactive events`);
+      const inactiveDeleted = inactiveDeleteResult.deletedCount || 0;
+      totalDeletedCount += inactiveDeleted;
+      if (inactiveDeleted > 0) {
+        cleanupResults.push(`Deleted ${inactiveDeleted} groups for ${inactiveEventIds.length} inactive events`);
+      } else {
+        console.log(`No inventory found for ${inactiveEventIds.length} inactive events — nothing to clean`);
+      }
     }
     
     // PART 2: Find orphaned inventory (events that no longer exist)
@@ -396,8 +401,13 @@ export async function deleteStaleInventory() {
       if (orphanedEventIds.length > 0) {
         // Delete consecutive groups for orphaned events
         const orphanedDeleteResult = await deleteConsecutiveGroupsByEventIds(orphanedEventIds);
-        totalDeletedCount += orphanedDeleteResult.deletedCount || 0;
-        cleanupResults.push(`Deleted ${orphanedDeleteResult.deletedCount} groups for ${orphanedEventIds.length} orphaned events`);
+        const orphanedDeleted = orphanedDeleteResult.deletedCount || 0;
+        totalDeletedCount += orphanedDeleted;
+        if (orphanedDeleted > 0) {
+          cleanupResults.push(`Deleted ${orphanedDeleted} groups for ${orphanedEventIds.length} orphaned events`);
+        } else {
+          console.log(`No inventory found for ${orphanedEventIds.length} orphaned events — nothing to clean`);
+        }
       }
     }
     
