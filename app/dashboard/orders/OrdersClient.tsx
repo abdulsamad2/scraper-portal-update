@@ -135,6 +135,7 @@ export default function OrdersClient({ initialOrders, initialTotal, initialTotal
   const [showFilters, setShowFilters] = useState(false);
 
   const newIdsRef = useRef<Set<string>>(new Set());
+  const hasSyncedRef = useRef(false);
   const { startAlert, stopAlert } = useOrderAlert();
   const [countdown, setCountdown] = useState(20);
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -197,6 +198,7 @@ export default function OrdersClient({ initialOrders, initialTotal, initialTotal
         startAlert();
       }
       setLastSync(new Date());
+      hasSyncedRef.current = true;
     } catch { setSyncError('Network error'); }
     finally { setSyncing(false); }
     // Refresh current page + tab counts after sync
@@ -211,10 +213,10 @@ export default function OrdersClient({ initialOrders, initialTotal, initialTotal
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Ring only when NEW orders arrive from sync, stop when all acknowledged
+  // Ring when unacknowledged orders exist (but not before first sync completes)
   useEffect(() => {
     if (unackCount === 0) { newIdsRef.current.clear(); stopAlert(); }
-    else if (newIdsRef.current.size > 0) startAlert();
+    else if (hasSyncedRef.current) startAlert();
     return () => stopAlert();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [unackCount]);
