@@ -41,6 +41,8 @@ interface TabCounts {
 
 interface OrdersClientProps {
   initialOrders: OrderData[];
+  initialTotal: number;
+  initialTotalPages: number;
   initialTabCounts: TabCounts;
   initialUnackCount: number;
 }
@@ -114,8 +116,10 @@ function DeliveryBadge({ delivery }: { delivery: string }) {
 }
 
 /* ------------------------------------------------------------------ */
-export default function OrdersClient({ initialOrders, initialTabCounts, initialUnackCount }: OrdersClientProps) {
+export default function OrdersClient({ initialOrders, initialTotal, initialTotalPages, initialTabCounts, initialUnackCount }: OrdersClientProps) {
   const [orders, setOrders] = useState<OrderData[]>(initialOrders);
+  const [totalOrders, setTotalOrders] = useState(initialTotal);
+  const [totalPages, setTotalPages] = useState(initialTotalPages);
   const [page, setPage] = useState(1);
   const [syncing, setSyncing] = useState(false);
   const [unackCount, setUnackCount] = useState(initialUnackCount);
@@ -132,7 +136,7 @@ export default function OrdersClient({ initialOrders, initialTabCounts, initialU
 
   const newIdsRef = useRef<Set<string>>(new Set());
   const { startAlert, stopAlert } = useOrderAlert();
-  const [countdown, setCountdown] = useState(30);
+  const [countdown, setCountdown] = useState(10);
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [localSearch, setLocalSearch] = useState('');
 
@@ -152,13 +156,14 @@ export default function OrdersClient({ initialOrders, initialTabCounts, initialU
 
   const perPage = 20;
 
-  const fetchOrders = useCallback(async () => {
+  const fetchOrders = useCallback(async (p?: number) => {
+    const targetPage = p ?? page;
     try {
       const f: Record<string, unknown> = { marketplace: mpFilter, acknowledged: ackFilter, search: search.trim() };
       const statuses = TAB_STATUSES[activeTab];
       if (statuses && statuses.length > 0) f.statusIn = statuses;
       const [result, counts] = await Promise.all([
-        getPaginatedOrders(1, 10000, f as any, 'order_date', 'desc'),
+        getPaginatedOrders(targetPage, perPage, f as any, 'order_date', 'desc'),
         getOrderTabCounts(),
       ]);
       // Merge local flag overrides into fetched orders
@@ -168,12 +173,14 @@ export default function OrdersClient({ initialOrders, initialTabCounts, initialU
         return o;
       });
       setOrders(merged);
+      setTotalOrders(result.total);
+      setTotalPages(result.totalPages);
       setUnackCount(result.unacknowledgedCount);
       setTabCounts(counts);
     } catch (err) {
       console.error('Fetch error:', err);
     }
-  }, [activeTab, mpFilter, ackFilter, search]);
+  }, [activeTab, mpFilter, ackFilter, search, page]);
 
   const syncOnly = useCallback(async () => {
     setSyncing(true);
@@ -206,17 +213,17 @@ export default function OrdersClient({ initialOrders, initialTabCounts, initialU
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Ring when there are unacknowledged orders, stop when all acknowledged
+  // Ring only when NEW orders arrive from sync, stop when all acknowledged
   useEffect(() => {
-    if (unackCount > 0) startAlert();
-    else { stopAlert(); newIdsRef.current.clear(); }
+    if (unackCount === 0) { newIdsRef.current.clear(); stopAlert(); }
+    else if (newIdsRef.current.size > 0) startAlert();
     return () => stopAlert();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [unackCount]);
 
   // Polling
-  useEffect(() => { const iv = setInterval(syncOnly, 30000); return () => clearInterval(iv); }, [syncOnly]);
-  useEffect(() => { setCountdown(30); const iv = setInterval(() => setCountdown(c => c <= 1 ? 30 : c - 1), 1000); return () => clearInterval(iv); }, [lastSync]);
+  useEffect(() => { const iv = setInterval(syncOnly, 10000); return () => clearInterval(iv); }, [syncOnly]);
+  useEffect(() => { setCountdown(10); const iv = setInterval(() => setCountdown(c => c <= 1 ? 10 : c - 1), 1000); return () => clearInterval(iv); }, [lastSync]);
   useEffect(() => { fetchOrders(); }, [fetchOrders]);
 
   const handleSearchChange = (value: string) => {
@@ -340,10 +347,9 @@ export default function OrdersClient({ initialOrders, initialTabCounts, initialU
     }
   };
 
-  const totalPages = Math.ceil(orders.length / perPage);
-  const startIndex = orders.length > 0 ? (page - 1) * perPage + 1 : 0;
-  const endIndex = Math.min(page * perPage, orders.length);
-  const displayedOrders = orders.slice((page - 1) * perPage, page * perPage);
+  const startIndex = totalOrders > 0 ? (page - 1) * perPage + 1 : 0;
+  const endIndex = Math.min(page * perPage, totalOrders);
+  const displayedOrders = orders;
 
   const pageNums: number[] = [];
   if (totalPages > 1) {
@@ -478,8 +484,8 @@ export default function OrdersClient({ initialOrders, initialTabCounts, initialU
         {/* Results Summary */}
         <div className="border-t border-gray-200 pt-2.5 flex justify-between items-center">
           <div className="text-xs text-gray-500 uppercase tracking-wide font-semibold">
-            {orders.length > 0 ? (
-              <>Showing {startIndex}–{endIndex} of {orders.length}</>
+            {totalOrders > 0 ? (
+              <>Showing {startIndex}–{endIndex} of {totalOrders}</>
             ) : (
               <span>No orders found</span>
             )}
@@ -779,7 +785,7 @@ export default function OrdersClient({ initialOrders, initialTabCounts, initialU
               Page <span className="font-semibold text-gray-700">{page}</span> of{' '}
               <span className="font-semibold text-gray-700">{totalPages}</span>
               {' '}&middot;{' '}
-              <span className="font-semibold text-gray-700">{orders.length}</span> total orders
+              <span className="font-semibold text-gray-700">{totalOrders}</span> total orders
             </div>
             <div className="flex items-center gap-1.5">
               <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1}
