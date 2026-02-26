@@ -212,8 +212,9 @@ async function withRetry<T>(
       
       if (attempt === config.maxRetries) {
         await createErrorLog({
-          errorType: 'CSV_RETRY_OPERATION',
-          errorMessage: lastError.message,
+          eventUrl: `RETRY_${operationName.toUpperCase().replace(/\s+/g, '_')}`,
+          errorType: 'DATABASE_ERROR',
+          message: lastError.message,
           stack: lastError.stack,
           metadata: {
             operation: operationName,
@@ -225,7 +226,7 @@ async function withRetry<T>(
       }
       
       const delay = calculateDelay(attempt, config);
-      console.warn(`${operationName} failed (attempt ${attempt + 1}/${config.maxRetries + 1}): ${lastError.message}. Retrying in ${delay}ms...`);
+      console.warn(`[CSV] ${operationName} failed (attempt ${attempt + 1}/${config.maxRetries + 1}): ${lastError.message}. Retrying in ${Math.round(delay)}ms...`);
       
       await new Promise(resolve => setTimeout(resolve, delay));
     }
@@ -251,37 +252,60 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
     try {
       let eventFilter = {};
       
-      // If eventUpdateFilterMinutes is provided, filter by recently updated events
+      // Only include active events (Skip_Scraping: false)
+      const activeEventQuery: Record<string, any> = { Skip_Scraping: false };
+
+      // If eventUpdateFilterMinutes is provided, also filter by recently updated events
       if (eventUpdateFilterMinutes > 0) {
         const cutoffTime = new Date(Date.now() - eventUpdateFilterMinutes * 60 * 1000);
-        
-        // Get recently updated events with optimized query
-        // Force fresh data by removing caching optimizations
-        const recentlyUpdatedEvents = await Event.find(
-          { updatedAt: { $gte: cutoffTime } },
-          { mapping_id: 1 }
-        )
-        .read('primary') // Force read from primary to avoid replica lag
-
-        .maxTimeMS(30000); // Set timeout to prevent hanging
-        
-        console.log(`Filter: Events updated within last ${eventUpdateFilterMinutes} minutes since ${cutoffTime.toISOString()}`);
-        console.log(`Found ${recentlyUpdatedEvents.length} events matching filter criteria`);
-        
-        if (recentlyUpdatedEvents.length === 0) {
-          return { success: false, message: `No events updated within the last ${eventUpdateFilterMinutes} minutes. Try setting filter to 0 to include all events.` };
-        }
-        
-        // Create filter for ConsecutiveGroup query
-        const eventMappingIds = recentlyUpdatedEvents.map(event => event.mapping_id);
-        eventFilter = { mapping_id: { $in: eventMappingIds } };
-        
-        console.log(`Using event filter for ${recentlyUpdatedEvents.length} events`);
+        activeEventQuery.updatedAt = { $gte: cutoffTime };
+        console.log(`Filter: Active events updated within last ${eventUpdateFilterMinutes} minutes since ${cutoffTime.toISOString()}`);
       } else {
-        console.log('No event filter applied - including all events');
+        console.log('Including all active events (Skip_Scraping: false)');
       }
 
-    // Optimized query with projection to fetch only required fields
+      const activeEvents = await Event.find(
+        activeEventQuery,
+        { mapping_id: 1 }
+      )
+      .read('primary')
+      .maxTimeMS(30000);
+
+      console.log(`Found ${activeEvents.length} active events matching filter criteria`);
+
+      if (activeEvents.length === 0) {
+        return { success: false, message: eventUpdateFilterMinutes > 0
+          ? `No active events updated within the last ${eventUpdateFilterMinutes} minutes.`
+          : 'No active events found (all events have Skip_Scraping enabled).' };
+      }
+
+      const eventMappingIds = activeEvents.map(event => event.mapping_id);
+      eventFilter = { mapping_id: { $in: eventMappingIds } };
+
+      // Pre-fetch ALL event details once (small — only active events) instead of
+      // running $lookup per chunk. This is the single biggest speed-up.
+      const eventDetailsMap = new Map<string, {
+        url: string; stdAdj: number; resaleAdj: number; defaultPct: number;
+        includeStandard: boolean; includeResale: boolean;
+      }>();
+      const eventDocs = await Event.find(
+        { mapping_id: { $in: eventMappingIds } },
+        { mapping_id: 1, URL: 1, standardMarkupAdjustment: 1, resaleMarkupAdjustment: 1,
+          priceIncreasePercentage: 1, includeStandardSeats: 1, includeResaleSeats: 1 }
+      ).lean();
+      for (const ev of eventDocs) {
+        eventDetailsMap.set(ev.mapping_id, {
+          url: ev.URL || '',
+          stdAdj: ev.standardMarkupAdjustment ?? 0,
+          resaleAdj: ev.resaleMarkupAdjustment ?? 0,
+          defaultPct: ev.priceIncreasePercentage ?? 0,
+          includeStandard: ev.includeStandardSeats !== false,
+          includeResale: ev.includeResaleSeats !== false,
+        });
+      }
+      console.log(`[CSV] Pre-fetched details for ${eventDetailsMap.size} events`);
+
+    // Projection — no longer need event_std_adj etc from $lookup
     const projection = {
       'inventory.inventoryId': 1,
       'event_name': 1,
@@ -289,7 +313,6 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
       'event_date': 1,
       'eventId': 1,
       'mapping_id': 1,
-      'event_url': 1, // Include Ticketmaster URL
       'inventory.quantity': 1,
       'inventory.section': 1,
       'inventory.row': 1,
@@ -313,105 +336,95 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
       'inventory.zone': 1,
       'inventory.shown_quantity': 1,
       'inventory.passthrough': 1,
-      'event_std_adj': 1,
-      'event_resale_adj': 1,
-      'event_default_pct': 1,
     };
 
-      // Enhanced cursor with better memory management and parallel processing
-      const BATCH_SIZE = 500; // Reduced batch size for better memory usage
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const PARALLEL_BATCHES = 3; // Process multiple batches in parallel
-      
-      // Use aggregation pipeline
-      const pipeline = [
+      // Chunked processing: first get all _ids (fast, no $lookup), then process
+      // in batches. Event data is joined in JS from the pre-fetched map.
+      const CHUNK_SIZE = 10000;
+
+      // Step 1: Get all matching _ids quickly (no $lookup, very fast)
+      const idPipeline: PipelineStage[] = [
         { $match: eventFilter },
-        // Join with Event collection to get the Ticketmaster URL
-        {
-          $lookup: {
-            from: 'events',
-            localField: 'mapping_id',
-            foreignField: 'mapping_id',
-            as: 'eventDetails'
-          }
-        },
-        // Add the event URL + markup adjustment fields + CSV export toggles to the document
-        {
-          $addFields: {
-            event_url: { $arrayElemAt: ['$eventDetails.URL', 0] },
-            event_std_adj: { $ifNull: [{ $arrayElemAt: ['$eventDetails.standardMarkupAdjustment', 0] }, 0] },
-            event_resale_adj: { $ifNull: [{ $arrayElemAt: ['$eventDetails.resaleMarkupAdjustment', 0] }, 0] },
-            event_default_pct: { $ifNull: [{ $arrayElemAt: ['$eventDetails.priceIncreasePercentage', 0] }, 0] },
-            event_include_standard: { $ifNull: [{ $arrayElemAt: ['$eventDetails.includeStandardSeats', 0] }, true] },
-            event_include_resale: { $ifNull: [{ $arrayElemAt: ['$eventDetails.includeResaleSeats', 0] }, true] },
-          }
-        },
-        // Filter out seats based on per-event CSV export toggles
-        // Standard = splitType NEVERLEAVEONE, Resale = everything else
-        {
-          $match: {
-            $expr: {
-              $cond: {
-                if: { $eq: ['$inventory.splitType', 'NEVERLEAVEONE'] },
-                then: { $ne: ['$event_include_standard', false] },
-                else: { $ne: ['$event_include_resale', false] }
-              }
-            }
-          }
-        },
-        { $project: projection },
-        { $sort: { _id: 1 } } // Ensure consistent ordering
+        { $sort: { _id: 1 as const } },
+        { $project: { _id: 1 } },
       ];
-      
-      const cursor = ConsecutiveGroup.aggregate(pipeline as PipelineStage[], {
+      const allIds = await ConsecutiveGroup.aggregate(idPipeline, {
         allowDiskUse: true,
-        readPreference: 'primary', // Force read from primary to avoid replica lag
-        maxTimeMS: 60000, // Set timeout for large datasets
-        cursor: { batchSize: BATCH_SIZE, noCursorTimeout: false }
+        maxTimeMS: 60000,
       });
-      const records: CsvRow[] = [];
-      let processedCount = 0;
-      let batch: ConsecutiveGroupDocument[] = [];
-      
-      // Process documents in optimized batches
-      for await (const doc of cursor) {
-        batch.push(doc);
-        
-        if (batch.length >= BATCH_SIZE) {
-          const processedBatch = await processBatch(batch);
-          records.push(...processedBatch);
-          processedCount += batch.length;
-          
-          console.log(`Processed ${processedCount} records... (Memory usage: ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB)`);
-          
-          batch = []; // Clear batch to free memory
-          
-          // Yield control to event loop to prevent blocking
-          await new Promise(resolve => (typeof setImmediate !== 'undefined' ? setImmediate : setTimeout)(resolve, 0));
-        }
-      }
-      
-      // Process remaining documents
-      if (batch.length > 0) {
-        const processedBatch = await processBatch(batch);
-        records.push(...processedBatch);
-        processedCount += batch.length;
+      const totalDocs = allIds.length;
+      console.log(`[CSV] Total documents to process: ${totalDocs} (chunk size: ${CHUNK_SIZE})`);
+
+      if (totalDocs === 0) {
+        console.log('[CSV] No matching ConsecutiveGroup documents found');
+        return { success: false, message: 'No inventory data found. Check if events exist and have inventory data.' };
       }
 
-      console.log(`Total records found: ${records.length}`);
+      const records: CsvRow[] = [];
+      let processedCount = 0;
+      let chunkNum = 0;
+
+      // Step 2: Process in chunks — simple find by _ids, no $lookup needed
+      for (let i = 0; i < totalDocs; i += CHUNK_SIZE) {
+        chunkNum++;
+        const chunkStart = Date.now();
+        const chunkIds = allIds.slice(i, i + CHUNK_SIZE).map((d: { _id: string }) => d._id);
+
+        const chunkDocs: ConsecutiveGroupDocument[] = await ConsecutiveGroup.aggregate(
+          [
+            { $match: { _id: { $in: chunkIds } } },
+            { $project: projection },
+          ] as PipelineStage[],
+          { allowDiskUse: true, maxTimeMS: 120000 }
+        );
+
+        if (chunkDocs.length > 0) {
+          // Enrich docs with event data from the pre-fetched map + apply include/exclude filter
+          const enrichedDocs: ConsecutiveGroupDocument[] = [];
+          for (const doc of chunkDocs) {
+            const evData = doc.mapping_id ? eventDetailsMap.get(doc.mapping_id) : undefined;
+            const isStandard = doc.inventory?.splitType === 'NEVERLEAVEONE';
+            // Apply per-event standard/resale inclusion toggles
+            if (isStandard && evData && !evData.includeStandard) continue;
+            if (!isStandard && evData && !evData.includeResale) continue;
+
+            doc.event_url = evData?.url || '';
+            doc.event_std_adj = evData?.stdAdj ?? 0;
+            doc.event_resale_adj = evData?.resaleAdj ?? 0;
+            doc.event_default_pct = evData?.defaultPct ?? 0;
+            enrichedDocs.push(doc);
+          }
+          if (enrichedDocs.length > 0) {
+            const processedBatch = await processBatch(enrichedDocs);
+            records.push(...processedBatch);
+          }
+        }
+        processedCount += chunkIds.length;
+
+        const chunkMs = Date.now() - chunkStart;
+        console.log(`[CSV] Chunk ${chunkNum}: ${chunkDocs.length} docs -> ${records.length} rows in ${chunkMs}ms (${processedCount}/${totalDocs}, ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB heap)`);
+
+        // Yield control between chunks
+        await new Promise(resolve => (typeof setImmediate !== 'undefined' ? setImmediate : setTimeout)(resolve, 0));
+      }
+
+      console.log(`[CSV] Total records found: ${records.length} (processed ${processedCount} docs in ${Date.now() - startTime}ms)`);
       
       if (records.length === 0) {
+        console.log('[CSV] No inventory data found — aborting');
         return { success: false, message: 'No inventory data found. Check if events exist and have inventory data.' };
       }
 
       // Apply exclusion rules
+      const exclStart = Date.now();
       const filteredRecords = await applyExclusionRules(records);
-      
+      console.log(`[CSV] Exclusion rules applied in ${Date.now() - exclStart}ms`);
+
       if (filteredRecords.length === 0) {
         return { success: false, message: 'No inventory data found after applying exclusion rules. All records were filtered out.' };
       }
 
-      console.log(`Records after exclusion filtering: ${filteredRecords.length} (${records.length - filteredRecords.length} excluded)`);
+      console.log(`[CSV] Records after exclusion filtering: ${filteredRecords.length} (${records.length - filteredRecords.length} excluded)`);
 
       // Optimized CSV generation using streaming approach
       const csvString = await generateCsvString(filteredRecords);
@@ -420,7 +433,7 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
       const duration = endTime - startTime;
       const memoryUsage = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
       
-      console.log(`CSV generation completed in ${duration}ms for ${filteredRecords.length} records (Peak memory: ${memoryUsage}MB)`);
+      console.log(`[CSV] ✅ Generation completed in ${duration}ms for ${filteredRecords.length} records (Peak memory: ${memoryUsage}MB)`);
 
       return { 
         success: true, 
@@ -433,8 +446,9 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
     } catch (error) {
       console.error('Error generating CSV:', error);
       await createErrorLog({
-        errorType: 'CSV_GENERATION',
-        errorMessage: error instanceof Error ? error.message : 'Unknown error',
+        eventUrl: 'CSV_GENERATION',
+        errorType: 'DATABASE_ERROR',
+        message: error instanceof Error ? error.message : 'Unknown error',
         stack: error instanceof Error ? error.stack : undefined,
         metadata: {
           operation: 'generateInventoryCsv',
