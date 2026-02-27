@@ -68,17 +68,15 @@ export async function GET() {
       return NextResponse.json({ error: 'SeatScouts API credentials not configured' }, { status: 500 });
     }
 
-    // Only sync pending orders (the ones that matter for alerts/actions)
-    // Other statuses are already settled and don't change frequently
-    const PAGE_SIZE = 100;
-    const SYNC_STATUS = 'pending'; // API status "pending" = invoiced/pending in our DB
+    // Fetch invoiced orders from SeatScouts (the ones needing action)
+    const PAGE_SIZE = 20;
     const headers = {
       'X-Company-Id': companyId,
       'X-Api-Token': apiToken,
     };
 
     const res = await fetch(
-      `${SYNC_API_BASE}/orders?limit=${PAGE_SIZE}&status=${SYNC_STATUS}`,
+      `${SYNC_API_BASE}/orders?limit=${PAGE_SIZE}&status=invoiced`,
       { headers, cache: 'no-store', signal: AbortSignal.timeout(20000) }
     );
 
@@ -89,13 +87,18 @@ export async function GET() {
 
     const data = await res.json();
     const orders: any[] = data.data || [];
-    console.log(`[sync] API: ${Date.now() - t0}ms, ${orders.length} pending orders`);
-
-    if (orders.length === 0) {
-      return NextResponse.json({ synced: 0, newOrderIds: [], newOrders: [], unacknowledgedCount: 0 });
-    }
+    console.log(`[sync] API: ${Date.now() - t0}ms, ${orders.length} orders`);
 
     await dbConnect();
+
+    if (orders.length === 0) {
+      // Still check DB for unacknowledged orders (may exist from previous syncs)
+      const unacknowledgedCount = await Order.countDocuments({
+        acknowledged: false,
+        status: { $in: ['invoiced', 'pending', 'problem'] },
+      });
+      return NextResponse.json({ synced: 0, newOrderIds: [], newOrders: [], unacknowledgedCount });
+    }
 
     // Get existing order_ids to detect new orders
     const incomingOrderIds = orders.map((o: any) => o.order_id);

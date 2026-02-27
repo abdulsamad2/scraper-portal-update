@@ -493,12 +493,19 @@ interface EmptyStateProps {
 }
 
 export default function EmptyState({ search, hasStatusFilter, onClearSearch }: EmptyStateProps) {
-  const [sceneIndex, setSceneIndex] = useState(() => Math.floor(Math.random() * SCENES.length));
-  const [tipIndex, setTipIndex] = useState(() => Math.floor(Math.random() * FUN_TIPS.length));
+  const [sceneIndex, setSceneIndex] = useState(0);
+  const [tipIndex, setTipIndex] = useState(0);
   const [visible, setVisible] = useState(true);
   const [clickCount, setClickCount] = useState(0);
   const [tipProgress, setTipProgress] = useState(0);
-  const greeting = useMemo(() => getGreeting(), []);
+  const [greeting, setGreeting] = useState({ text: '', icon: '' });
+
+  // Randomize on client only to avoid hydration mismatch
+  useEffect(() => {
+    setSceneIndex(Math.floor(Math.random() * SCENES.length));
+    setTipIndex(Math.floor(Math.random() * FUN_TIPS.length));
+    setGreeting(getGreeting());
+  }, []);
   const sceneTimerRef = useRef(0);
 
   // Scene transition spring
