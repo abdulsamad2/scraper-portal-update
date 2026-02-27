@@ -7,7 +7,7 @@ export default async function OrdersPage() {
   const perPage = 20;
   const [result, tabCounts] = await Promise.all([
     getPaginatedOrders(1, perPage, {
-      statusIn: ['invoiced', 'pending', 'problem'],
+      statusIn: ['invoiced', 'pending'],
     }, 'order_date', 'desc'),
     getOrderTabCounts(),
   ]);

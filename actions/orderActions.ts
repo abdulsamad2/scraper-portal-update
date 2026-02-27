@@ -165,7 +165,8 @@ export async function getOrderTabCounts() {
   const sc: Record<string, number> = {};
   for (const s of byStatus) sc[s._id] = s.count;
   return {
-    invoiced: (sc.invoiced || 0) + (sc.pending || 0) + (sc.problem || 0),
+    invoiced: (sc.invoiced || 0) + (sc.pending || 0),
+    problem: sc.problem || 0,
     confirmed: (sc.confirmed || 0) + (sc.confirmed_delay || 0),
     rejected: sc.rejected || 0,
     deliveryIssue: sc.delivery_problem || 0,
@@ -173,6 +174,69 @@ export async function getOrderTabCounts() {
     all: total[0]?.count || 0,
     flagged: flagged[0]?.count || 0,
   };
+}
+
+export async function getMonthlyStats() {
+  const apiToken = process.env.SYNC_API_TOKEN;
+  const companyId = process.env.SYNC_COMPANY_ID;
+  if (!apiToken || !companyId) {
+    return { totalOrders: 0, totalTickets: 0, delivered: 0, rejected: 0, deliveryIssue: 0, pending: 0, fulfillRate: 0 };
+  }
+
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = now.getMonth();
+  const monthStart = `${y}-${String(m + 1).padStart(2, '0')}-01`;
+  const lastDay = new Date(y, m + 1, 0).getDate();
+  const monthEnd = `${y}-${String(m + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+
+  const API_BASE = 'https://app.seatscouts.com/sync/api';
+  const headers = { 'X-Company-Id': companyId, 'X-Api-Token': apiToken };
+  const dateQ = `order_date_from=${monthStart}&order_date_to=${monthEnd}`;
+
+  // API returns { count, data, page } — use count for totals, limit=1 since we only need counts
+  const statusQueries = [
+    { key: 'all',           q: '' },
+    { key: 'pending',       q: '&status=pending,problem' },
+    { key: 'confirmed',     q: '&status=confirmed,confirmed_delay' },
+    { key: 'delivered',     q: '&status=delivered' },
+    { key: 'rejected',      q: '&status=rejected' },
+    { key: 'deliveryIssue', q: '&status=delivery_problem' },
+  ];
+
+  try {
+    const results = await Promise.all(
+      statusQueries.map(async (sq) => {
+        const res = await fetch(`${API_BASE}/orders?${dateQ}${sq.q}&limit=1`, {
+          headers, cache: 'no-store', signal: AbortSignal.timeout(10000),
+        });
+        if (!res.ok) return { key: sq.key, count: 0 };
+        const data = await res.json();
+        return { key: sq.key, count: data.count || 0 };
+      })
+    );
+
+    const c: Record<string, number> = {};
+    for (const r of results) c[r.key] = r.count;
+
+    const totalOrders = c.all || 0;
+    const delivered = c.delivered || 0;
+    // delivery_problem orders will be delivered later — count them towards fulfillment
+    const fulfilled = delivered + (c.confirmed || 0) + (c.deliveryIssue || 0);
+
+    return {
+      totalOrders,
+      totalTickets: 0,
+      delivered,
+      rejected: c.rejected || 0,
+      deliveryIssue: c.deliveryIssue || 0,
+      pending: c.pending || 0,
+      fulfillRate: totalOrders > 0 ? Math.round((fulfilled / totalOrders) * 100) : 0,
+    };
+  } catch (error) {
+    console.error('Monthly stats fetch error:', error);
+    return { totalOrders: 0, totalTickets: 0, delivered: 0, rejected: 0, deliveryIssue: 0, pending: 0, fulfillRate: 0 };
+  }
 }
 
 export async function getUnacknowledgedCount() {

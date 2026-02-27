@@ -6,6 +6,7 @@ import { getAllEvents } from '@/actions/eventActions';
 import { getConsecutiveGroupsPaginated } from '@/actions/seatActions';
 import { getAutoDeleteSettings, getAutoDeletePreview } from '@/actions/csvActions';
 import { getLastDeletedEvents } from '@/actions/autoDeleteActions';
+import { getMonthlyStats } from '@/actions/orderActions';
 import { 
   Calendar,
   Package,
@@ -25,7 +26,9 @@ import {
   MapPin,
   Shield,
   CheckCircle2,
-  Timer
+  Timer,
+  ShoppingCart,
+  XCircle
 } from 'lucide-react';
 
 // Client-side time component to avoid hydration mismatch
@@ -139,6 +142,9 @@ export default function DashboardPage() {
   });
   const [showAllDeleteEvents, setShowAllDeleteEvents] = useState(false);
   const [lastDeletedEvents, setLastDeletedEvents] = useState<LastDeletedEvent[]>([]);
+  const [orderStats, setOrderStats] = useState<{ totalOrders: number; delivered: number; rejected: number; pending: number; fulfillRate: number; loading: boolean }>({
+    totalOrders: 0, delivered: 0, rejected: 0, pending: 0, fulfillRate: 0, loading: true,
+  });
 
   useEffect(() => {
     async function fetchData() {
@@ -239,6 +245,20 @@ export default function DashboardPage() {
       }
     }
     fetchLastDeleted();
+  }, []);
+
+  // Fetch monthly order stats (SeatScouts API — only on page load)
+  useEffect(() => {
+    async function fetchOrderStats() {
+      try {
+        const ms = await getMonthlyStats();
+        setOrderStats({ ...ms, loading: false });
+      } catch (err) {
+        console.error('Error loading monthly order stats:', err);
+        setOrderStats(prev => ({ ...prev, loading: false }));
+      }
+    }
+    fetchOrderStats();
   }, []);
 
   // Calculate events created in the last 7 days
@@ -469,6 +489,96 @@ export default function DashboardPage() {
               <Trash2 className="w-6 h-6 text-white" />
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* Monthly Order Stats */}
+      <div>
+        <h3 className="text-lg font-semibold text-slate-800 mb-4">
+          {new Date().toLocaleString('en-US', { month: 'long' })} Orders
+        </h3>
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+          {/* Total Orders */}
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 hover:shadow-md transition-shadow duration-200">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-slate-500 mb-1">Total</p>
+                <div className="text-3xl font-bold text-slate-800 tabular-nums">
+                  {orderStats.loading ? <div className="w-12 h-8 bg-slate-200 rounded animate-pulse" /> : orderStats.totalOrders}
+                </div>
+              </div>
+              <div className="w-11 h-11 bg-gradient-to-br from-slate-600 to-slate-700 rounded-xl flex items-center justify-center">
+                <ShoppingCart className="w-5 h-5 text-white" />
+              </div>
+            </div>
+          </div>
+
+          {/* Delivered */}
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 hover:shadow-md transition-shadow duration-200">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-slate-500 mb-1">Delivered</p>
+                <div className="text-3xl font-bold text-slate-800 tabular-nums">
+                  {orderStats.loading ? <div className="w-12 h-8 bg-slate-200 rounded animate-pulse" /> : orderStats.delivered}
+                </div>
+              </div>
+              <div className="w-11 h-11 bg-gradient-to-br from-emerald-500 to-emerald-600 rounded-xl flex items-center justify-center">
+                <Package className="w-5 h-5 text-white" />
+              </div>
+            </div>
+          </div>
+
+          {/* Pending */}
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 hover:shadow-md transition-shadow duration-200">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-slate-500 mb-1">Pending</p>
+                <div className={`text-3xl font-bold tabular-nums ${!orderStats.loading && orderStats.pending > 0 ? 'text-blue-600' : 'text-slate-800'}`}>
+                  {orderStats.loading ? <div className="w-12 h-8 bg-slate-200 rounded animate-pulse" /> : orderStats.pending}
+                </div>
+              </div>
+              <div className="w-11 h-11 bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl flex items-center justify-center">
+                <Clock className="w-5 h-5 text-white" />
+              </div>
+            </div>
+          </div>
+
+          {/* Rejected */}
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 hover:shadow-md transition-shadow duration-200">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-slate-500 mb-1">Rejected</p>
+                <div className={`text-3xl font-bold tabular-nums ${!orderStats.loading && orderStats.rejected > 0 ? 'text-red-600' : 'text-slate-800'}`}>
+                  {orderStats.loading ? <div className="w-12 h-8 bg-slate-200 rounded animate-pulse" /> : orderStats.rejected}
+                </div>
+              </div>
+              <div className={`w-11 h-11 rounded-xl flex items-center justify-center ${!orderStats.loading && orderStats.rejected > 0 ? 'bg-gradient-to-br from-red-500 to-red-600' : 'bg-gradient-to-br from-slate-400 to-slate-500'}`}>
+                <XCircle className="w-5 h-5 text-white" />
+              </div>
+            </div>
+          </div>
+
+          {/* Fill Rate */}
+          {(() => {
+            const rate = orderStats.fulfillRate;
+            const iconGradient = rate >= 80 ? 'from-emerald-500 to-emerald-600' : rate >= 50 ? 'from-amber-500 to-amber-600' : 'from-red-500 to-red-600';
+            const valueColor = rate >= 80 ? 'text-emerald-600' : rate >= 50 ? 'text-amber-600' : 'text-red-600';
+            return (
+              <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 hover:shadow-md transition-shadow duration-200">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-slate-500 mb-1">Fill Rate</p>
+                    <div className={`text-3xl font-bold tabular-nums ${orderStats.loading ? 'text-slate-800' : valueColor}`}>
+                      {orderStats.loading ? <div className="w-12 h-8 bg-slate-200 rounded animate-pulse" /> : `${rate}%`}
+                    </div>
+                  </div>
+                  <div className={`w-11 h-11 bg-gradient-to-br ${orderStats.loading ? 'from-slate-400 to-slate-500' : iconGradient} rounded-xl flex items-center justify-center`}>
+                    <CheckCircle2 className="w-5 h-5 text-white" />
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
         </div>
       </div>
 

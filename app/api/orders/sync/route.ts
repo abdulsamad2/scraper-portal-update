@@ -191,12 +191,40 @@ export async function GET() {
     if (newOrderIds.length > 0) {
       newOrdersWithUrls = await Order.find(
         { order_id: { $in: newOrderIds } },
-        { order_id: 1, ticketmasterUrl: 1, event_name: 1 }
+        { order_id: 1, ticketmasterUrl: 1, event_name: 1, section: 1, row: 1, low_seat: 1, high_seat: 1, quantity: 1, total: 1, unit_price: 1 }
       ).lean();
     }
 
-    // Only count unacknowledged orders in alert-worthy statuses (invoiced/pending/problem)
-    const unacknowledgedCount = await Order.countDocuments({ acknowledged: false, status: { $in: ['invoiced', 'pending', 'problem'] } });
+    // Get unack count + tab counts in a single aggregation to reduce DB calls
+    const [unacknowledgedCount, tabPipeline] = await Promise.all([
+      Order.countDocuments({ acknowledged: false, status: { $in: ['invoiced', 'pending', 'problem'] } }),
+      Order.aggregate([
+        {
+          $facet: {
+            byStatus: [{ $group: { _id: '$status', count: { $sum: 1 } } }],
+            total: [{ $count: 'count' }],
+            flagged: [
+              { $match: { hasIssue: true, status: { $in: ['invoiced', 'pending', 'problem'] } } },
+              { $count: 'count' },
+            ],
+          },
+        },
+      ]),
+    ]);
+    const { byStatus, total: totalArr, flagged } = tabPipeline[0];
+    const sc: Record<string, number> = {};
+    for (const s of byStatus) sc[s._id] = s.count;
+    const tabCounts = {
+      invoiced: (sc.invoiced || 0) + (sc.pending || 0),
+      problem: sc.problem || 0,
+      confirmed: (sc.confirmed || 0) + (sc.confirmed_delay || 0),
+      rejected: sc.rejected || 0,
+      deliveryIssue: sc.delivery_problem || 0,
+      delivered: sc.delivered || 0,
+      all: totalArr[0]?.count || 0,
+      flagged: flagged[0]?.count || 0,
+    };
+
     console.log(`[sync] done: ${Date.now() - t0}ms total, ${orders.length} synced, ${newOrderIds.length} new`);
 
     return NextResponse.json({
@@ -204,6 +232,7 @@ export async function GET() {
       newOrderIds,
       newOrders: JSON.parse(JSON.stringify(newOrdersWithUrls)),
       unacknowledgedCount,
+      tabCounts,
     });
   } catch (error) {
     console.error('Order sync error:', error);

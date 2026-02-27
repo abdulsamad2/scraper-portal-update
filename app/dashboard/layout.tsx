@@ -16,7 +16,6 @@ import {
   SignalHigh,
   Filter,
   Search
-
 } from 'lucide-react';
 
 const DashboardLayout = ({ children }: { children: React.ReactNode }) => {

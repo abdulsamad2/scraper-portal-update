@@ -78,11 +78,12 @@ interface SearchResult {
 
 interface ImportState {
   mappingId: string;
+  percentage: number;
   status: 'idle' | 'importing' | 'success' | 'error';
   error?: string;
 }
 
-type TabKey = 'search' | 'trending';
+// No tabs — search results replace trending inline
 
 const SEGMENT_OPTIONS = [
   { value: '', label: 'All' },
@@ -224,7 +225,6 @@ function NoteExpander({ text }: { text: string }) {
 /* ------------------------------------------------------------------ */
 
 export default function ImportEventsPage() {
-  const [activeTab, setActiveTab] = useState<TabKey>('trending');
   const [showFilters, setShowFilters] = useState(false);
 
   // Search state
@@ -275,21 +275,20 @@ export default function ImportEventsPage() {
 
   /* ---- Search ---- */
   const doSearch = useCallback(async (page = 0) => {
-    if (!keyword.trim() && !city.trim()) {
-      setSearchError('Enter a keyword or city to search');
+    if (!keyword.trim() && !city.trim() && !startDate && !endDate) {
+      setSearchError('Enter a keyword, city, or date range to search');
       return;
     }
     setSearching(true);
     setSearchError('');
     setCurrentPage(page);
-    setActiveTab('search');
     try {
       const qs = new URLSearchParams();
       if (keyword.trim()) qs.set('keyword', keyword.trim());
       if (city.trim()) qs.set('city', city.trim());
       if (stateCode.trim()) qs.set('stateCode', stateCode.trim().toUpperCase());
-      if (startDate) qs.set('startDateTime', new Date(startDate).toISOString().replace('.000', ''));
-      if (endDate) qs.set('endDateTime', new Date(endDate + 'T23:59:59').toISOString().replace('.000', ''));
+      if (startDate) qs.set('startDateTime', `${startDate}T00:00:00Z`);
+      if (endDate) qs.set('endDateTime', `${endDate}T23:59:59Z`);
       if (segment) qs.set('classificationName', segment);
       qs.set('size', '20');
       qs.set('page', String(page));
@@ -336,14 +335,14 @@ export default function ImportEventsPage() {
         if (resolveData.url) finalUrl = resolveData.url;
         if (resolveData.eventId) urlEventId = resolveData.eventId;
       }
-      if (!urlEventId) {
-        throw new Error('Could not extract Event ID from Ticketmaster URL');
+      if (!urlEventId || !/^[0-9A-Fa-f]+$/.test(urlEventId)) {
+        throw new Error('Could not resolve Ticketmaster hex Event ID — this event cannot be imported');
       }
       const eventData = {
         URL: finalUrl, Event_ID: urlEventId, Event_Name: event.name,
         Event_DateTime: eventDateTime, Venue: event.venue, Zone: 'none',
         Available_Seats: 0, Skip_Scraping: true, inHandDate: inHandDt.toISOString(),
-        mapping_id: mappingId, priceIncreasePercentage: 25,
+        mapping_id: mappingId, priceIncreasePercentage: imports[event.id]?.percentage ?? 25,
         standardMarkupAdjustment: 0, resaleMarkupAdjustment: 0,
       };
       const result = await createEvent(eventData as Parameters<typeof createEvent>[0]);
@@ -355,13 +354,14 @@ export default function ImportEventsPage() {
   };
 
   /* ---- Derived ---- */
-  const activeResults = activeTab === 'trending' ? trendingResults : results;
-  const isLoading = activeTab === 'trending' ? trendingLoading : searching;
-  const activePage = activeTab === 'trending' ? trendingPage : currentPage;
+  // If search results exist, show them; otherwise show trending
+  const activeResults = results ?? trendingResults;
+  const isLoading = results ? searching : trendingLoading;
+  const activePage = results ? currentPage : trendingPage;
 
   const handlePageChange = (p: number) => {
-    if (activeTab === 'trending') { setTrendingPage(p); }
-    else { doSearch(p); }
+    if (results) { doSearch(p); }
+    else { setTrendingPage(p); }
   };
 
   const listedCount = activeResults
@@ -370,11 +370,11 @@ export default function ImportEventsPage() {
   /* ---- Event Card ---- */
   const renderEventCard = (event: TMEvent, index: number) => {
     const listed = listedEvents[event.id];
-    const impState = imports[event.id] || { mappingId: '', status: 'idle' };
+    const impState = imports[event.id] || { mappingId: '', percentage: 25, status: 'idle' };
     const isImported = impState.status === 'success';
     const isImporting = impState.status === 'importing';
     const isListed = !!listed;
-    const hot = activeTab === 'trending' ? hotLabel(index) : null;
+    const hot = !results ? hotLabel(index) : null;
 
     return (
       <div
@@ -585,6 +585,22 @@ export default function ImportEventsPage() {
                     disabled={isImporting}
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent disabled:bg-slate-50 transition-all"
                   />
+                  <div className="flex items-center gap-2">
+                    <div className="relative flex-1">
+                      <input
+                        type="number"
+                        min={0}
+                        max={999}
+                        placeholder="25"
+                        value={impState.percentage ?? 25}
+                        onChange={e => updateImportState(event.id, { percentage: Number(e.target.value) || 0, status: 'idle', error: undefined })}
+                        disabled={isImporting}
+                        className="w-full px-3 py-2 pr-8 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent disabled:bg-slate-50 transition-all"
+                      />
+                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-slate-400 font-medium">%</span>
+                    </div>
+                    <span className="text-[10px] text-slate-400 font-medium whitespace-nowrap">Markup</span>
+                  </div>
                   <button onClick={() => handleImport(event)} disabled={isImporting}
                     className="w-full inline-flex items-center justify-center gap-1.5 px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 text-white text-sm font-medium rounded-lg hover:from-purple-700 hover:to-indigo-700 disabled:opacity-50 transition-all shadow-sm shadow-purple-200">
                     {isImporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Import className="w-3.5 h-3.5" />}
@@ -618,7 +634,7 @@ export default function ImportEventsPage() {
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
               <input type="text" value={keyword} onChange={e => setKeyword(e.target.value)}
-                placeholder="Search events, artists, teams..."
+                placeholder="Search events, artists, teams... (or leave empty for date search)"
                 className="w-full pl-10 pr-4 py-2.5 border border-slate-200 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm bg-slate-50 focus:bg-white transition-colors" />
             </div>
             <button type="submit" disabled={searching}
@@ -626,49 +642,53 @@ export default function ImportEventsPage() {
               {searching ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
               Search
             </button>
-            <button type="button" onClick={() => setShowFilters(!showFilters)}
-              className={`inline-flex items-center gap-1.5 px-3 py-2.5 text-sm font-medium rounded-lg border transition-all ${
-                showFilters ? 'bg-purple-50 border-purple-300 text-purple-700' : 'bg-white border-slate-200 text-slate-600 hover:border-purple-300'
-              }`}>
-              {showFilters ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-              Filters
-            </button>
           </div>
 
-          {/* Expandable filters */}
-          {showFilters && (
-            <div className="border-t border-slate-100 bg-slate-50/50 px-3 pb-3 pt-3">
-              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+          {/* Date + filters row (always visible) */}
+          <div className="border-t border-slate-100 bg-slate-50/50 px-3 pb-3 pt-2.5">
+            <div className="flex items-end gap-3 flex-wrap">
+              <div className="flex-1 min-w-[140px]">
+                <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">From Date</label>
+                <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white" />
+              </div>
+              <div className="flex-1 min-w-[140px]">
+                <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">To Date</label>
+                <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white" />
+              </div>
+              <div className="flex-1 min-w-[120px]">
+                <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">Category</label>
+                <select value={segment} onChange={e => setSegment(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white">
+                  {SEGMENT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </div>
+              <button type="button" onClick={() => setShowFilters(!showFilters)}
+                className={`inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border transition-all ${
+                  showFilters ? 'bg-purple-50 border-purple-300 text-purple-700' : 'bg-white border-slate-200 text-slate-500 hover:border-purple-300'
+                }`}>
+                {showFilters ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                More
+              </button>
+            </div>
+
+            {/* Extra filters (city, state) */}
+            {showFilters && (
+              <div className="grid grid-cols-2 gap-3 mt-3 pt-3 border-t border-slate-200/60">
                 <div>
-                  <label className="block text-xs font-medium text-slate-500 mb-1">City</label>
+                  <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">City</label>
                   <input type="text" value={city} onChange={e => setCity(e.target.value)} placeholder="e.g. Los Angeles"
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white" />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-slate-500 mb-1">State</label>
+                  <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">State</label>
                   <input type="text" value={stateCode} onChange={e => setStateCode(e.target.value)} placeholder="CA" maxLength={2}
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white uppercase" />
                 </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-500 mb-1">Category</label>
-                  <select value={segment} onChange={e => setSegment(e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white">
-                    {SEGMENT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-500 mb-1">From</label>
-                  <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white" />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-500 mb-1">To</label>
-                  <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white" />
-                </div>
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </form>
 
         {searchError && (
@@ -678,62 +698,72 @@ export default function ImportEventsPage() {
         )}
       </div>
 
-      {/* Tabs */}
-      <div className="flex items-center gap-1 bg-white rounded-xl shadow-sm border border-slate-200 p-1">
-        <button onClick={() => setActiveTab('trending')}
-          className={`flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
-            activeTab === 'trending'
-              ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-md shadow-purple-200'
-              : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'
-          }`}>
-          <Flame className="w-4 h-4" /> Trending
-          {trendingResults && <span className={`text-xs px-1.5 py-0.5 rounded-full ${activeTab === 'trending' ? 'bg-white/20' : 'bg-slate-100'}`}>{trendingResults.total.toLocaleString()}</span>}
-        </button>
-        <button onClick={() => setActiveTab('search')}
-          className={`flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
-            activeTab === 'search'
-              ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-md shadow-purple-200'
-              : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'
-          }`}>
-          <Search className="w-4 h-4" /> Search Results
-          {results && <span className={`text-xs px-1.5 py-0.5 rounded-full ${activeTab === 'search' ? 'bg-white/20' : 'bg-slate-100'}`}>{results.total.toLocaleString()}</span>}
-        </button>
-      </div>
-
-      {/* Trending category pills */}
-      {activeTab === 'trending' && (
-        <div className="flex items-center gap-2 flex-wrap">
-          <TrendingUp className="w-4 h-4 text-purple-400" />
-          {SEGMENT_OPTIONS.map(o => (
-            <button key={o.value}
-              onClick={() => { setTrendingSegment(o.value); setTrendingPage(0); }}
-              className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
-                trendingSegment === o.value
-                  ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white border-transparent shadow-sm shadow-purple-200'
-                  : 'bg-white text-slate-600 border-slate-200 hover:border-purple-300 hover:text-purple-700'
-              }`}>
-              {o.label}
-            </button>
-          ))}
-          <button onClick={() => fetchTrending(trendingSegment, trendingPage)} disabled={trendingLoading}
-            className="ml-auto inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-slate-500 hover:text-purple-600 transition-colors">
-            <RefreshCw className={`w-3.5 h-3.5 ${trendingLoading ? 'animate-spin' : ''}`} /> Refresh
-          </button>
+      {/* Results header bar */}
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-3">
+          {/* Show what mode we're in */}
+          {results ? (
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-purple-100 text-purple-700 text-sm font-semibold">
+                <Search className="w-4 h-4" />
+                Search Results
+                <span className="bg-purple-600 text-white text-xs px-1.5 py-0.5 rounded-full ml-1">{results.total.toLocaleString()}</span>
+              </span>
+              <button onClick={() => { setResults(null); setKeyword(''); setStartDate(''); setEndDate(''); setCity(''); setStateCode(''); setSegment(''); }}
+                className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-slate-500 hover:text-red-600 bg-white border border-slate-200 hover:border-red-200 rounded-lg transition-all">
+                <X className="w-3 h-3" /> Clear Search
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-orange-100 text-orange-700 text-sm font-semibold">
+                <Flame className="w-4 h-4" /> Trending
+              </span>
+              {SEGMENT_OPTIONS.map(o => (
+                <button key={o.value}
+                  onClick={() => { setTrendingSegment(o.value); setTrendingPage(0); }}
+                  className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
+                    trendingSegment === o.value
+                      ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white border-transparent shadow-sm shadow-purple-200'
+                      : 'bg-white text-slate-600 border-slate-200 hover:border-purple-300 hover:text-purple-700'
+                  }`}>
+                  {o.label}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
-      )}
-
-      {/* Stats bar */}
-      {!isLoading && activeResults && activeResults.events.length > 0 && (
-        <div className="flex items-center justify-between text-sm">
-          <span className="text-slate-500">
-            Showing {activeResults.events.length} of {activeResults.total.toLocaleString()} events
-            {activeResults.totalPages > 1 && <span className="text-slate-400"> &middot; Page {activePage + 1}/{activeResults.totalPages}</span>}
-          </span>
-          {listedCount > 0 && (
-            <span className="inline-flex items-center gap-1.5 text-purple-600 text-xs font-medium bg-purple-50 px-2.5 py-1 rounded-full border border-purple-200">
-              <Check className="w-3 h-3" /> {listedCount} already listed
+        <div className="flex items-center gap-2">
+          {!results && (
+            <button onClick={() => fetchTrending(trendingSegment, trendingPage)} disabled={trendingLoading}
+              className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-slate-500 hover:text-purple-600 bg-white border border-slate-200 rounded-lg transition-colors">
+              <RefreshCw className={`w-3.5 h-3.5 ${trendingLoading ? 'animate-spin' : ''}`} /> Refresh
+            </button>
+          )}
+          {activeResults && activeResults.events.length > 0 && (
+            <span className="text-xs text-slate-400">
+              {activeResults.events.length} of {activeResults.total.toLocaleString()}
+              {activeResults.totalPages > 1 && ` · Page ${activePage + 1}/${activeResults.totalPages}`}
             </span>
           )}
+          {listedCount > 0 && (
+            <span className="inline-flex items-center gap-1.5 text-purple-600 text-xs font-medium bg-purple-50 px-2.5 py-1 rounded-full border border-purple-200">
+              <Check className="w-3 h-3" /> {listedCount} listed
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Active search filters summary */}
+      {results && (keyword || startDate || endDate || city || stateCode || segment) && (
+        <div className="flex items-center gap-1.5 flex-wrap text-xs">
+          <span className="text-slate-400 font-medium">Filters:</span>
+          {keyword && <span className="px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 border border-blue-200 font-medium">&quot;{keyword}&quot;</span>}
+          {startDate && <span className="px-2 py-0.5 rounded-md bg-green-50 text-green-700 border border-green-200 font-medium">From: {startDate}</span>}
+          {endDate && <span className="px-2 py-0.5 rounded-md bg-green-50 text-green-700 border border-green-200 font-medium">To: {endDate}</span>}
+          {city && <span className="px-2 py-0.5 rounded-md bg-amber-50 text-amber-700 border border-amber-200 font-medium">{city}</span>}
+          {stateCode && <span className="px-2 py-0.5 rounded-md bg-amber-50 text-amber-700 border border-amber-200 font-medium">{stateCode}</span>}
+          {segment && <span className="px-2 py-0.5 rounded-md bg-purple-50 text-purple-700 border border-purple-200 font-medium">{segment}</span>}
         </div>
       )}
 
@@ -741,7 +771,7 @@ export default function ImportEventsPage() {
       {isLoading && (
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center">
           <Loader2 className="w-8 h-8 text-purple-500 mx-auto mb-3 animate-spin" />
-          <p className="text-slate-600 font-medium">Loading events...</p>
+          <p className="text-slate-600 font-medium">{results ? 'Searching...' : 'Loading trending events...'}</p>
         </div>
       )}
 
@@ -760,16 +790,7 @@ export default function ImportEventsPage() {
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center">
           <Search className="w-12 h-12 text-slate-300 mx-auto mb-3" />
           <p className="text-slate-600 font-medium">No events found</p>
-          <p className="text-sm text-slate-400 mt-1">Try different keywords or broaden your search</p>
-        </div>
-      )}
-
-      {/* Initial state - no search yet */}
-      {!isLoading && activeTab === 'search' && !results && (
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center">
-          <Search className="w-12 h-12 text-slate-300 mx-auto mb-3" />
-          <p className="text-slate-600 font-medium">Search for events</p>
-          <p className="text-sm text-slate-400 mt-1">Enter a keyword, artist, or team name above</p>
+          <p className="text-sm text-slate-400 mt-1">Try different keywords, dates, or broaden your search</p>
         </div>
       )}
     </div>

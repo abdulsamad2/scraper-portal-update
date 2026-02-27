@@ -8,7 +8,7 @@ import {
   ChevronDown, AlertCircle, Smartphone, Mail,
   Truck, Send, CheckCircle, RotateCw,
   FileText, Clock, XCircle, Package, Ticket,
-  Flag, FlagOff, MessageSquareWarning,
+  Flag, FlagOff, MessageSquareWarning, Copy, ClipboardCheck,
 } from 'lucide-react';
 import { getPaginatedOrders, getOrderTabCounts, flagOrderIssue, unflagOrderIssue } from '@/actions/orderActions';
 import { useOrderAlert } from './useOrderAlert';
@@ -28,14 +28,20 @@ interface OrderData {
   hasIssue?: boolean; issueNote?: string; issueFlaggedAt?: string | null;
 }
 
+interface SyncNewOrder {
+  order_id: string; ticketmasterUrl: string; event_name: string;
+  section?: string; row?: string; low_seat?: number | null; high_seat?: number | null;
+  quantity?: number; total?: number; unit_price?: number;
+}
+
 interface SyncResult {
   synced?: number; newOrderIds?: string[];
-  newOrders?: { order_id: string; ticketmasterUrl: string; event_name: string }[];
+  newOrders?: SyncNewOrder[];
   unacknowledgedCount?: number; error?: string;
 }
 
 interface TabCounts {
-  invoiced: number; confirmed: number; rejected: number;
+  invoiced: number; problem: number; confirmed: number; rejected: number;
   deliveryIssue: number; delivered: number; all: number; flagged: number;
 }
 
@@ -59,7 +65,7 @@ const ST: Record<string, { bg: string; text: string; dot: string; label: string;
 };
 
 const MP: Record<string, { label: string; abbr: string; bg: string; text: string }> = {
-  stubhub:          { label: 'StubHub',           abbr: 'SH', bg: 'bg-[#3B1F8E]', text: 'text-white' },
+  stubhub:          { label: 'Viagogo',            abbr: 'VG', bg: 'bg-[#3B1F8E]', text: 'text-white' },
   gotickets:        { label: 'GoTickets',      abbr: 'GO',  bg: 'bg-[#16A34A]', text: 'text-white' },
   vividseats:       { label: 'Vivid Seats',    abbr: 'VS',  bg: 'bg-[#E91E63]', text: 'text-white' },
   gametime:         { label: 'Gametime',       abbr: 'GT',  bg: 'bg-[#6B46C1]', text: 'text-white' },
@@ -74,7 +80,8 @@ const MP: Record<string, { label: string; abbr: string; bg: string; text: string
 };
 
 const TAB_STATUSES: Record<string, string[]> = {
-  invoiced:       ['invoiced', 'pending', 'problem'],
+  invoiced:       ['invoiced', 'pending'],
+  problem:        ['problem'],
   confirmed:      ['confirmed', 'confirmed_delay'],
   rejected:       ['rejected'],
   delivery_issue: ['delivery_problem'],
@@ -82,7 +89,7 @@ const TAB_STATUSES: Record<string, string[]> = {
   all:            [],
 };
 
-type TabKey = 'invoiced' | 'confirmed' | 'rejected' | 'delivery_issue' | 'delivered' | 'all';
+type TabKey = 'invoiced' | 'problem' | 'confirmed' | 'rejected' | 'delivery_issue' | 'delivered' | 'all';
 
 function fmtDate(dt: string) {
   if (!dt) return '—';
@@ -138,7 +145,7 @@ export default function OrdersClient({ initialOrders, initialTotal, initialTotal
   const hasSyncedRef = useRef(false);
   const prevUnackRef = useRef(initialUnackCount);
   const { startAlert, stopAlert } = useOrderAlert();
-  const [countdown, setCountdown] = useState(20);
+  const [countdown, setCountdown] = useState(10);
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [localSearch, setLocalSearch] = useState('');
 
@@ -148,6 +155,16 @@ export default function OrdersClient({ initialOrders, initialTotal, initialTotal
   const [modalLoading, setModalLoading] = useState(false);
   const [modalError, setModalError] = useState('');
   const [recheckingId, setRecheckingId] = useState<string | null>(null);
+  const [recheckingAll, setRecheckingAll] = useState(false);
+  const [recheckAllProgress, setRecheckAllProgress] = useState({ done: 0, total: 0 });
+  const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
+
+  const copyUrl = useCallback((url: string) => {
+    navigator.clipboard.writeText(url).then(() => {
+      setCopiedUrl(url);
+      setTimeout(() => setCopiedUrl(null), 2000);
+    });
+  }, []);
 
   // Flag issue modal state
   const [flagOrder, setFlagOrder] = useState<OrderData | null>(null);
@@ -157,6 +174,10 @@ export default function OrdersClient({ initialOrders, initialTotal, initialTotal
   const localFlagsRef = useRef<Map<string, { hasIssue: boolean; issueNote: string; issueFlaggedAt: string | null }>>(new Map());
 
   const perPage = 20;
+
+  const openEvent = (url: string) => {
+    window.open(url, '_blank');
+  };
 
   const fetchOrders = useCallback(async (p?: number) => {
     const targetPage = p ?? page;
@@ -193,7 +214,9 @@ export default function OrdersClient({ initialOrders, initialTotal, initialTotal
         data.newOrderIds.forEach(id => newIdsRef.current.add(id));
         if (data.newOrders) {
           for (const o of data.newOrders) {
-            if (o.ticketmasterUrl) window.open(o.ticketmasterUrl, '_blank');
+            if (o.ticketmasterUrl) {
+              openEvent(o.ticketmasterUrl);
+            }
           }
         }
       }
@@ -205,7 +228,7 @@ export default function OrdersClient({ initialOrders, initialTotal, initialTotal
       hasSyncedRef.current = true;
     } catch { setSyncError('Network error'); }
     finally { setSyncing(false); }
-    // Refresh current page + tab counts after sync
+    // Refresh current page + tab counts after sync (monthly stats only on manual sync)
     const [, counts] = await Promise.all([fetchOrders(), getOrderTabCounts()]);
     setTabCounts(counts);
   }, [fetchOrders]);
@@ -220,26 +243,32 @@ export default function OrdersClient({ initialOrders, initialTotal, initialTotal
   // Alert logic (only for invoiced/pending/problem unacknowledged orders):
   // - unackCount drops to 0 → stop bell (all acknowledged or moved to other status)
   // - unackCount increases after first sync → new invoiced orders arrived, start bell
-  // - unackCount decreases but > 0 → some moved out of invoiced, keep bell if still unack
+  // - unackCount decreases → orders confirmed/handled, stop bell
   useEffect(() => {
     if (unackCount === 0) {
       newIdsRef.current.clear();
       stopAlert();
     } else if (hasSyncedRef.current) {
-      // Start bell if count went up (new invoiced orders) or stayed > 0
       if (unackCount > prevUnackRef.current || prevUnackRef.current === 0) {
         startAlert();
+      } else if (unackCount < prevUnackRef.current) {
+        // Count went down (orders confirmed/handled) — stop alarm
+        stopAlert();
       }
-      // If count decreased but still > 0, keep current state (bell stays if running)
     }
     prevUnackRef.current = unackCount;
-    return () => stopAlert();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [unackCount]);
 
+  // Stop alert on unmount
+  useEffect(() => {
+    return () => stopAlert();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Polling
-  useEffect(() => { const iv = setInterval(syncOnly, 20000); return () => clearInterval(iv); }, [syncOnly]);
-  useEffect(() => { setCountdown(20); const iv = setInterval(() => setCountdown(c => c <= 1 ? 20 : c - 1), 1000); return () => clearInterval(iv); }, [lastSync]);
+  useEffect(() => { const iv = setInterval(syncOnly, 10000); return () => clearInterval(iv); }, [syncOnly]);
+  useEffect(() => { setCountdown(10); const iv = setInterval(() => setCountdown(c => c <= 1 ? 10 : c - 1), 1000); return () => clearInterval(iv); }, [lastSync]);
   useEffect(() => { fetchOrders(); }, [fetchOrders]);
 
   const handleSearchChange = (value: string) => {
@@ -333,6 +362,14 @@ export default function OrdersClient({ initialOrders, initialTotal, initialTotal
       }
       closeModal();
       newIdsRef.current.delete(modalOrder.order_id);
+      // Auto-recheck once after confirming (fire-and-forget)
+      if (modalAction === 'confirm' && modalOrder.sync_id) {
+        fetch('/api/orders/recheck', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ syncId: modalOrder.sync_id }),
+        }).catch(() => {});
+      }
       await fetchOrders();
     } catch {
       setModalError('Network error');
@@ -363,6 +400,30 @@ export default function OrdersClient({ initialOrders, initialTotal, initialTotal
     }
   };
 
+  const handleRecheckAll = async () => {
+    const confirmOrders = orders.filter(o =>
+      ['confirmed', 'confirmed_delay', 'delivery_problem'].includes(o.status) && o.sync_id
+    );
+    if (confirmOrders.length === 0) return;
+    setRecheckingAll(true);
+    setRecheckAllProgress({ done: 0, total: confirmOrders.length });
+    try {
+      const syncIds = confirmOrders.map(o => o.sync_id as number);
+      const res = await fetch('/api/orders/recheck', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ syncIds }),
+      });
+      const data = await res.json();
+      setRecheckAllProgress({ done: data.total || syncIds.length, total: syncIds.length });
+      await syncOnly();
+    } catch (err) {
+      console.error('Recheck all error:', err);
+    } finally {
+      setRecheckingAll(false);
+    }
+  };
+
   const startIndex = totalOrders > 0 ? (page - 1) * perPage + 1 : 0;
   const endIndex = Math.min(page * perPage, totalOrders);
   const displayedOrders = orders;
@@ -374,6 +435,30 @@ export default function OrdersClient({ initialOrders, initialTotal, initialTotal
   }
 
   return (
+    <>
+    {/* Row animations for new orders */}
+    <style jsx global>{`
+      @keyframes row-glow {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0); }
+        50% { box-shadow: 0 0 8px rgba(239,68,68,0.06); }
+      }
+      @keyframes row-flash {
+        0%, 100% { background-color: rgba(254,226,226,0.3); }
+        50% { background-color: rgba(254,226,226,0.5); }
+      }
+      @keyframes row-border-pulse {
+        0%, 100% { border-left-color: rgb(239,68,68); opacity: 1; }
+        50% { border-left-color: rgb(248,113,113); opacity: 0.85; }
+      }
+      @keyframes new-dot {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.6; }
+      }
+      @keyframes unack-subtle {
+        0%, 100% { background-color: rgba(219,234,254,0.3); }
+        50% { background-color: rgba(219,234,254,0.5); }
+      }
+    `}</style>
     <div className="space-y-3">
       {/* ── Controls Card ── */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 space-y-3">
@@ -391,6 +476,13 @@ export default function OrdersClient({ initialOrders, initialTotal, initialTotal
               )}
               <span className="font-semibold text-blue-600 tabular-nums">{tabCounts.invoiced}</span>
               <span className="text-slate-400"> invoiced</span>
+              {tabCounts.problem > 0 && (
+                <>
+                  <span className="text-slate-300 mx-1.5">/</span>
+                  <span className="font-semibold text-orange-600 tabular-nums">{tabCounts.problem}</span>
+                  <span className="text-slate-400"> problem</span>
+                </>
+              )}
               {tabCounts.flagged > 0 && (
                 <>
                   <span className="text-slate-300 mx-1.5">/</span>
@@ -407,13 +499,22 @@ export default function OrdersClient({ initialOrders, initialTotal, initialTotal
             <span className="px-2.5 py-1 rounded-full border border-green-200 bg-green-50 text-green-700 text-[11px] font-semibold flex items-center gap-1">
               <Bell className="h-3 w-3" /> Alerts Active
             </span>
+            {(activeTab === 'confirmed' || activeTab === 'problem') && (
+              <button onClick={handleRecheckAll} disabled={recheckingAll || syncing}
+                className="px-3 py-1.5 rounded-lg bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-60 transition-[background-color,opacity] flex items-center gap-1.5 text-sm font-semibold">
+                <RotateCw className={`h-3.5 w-3.5 ${recheckingAll ? 'animate-spin' : ''}`} />
+                {recheckingAll
+                  ? `Rechecking ${recheckAllProgress.done}/${recheckAllProgress.total}…`
+                  : `Recheck All`}
+              </button>
+            )}
             <button onClick={() => syncOnly()} disabled={syncing}
               className="px-3 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60 transition-[background-color,opacity] flex items-center gap-1.5 text-sm">
               <RefreshCw className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} />
               <span className="hidden sm:inline">Sync</span>
               {!syncing && (
                 <span className={`text-[11px] font-mono tabular-nums leading-none px-1.5 py-0.5 rounded ${
-                  countdown <= 5 ? 'bg-blue-400 text-white' : 'bg-blue-500/60 text-blue-100'
+                  countdown <= 3 ? 'bg-blue-400 text-white' : 'bg-blue-500/60 text-blue-100'
                 }`}>{countdown}s</span>
               )}
             </button>
@@ -436,6 +537,7 @@ export default function OrdersClient({ initialOrders, initialTotal, initialTotal
           <div className="flex gap-1.5 shrink-0 flex-wrap">
             {([
               { key: 'invoiced' as TabKey, label: 'Invoiced', count: tabCounts.invoiced, accent: tabCounts.invoiced > 0 ? 'bg-blue-100 text-blue-700' : '' },
+              { key: 'problem' as TabKey, label: 'Problem', count: tabCounts.problem, accent: tabCounts.problem > 0 ? 'bg-orange-100 text-orange-700' : '' },
               { key: 'confirmed' as TabKey, label: 'Confirmed', count: tabCounts.confirmed, accent: tabCounts.confirmed > 0 ? 'bg-amber-100 text-amber-700' : '' },
               { key: 'rejected' as TabKey, label: 'Rejected', count: tabCounts.rejected, accent: tabCounts.rejected > 0 ? 'bg-red-100 text-red-700' : '' },
               { key: 'delivery_issue' as TabKey, label: 'Delivery Issues', count: tabCounts.deliveryIssue, accent: tabCounts.deliveryIssue > 0 ? 'bg-red-100 text-red-700' : '' },
@@ -545,6 +647,7 @@ export default function OrdersClient({ initialOrders, initialTotal, initialTotal
           </div>
           <h3 className="text-lg font-semibold text-gray-700 mb-2">
             {activeTab === 'invoiced' ? 'No invoiced orders' :
+             activeTab === 'problem' ? 'No problem orders' :
              activeTab === 'confirmed' ? 'No confirmed orders' :
              activeTab === 'rejected' ? 'No rejected orders' :
              activeTab === 'delivery_issue' ? 'No delivery issues' :
@@ -552,6 +655,7 @@ export default function OrdersClient({ initialOrders, initialTotal, initialTotal
           </h3>
           <p className="text-gray-500 max-w-md mx-auto">
             {activeTab === 'invoiced' ? 'New orders needing fulfillment will appear here.' :
+             activeTab === 'problem' ? 'Orders with problems will appear here.' :
              activeTab === 'confirmed' ? 'Confirmed orders will appear here.' :
              activeTab === 'rejected' ? 'Rejected orders will appear here.' :
              activeTab === 'delivery_issue' ? 'Orders with delivery problems will appear here.' :
@@ -600,10 +704,13 @@ export default function OrdersClient({ initialOrders, initialTotal, initialTotal
                   return (
                     <React.Fragment key={o._id}>
                       <tr className={`transition-all duration-150 ${rowBase} ${
-                        isHi ? '!bg-red-50 animate-pulse ring-1 ring-inset ring-red-200'
-                          : isNew ? '!bg-blue-50/60 ring-1 ring-inset ring-blue-100'
+                        isHi ? '!bg-red-50 ring-2 ring-inset ring-red-300 !border-l-red-600 !border-l-[4px]'
+                          : isNew ? '!bg-blue-50/60 ring-1 ring-inset ring-blue-200'
                           : 'hover:brightness-[0.97]'
-                      } ${idx > 0 ? (isInvoiced ? 'border-t-2 border-t-gray-300' : 'border-t border-gray-200') : ''}`}>
+                      } ${idx > 0 ? (isInvoiced ? 'border-t-2 border-t-gray-300' : 'border-t border-gray-200') : ''}`}
+                        style={isHi ? { animation: 'row-flash 4s ease-in-out infinite, row-border-pulse 3s ease-in-out infinite, row-glow 4s ease-in-out infinite' }
+                          : isNew ? { animation: 'unack-subtle 4s ease-in-out infinite' }
+                          : undefined}>
                         {/* Status + Marketplace */}
                         <td className="px-3 py-3 whitespace-nowrap">
                           <div className="flex items-center gap-1.5 mb-2">
@@ -620,6 +727,12 @@ export default function OrdersClient({ initialOrders, initialTotal, initialTotal
                               <sc.icon className="w-3 h-3" />
                               {sc.label}
                             </span>
+                            {isHi && (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-red-500 text-white text-[10px] font-semibold uppercase tracking-wide"
+                                style={{ animation: 'new-dot 2.5s ease-in-out infinite' }}>
+                                <span className="w-1.5 h-1.5 rounded-full bg-white/80" /> NEW
+                              </span>
+                            )}
                           </div>
                           <div className="flex items-center gap-1.5">
                             <span className={`${mp?.bg || 'bg-gray-500'} ${mp?.text || 'text-white'} text-[10px] font-bold px-1.5 py-0.5 rounded flex items-center justify-center shrink-0`}>
@@ -635,10 +748,10 @@ export default function OrdersClient({ initialOrders, initialTotal, initialTotal
                         <td className="px-3 py-3">
                           <div className="min-w-0">
                             {o.ticketmasterUrl ? (
-                              <a href={o.ticketmasterUrl} target="_blank" rel="noopener noreferrer"
-                                className="text-gray-900 hover:text-blue-600 font-semibold text-sm transition-[color] duration-150 block truncate">
+                              <button onClick={() => openEvent(o.ticketmasterUrl!)}
+                                className="text-gray-900 hover:text-blue-600 font-semibold text-sm transition-[color] duration-150 block truncate text-left">
                                 {o.event_name || '—'}
-                              </a>
+                              </button>
                             ) : (
                               <span className="font-semibold text-sm text-gray-900 block truncate">{o.event_name || '—'}</span>
                             )}
@@ -692,23 +805,20 @@ export default function OrdersClient({ initialOrders, initialTotal, initialTotal
                         <td className="px-3 py-3 whitespace-nowrap">
                           <div className="font-medium text-gray-900 text-xs tabular-nums">{fmtDate(o.order_date)}</div>
                           <div className="text-[11px] text-gray-400 tabular-nums mt-0.5">{fmtTime(o.order_date)}</div>
-                          {/* Inline action buttons for non-invoiced statuses */}
-                          {!isInvoiced && (
+                          {/* Inline action buttons for non-invoiced, non-confirmed statuses */}
+                          {!isInvoiced && !isConfirmed && o.status !== 'delivery_problem' && (
                             <div className="flex items-center gap-1 mt-2 flex-wrap">
-                              {(isConfirmed || o.status === 'delivery_problem') && (
-                                <button onClick={() => handleRecheck(o)}
-                                  disabled={recheckingId === o._id || !o.sync_id}
-                                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 transition-all">
-                                  <RotateCw className={`w-3 h-3 ${recheckingId === o._id ? 'animate-spin' : ''}`} />
-                                  {recheckingId === o._id ? 'Checking…' : 'Recheck'}
+                              {o.ticketmasterUrl && (<>
+                                <button onClick={() => openEvent(o.ticketmasterUrl!)}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 shadow-sm transition-all">
+                                  <ExternalLink className="w-3.5 h-3.5" /> Ticketmaster
                                 </button>
-                              )}
-                              {o.ticketmasterUrl && (
-                                <a href={o.ticketmasterUrl} target="_blank" rel="noopener noreferrer"
-                                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-200 transition-all">
-                                  <ExternalLink className="w-3 h-3" /> Event
-                                </a>
-                              )}
+                                <button onClick={() => copyUrl(o.ticketmasterUrl!)}
+                                  title="Copy event URL"
+                                  className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-bold shadow-sm transition-all ${copiedUrl === o.ticketmasterUrl ? 'bg-green-500 text-white' : 'bg-emerald-600 text-white hover:bg-emerald-700'}`}>
+                                  {copiedUrl === o.ticketmasterUrl ? <><ClipboardCheck className="w-3.5 h-3.5" /> Copied!</> : <><Copy className="w-3.5 h-3.5" /> Copy URL</>}
+                                </button>
+                              </>)}
                             </div>
                           )}
                         </td>
@@ -756,12 +866,17 @@ export default function OrdersClient({ initialOrders, initialTotal, initialTotal
                                 )}
                               </div>
                               <div className="flex items-center gap-2">
-                                {o.ticketmasterUrl && (
-                                  <a href={o.ticketmasterUrl} target="_blank" rel="noopener noreferrer"
-                                    className="px-3 py-1.5 rounded-md border border-gray-200 bg-white text-gray-600 hover:text-blue-700 hover:border-blue-200 hover:bg-blue-50 transition-all text-xs font-medium flex items-center gap-1.5">
-                                    <ExternalLink className="w-3 h-3" /> View Event
-                                  </a>
-                                )}
+                                {o.ticketmasterUrl && (<>
+                                  <button onClick={() => openEvent(o.ticketmasterUrl!)}
+                                    className="px-4 py-1.5 rounded-md bg-blue-600 text-white hover:bg-blue-700 transition-all text-sm font-bold flex items-center gap-1.5 shadow-sm">
+                                    <ExternalLink className="w-4 h-4" /> Ticketmaster
+                                  </button>
+                                  <button onClick={() => copyUrl(o.ticketmasterUrl!)}
+                                    title="Copy event URL"
+                                    className={`px-4 py-1.5 rounded-md text-sm font-bold flex items-center gap-1.5 shadow-sm transition-all ${copiedUrl === o.ticketmasterUrl ? 'bg-green-500 text-white' : 'bg-emerald-600 text-white hover:bg-emerald-700'}`}>
+                                    {copiedUrl === o.ticketmasterUrl ? <><ClipboardCheck className="w-4 h-4" /> Copied!</> : <><Copy className="w-4 h-4" /> Copy URL</>}
+                                  </button>
+                                </>)}
                                 {!o.acknowledged ? (
                                   <button onClick={() => handleAck(o._id)}
                                     className="px-3 py-1.5 rounded-md bg-amber-500 text-white hover:bg-amber-600 transition-[background-color] text-xs font-semibold flex items-center gap-1.5">
@@ -778,6 +893,60 @@ export default function OrdersClient({ initialOrders, initialTotal, initialTotal
                                     </button>
                                   </div>
                                 )}
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+
+                      {/* Action bar for confirmed / delivery_problem orders */}
+                      {(isConfirmed || o.status === 'delivery_problem') && (
+                        <tr>
+                          <td colSpan={7} className={`px-4 py-2.5 border-l-[3px] border-t ${
+                            o.status === 'delivery_problem'
+                              ? 'border-l-red-500 bg-red-50/20 border-t-red-200/50'
+                              : 'border-l-amber-500 bg-amber-50/20 border-t-amber-200/50'
+                          }`}>
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <button onClick={() => handleRecheck(o)}
+                                  disabled={recheckingId === o._id || recheckingAll || !o.sync_id}
+                                  className={`px-4 py-1.5 rounded-md text-sm font-bold flex items-center gap-1.5 shadow-sm transition-all disabled:opacity-50 ${
+                                    o.status === 'delivery_problem'
+                                      ? 'bg-red-600 text-white hover:bg-red-700'
+                                      : 'bg-amber-500 text-white hover:bg-amber-600'
+                                  }`}>
+                                  <RotateCw className={`w-4 h-4 ${recheckingId === o._id ? 'animate-spin' : ''}`} />
+                                  {recheckingId === o._id ? 'Checking…' : 'Recheck Status'}
+                                </button>
+                                {o.status === 'delivery_problem' && (
+                                  <span className="px-2.5 py-1 rounded-md bg-red-100 text-red-700 text-xs font-semibold flex items-center gap-1">
+                                    <AlertTriangle className="w-3 h-3" /> Delivery Issue
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2">
+                                {o.ticketmasterUrl && (<>
+                                  <button onClick={() => openEvent(o.ticketmasterUrl!)}
+                                    className="px-4 py-1.5 rounded-md bg-blue-600 text-white hover:bg-blue-700 transition-all text-sm font-bold flex items-center gap-1.5 shadow-sm">
+                                    <ExternalLink className="w-4 h-4" /> Ticketmaster
+                                  </button>
+                                  <button onClick={() => copyUrl(o.ticketmasterUrl!)}
+                                    title="Copy event URL"
+                                    className={`px-4 py-1.5 rounded-md text-sm font-bold flex items-center gap-1.5 shadow-sm transition-all ${copiedUrl === o.ticketmasterUrl ? 'bg-green-500 text-white' : 'bg-emerald-600 text-white hover:bg-emerald-700'}`}>
+                                    {copiedUrl === o.ticketmasterUrl ? <><ClipboardCheck className="w-4 h-4" /> Copied!</> : <><Copy className="w-4 h-4" /> Copy URL</>}
+                                  </button>
+                                </>)}
+                                <span className="text-[11px] text-gray-400 flex items-center gap-1">
+                                  <Clock className="w-3 h-3" />
+                                  {(() => {
+                                    const m = Math.round((Date.now() - new Date(o.order_date).getTime()) / 60000);
+                                    if (m < 60) return `Ordered ${m}m ago`;
+                                    const h = Math.round(m / 60);
+                                    if (h < 24) return `Ordered ${h}h ago`;
+                                    return `Ordered ${Math.round(h / 24)}d ago`;
+                                  })()}
+                                </span>
                               </div>
                             </div>
                           </td>
@@ -955,5 +1124,6 @@ export default function OrdersClient({ initialOrders, initialTotal, initialTotal
         </div>
       )}
     </div>
+    </>
   );
 }
