@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 export const dynamic = 'force-dynamic';
 
-const SYNC_API_BASE = 'https://app.seatscouts.com/sync/api';
+const SYNC_API_BASE = 'https://app.sync.automatiq.com/sync/api';
 
 async function recheckOne(syncId: number, companyId: string, apiToken: string) {
   const url = `${SYNC_API_BASE}/orders/${syncId}/recheck`;

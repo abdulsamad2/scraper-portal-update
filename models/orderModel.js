@@ -33,6 +33,16 @@ const orderSchema = new mongoose.Schema(
     pos_invoice_id: String,
     from_csv: Boolean,
     last_seen_internal_notes: String,
+    public_notes: String,
+    reason: String, // delivery problem reason
+    in_hand_date: Date,
+    inventory_tags: String,
+
+    // Customer / transfer info (from SeatScouts detail)
+    customer_name: String,
+    customer_email: String,
+    customer_phone: String,
+    transfer_to_email: String,
 
     // Local enrichment
     acknowledged: {

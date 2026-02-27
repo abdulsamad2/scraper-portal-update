@@ -8,7 +8,7 @@ import { Event } from '@/models/eventModel';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-const SYNC_API_BASE = 'https://app.seatscouts.com/sync/api';
+const SYNC_API_BASE = 'https://app.sync.automatiq.com/sync/api';
 const CONFIRMED_STATUSES = new Set(['confirmed', 'confirmed_delay', 'delivery_problem']);
 
 function escapeRegex(str: string) {
@@ -68,24 +68,47 @@ export async function GET() {
       return NextResponse.json({ error: 'SeatScouts API credentials not configured' }, { status: 500 });
     }
 
-    // Fetch orders from SeatScouts
-    const res = await fetch(`${SYNC_API_BASE}/orders?limit=200`, {
-      headers: {
-        'X-Company-Id': companyId,
-        'X-Api-Token': apiToken,
-      },
-      cache: 'no-store',
-      signal: AbortSignal.timeout(20000),
-    });
-    console.log(`[sync] SeatScouts API: ${Date.now() - t0}ms`);
+    // Fetch ALL orders from SeatScouts by paginating through the API
+    const PAGE_SIZE = 100;
+    const MAX_PAGES = 20; // safety limit
+    const headers = {
+      'X-Company-Id': companyId,
+      'X-Api-Token': apiToken,
+    };
 
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      return NextResponse.json({ error: `SeatScouts API error ${res.status}: ${text}` }, { status: 502 });
+    let orders: any[] = [];
+    let currentPage = 1;
+    let totalCount = 0;
+
+    while (currentPage <= MAX_PAGES) {
+      const res = await fetch(
+        `${SYNC_API_BASE}/orders?limit=${PAGE_SIZE}&page=${currentPage}`,
+        { headers, cache: 'no-store', signal: AbortSignal.timeout(20000) }
+      );
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        // If first page fails, return error. If later page fails, use what we have.
+        if (currentPage === 1) {
+          return NextResponse.json({ error: `SeatScouts API error ${res.status}: ${text}` }, { status: 502 });
+        }
+        console.warn(`[sync] Page ${currentPage} failed (${res.status}), using ${orders.length} orders fetched so far`);
+        break;
+      }
+
+      const data = await res.json();
+      const pageOrders = data.data || [];
+      totalCount = data.count || totalCount;
+
+      orders = orders.concat(pageOrders);
+
+      // Stop if we got fewer than PAGE_SIZE (last page) or fetched all
+      if (pageOrders.length < PAGE_SIZE || orders.length >= totalCount) {
+        break;
+      }
+      currentPage++;
     }
-
-    const data = await res.json();
-    const orders = data.data || [];
+    console.log(`[sync] SeatScouts API: ${Date.now() - t0}ms, ${orders.length} orders across ${currentPage} page(s) (total: ${totalCount})`);
 
     if (orders.length === 0) {
       return NextResponse.json({ synced: 0, newOrderIds: [], newOrders: [], unacknowledgedCount: 0 });
@@ -142,6 +165,14 @@ export async function GET() {
         pos_invoice_id: o.pos_invoice_id || '',
         from_csv: o.from_csv ?? false,
         last_seen_internal_notes: o.last_seen_internal_notes || '',
+        public_notes: o.public_notes || '',
+        reason: o.reason || '',
+        in_hand_date: o.in_hand_date ? new Date(o.in_hand_date) : null,
+        inventory_tags: o.inventory_tags || '',
+        customer_name: o.customer_name || '',
+        customer_email: o.customer_email || '',
+        customer_phone: o.customer_phone || '',
+        transfer_to_email: o.transfer_to_email || '',
       };
 
       if (shouldSetConfirmedAt) {

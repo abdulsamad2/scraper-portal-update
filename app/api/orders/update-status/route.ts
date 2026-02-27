@@ -4,7 +4,7 @@ import { Order } from '@/models/orderModel';
 
 export const dynamic = 'force-dynamic';
 
-const SYNC_API_BASE = 'https://app.seatscouts.com/sync/api';
+const SYNC_API_BASE = 'https://app.sync.automatiq.com/sync/api';
 
 export async function POST(req: NextRequest) {
   try {
