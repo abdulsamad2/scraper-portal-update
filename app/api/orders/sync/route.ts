@@ -195,7 +195,8 @@ export async function GET() {
       ).lean();
     }
 
-    const unacknowledgedCount = await Order.countDocuments({ acknowledged: false });
+    // Only count unacknowledged orders in alert-worthy statuses (invoiced/pending/problem)
+    const unacknowledgedCount = await Order.countDocuments({ acknowledged: false, status: { $in: ['invoiced', 'pending', 'problem'] } });
     console.log(`[sync] done: ${Date.now() - t0}ms total, ${orders.length} synced, ${newOrderIds.length} new`);
 
     return NextResponse.json({

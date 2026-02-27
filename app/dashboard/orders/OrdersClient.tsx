@@ -86,11 +86,11 @@ type TabKey = 'invoiced' | 'confirmed' | 'rejected' | 'delivery_issue' | 'delive
 
 function fmtDate(dt: string) {
   if (!dt) return '—';
-  return new Date(dt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  return new Date(dt).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
 }
 function fmtTime(dt: string) {
   if (!dt) return '';
-  return new Date(dt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  return new Date(dt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'UTC' });
 }
 
 function DeliveryBadge({ delivery }: { delivery: string }) {
@@ -136,6 +136,7 @@ export default function OrdersClient({ initialOrders, initialTotal, initialTotal
 
   const newIdsRef = useRef<Set<string>>(new Set());
   const hasSyncedRef = useRef(false);
+  const prevUnackRef = useRef(initialUnackCount);
   const { startAlert, stopAlert } = useOrderAlert();
   const [countdown, setCountdown] = useState(20);
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -195,7 +196,10 @@ export default function OrdersClient({ initialOrders, initialTotal, initialTotal
             if (o.ticketmasterUrl) window.open(o.ticketmasterUrl, '_blank');
           }
         }
-        startAlert();
+      }
+      // Update unackCount from sync response (scoped to invoiced/pending/problem)
+      if (data.unacknowledgedCount !== undefined) {
+        setUnackCount(data.unacknowledgedCount);
       }
       setLastSync(new Date());
       hasSyncedRef.current = true;
@@ -204,7 +208,7 @@ export default function OrdersClient({ initialOrders, initialTotal, initialTotal
     // Refresh current page + tab counts after sync
     const [, counts] = await Promise.all([fetchOrders(), getOrderTabCounts()]);
     setTabCounts(counts);
-  }, [fetchOrders, startAlert]);
+  }, [fetchOrders]);
 
   // Initial sync after mount (data already loaded server-side, just kick off first sync)
   useEffect(() => {
@@ -213,10 +217,22 @@ export default function OrdersClient({ initialOrders, initialTotal, initialTotal
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Ring when unacknowledged orders exist (but not before first sync completes)
+  // Alert logic (only for invoiced/pending/problem unacknowledged orders):
+  // - unackCount drops to 0 → stop bell (all acknowledged or moved to other status)
+  // - unackCount increases after first sync → new invoiced orders arrived, start bell
+  // - unackCount decreases but > 0 → some moved out of invoiced, keep bell if still unack
   useEffect(() => {
-    if (unackCount === 0) { newIdsRef.current.clear(); stopAlert(); }
-    else if (hasSyncedRef.current) startAlert();
+    if (unackCount === 0) {
+      newIdsRef.current.clear();
+      stopAlert();
+    } else if (hasSyncedRef.current) {
+      // Start bell if count went up (new invoiced orders) or stayed > 0
+      if (unackCount > prevUnackRef.current || prevUnackRef.current === 0) {
+        startAlert();
+      }
+      // If count decreased but still > 0, keep current state (bell stays if running)
+    }
+    prevUnackRef.current = unackCount;
     return () => stopAlert();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [unackCount]);
@@ -516,7 +532,7 @@ export default function OrdersClient({ initialOrders, initialTotal, initialTotal
         <div className="flex items-center bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
           <span className="text-sm font-medium text-amber-800 flex items-center gap-2">
             <Bell className="w-4 h-4 animate-pulse" />
-            <span><span className="font-bold">{unackCount}</span> unacknowledged order{unackCount > 1 ? 's' : ''} — alert ringing</span>
+            <span><span className="font-bold">{unackCount}</span> unacknowledged invoiced order{unackCount > 1 ? 's' : ''} — alert ringing</span>
           </span>
         </div>
       )}

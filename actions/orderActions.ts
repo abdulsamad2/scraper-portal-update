@@ -2,6 +2,7 @@
 
 import dbConnect from '@/lib/dbConnect';
 import { Order } from '@/models/orderModel';
+import { Event } from '@/models/eventModel';
 import { revalidatePath } from 'next/cache';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -71,11 +72,28 @@ export async function getPaginatedOrders(
   const [orders, total, unacknowledgedCount] = await Promise.all([
     Order.find(query).sort(sort).skip(skip).limit(limit).lean(),
     Order.countDocuments(query),
-    Order.countDocuments({ acknowledged: false }),
+    // Only count unacknowledged orders in invoiced/pending/problem (alert-worthy statuses)
+    Order.countDocuments({ acknowledged: false, status: { $in: ['invoiced', 'pending', 'problem'] } }),
   ]);
 
+  // Enrich orders with correct Event_DateTime from linked portal events
+  const portalIds = orders.map((o: any) => o.portalEventId).filter(Boolean);
+  let eventDateMap: Record<string, string> = {};
+  if (portalIds.length > 0) {
+    const events = await Event.find({ _id: { $in: portalIds } }, { Event_DateTime: 1 }).lean();
+    for (const ev of events) {
+      eventDateMap[String(ev._id)] = (ev as any).Event_DateTime;
+    }
+  }
+  const enriched = orders.map((o: any) => {
+    if (o.portalEventId && eventDateMap[String(o.portalEventId)]) {
+      o.occurs_at = eventDateMap[String(o.portalEventId)];
+    }
+    return o;
+  });
+
   return JSON.parse(JSON.stringify({
-    orders,
+    orders: enriched,
     total,
     page,
     totalPages: Math.ceil(total / limit),
