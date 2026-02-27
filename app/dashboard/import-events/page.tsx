@@ -5,7 +5,7 @@ import { createEvent } from '@/actions/eventActions';
 import Image from 'next/image';
 import {
   Search, Import, Calendar, MapPin, ChevronLeft, ChevronRight,
-  Loader2, Check, X, ExternalLink, DollarSign, TrendingUp, Flame,
+  Loader2, Check, X, ExternalLink, DollarSign, Flame,
   Package, RefreshCw, ChevronDown, ChevronUp, Shield, Ticket,
   Users, Music, AlertTriangle, Twitter, Instagram, Globe,
 } from 'lucide-react';

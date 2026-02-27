@@ -17,7 +17,6 @@ export default function GlobalOrderAlert() {
   const isOrdersPage = pathname === '/dashboard/orders';
 
   const [unackCount, setUnackCount] = useState(0);
-  const [newOrderCount, setNewOrderCount] = useState(0);
   const [showModal, setShowModal] = useState(false);
   const hasSyncedRef = useRef(false);
   const prevUnackRef = useRef(0);
