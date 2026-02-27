@@ -40,6 +40,7 @@ const orderSchema = new mongoose.Schema(
       default: false,
     },
     acknowledgedAt: Date,
+    confirmedAt: Date,
     portalEventId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Event",
@@ -70,6 +71,7 @@ orderSchema.index({ occurs_at: -1 });
 orderSchema.index({ event_name: 1 });
 orderSchema.index({ status: 1, order_date: -1 });
 orderSchema.index({ hasIssue: 1, status: 1 });
+orderSchema.index({ confirmedAt: 1, order_date: 1, status: 1 });
 
 export const Order =
   mongoose.models.Order || mongoose.model("Order", orderSchema);

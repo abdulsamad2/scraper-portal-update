@@ -6,7 +6,7 @@ import { getAllEvents } from '@/actions/eventActions';
 import { getConsecutiveGroupsPaginated } from '@/actions/seatActions';
 import { getAutoDeleteSettings, getAutoDeletePreview } from '@/actions/csvActions';
 import { getLastDeletedEvents } from '@/actions/autoDeleteActions';
-import { getMonthlyStats } from '@/actions/orderActions';
+import { getMonthlyStats, getProcessingTimeStats } from '@/actions/orderActions';
 import { 
   Calendar,
   Package,
@@ -15,8 +15,6 @@ import {
   TrendingUp,
   Plus,
   Download,
-  BarChart3,
-  MousePointer2,
   Filter,
   Trash2,
   Clock,
@@ -127,8 +125,6 @@ export default function DashboardPage() {
     loading: true,
   });
 
-  const [chartMode, setChartMode] = useState<'time' | 'scatter'>('time');
-  const [hoveredBar, setHoveredBar] = useState<number | null>(null);
   const [autoDeleteInfo, setAutoDeleteInfo] = useState<AutoDeleteInfo>({
     isEnabled: false,
     stopBeforeHours: 2,
@@ -145,6 +141,19 @@ export default function DashboardPage() {
   const [orderStats, setOrderStats] = useState<{ totalOrders: number; delivered: number; rejected: number; pending: number; fulfillRate: number; loading: boolean }>({
     totalOrders: 0, delivered: 0, rejected: 0, pending: 0, fulfillRate: 0, loading: true,
   });
+  const [procTime, setProcTime] = useState<{
+    data: Array<{ label: string; avgMinutes: number; medianMinutes: number; count: number; minMinutes: number; maxMinutes: number }>;
+    orders?: Array<{ order_id: string; event_name: string; minutes: number; day: number; section: string; row: string; quantity: number }>;
+    overallAvgMinutes: number;
+    totalOrders: number;
+    excludedCount: number;
+    loading: boolean;
+  }>({ data: [], overallAvgMinutes: 0, totalOrders: 0, excludedCount: 0, loading: true });
+  const [procView, setProcView] = useState<'daily' | 'weekly' | 'monthly'>('daily');
+  const [procMonth, setProcMonth] = useState(() => new Date().getMonth() + 1);
+  const [procYear, setProcYear] = useState(() => new Date().getFullYear());
+  const [hoveredProcBar, setHoveredProcBar] = useState<number | null>(null);
+  const [hoveredDot, setHoveredDot] = useState<number | null>(null);
 
   useEffect(() => {
     async function fetchData() {
@@ -260,6 +269,21 @@ export default function DashboardPage() {
     }
     fetchOrderStats();
   }, []);
+
+  // Fetch processing time stats
+  useEffect(() => {
+    async function fetchProcTime() {
+      try {
+        setProcTime(prev => ({ ...prev, loading: true }));
+        const result = await getProcessingTimeStats(procYear, procMonth, procView);
+        setProcTime({ ...result, loading: false });
+      } catch (err) {
+        console.error('Error loading processing time stats:', err);
+        setProcTime(prev => ({ ...prev, loading: false }));
+      }
+    }
+    fetchProcTime();
+  }, [procYear, procMonth, procView]);
 
   // Calculate events created in the last 7 days
   const calculateWeeklyEvents = (events: EventDoc[]) => {
@@ -582,247 +606,369 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Weekly Events Chart & Quick Actions */}
+      {/* Processing Time Chart & Quick Actions */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Weekly Events & Seats Trends Chart */}
+        {/* Order Processing Time Chart */}
         <div className="lg:col-span-2">
           <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-            <div className="flex items-center justify-between mb-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-5 gap-3">
               <div>
-                <h3 className="text-lg font-semibold text-slate-800">Weekly Trends</h3>
-                <p className="text-sm text-slate-500 mt-1">Events and seats data from past 7 days</p>
+                <h3 className="text-lg font-semibold text-slate-800">Order Processing Time</h3>
+                <p className="text-sm text-slate-500 mt-0.5">Invoiced to confirmed (under 60 min only)</p>
               </div>
-              <div className="flex items-center space-x-4">
-                <div className="flex items-center space-x-2 bg-slate-100 rounded-lg p-1">
-                  <button
-                    onClick={() => setChartMode('time')}
-                    className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${
-                      chartMode === 'time'
-                        ? 'bg-white text-slate-700 shadow-sm'
-                        : 'text-slate-500 hover:text-slate-700'
-                    }`}
+              <div className="flex items-center flex-wrap gap-2">
+                {/* Daily / Weekly / Monthly toggle */}
+                <div className="flex items-center bg-slate-100 rounded-lg p-0.5">
+                  {(['daily', 'weekly', 'monthly'] as const).map((v) => (
+                    <button
+                      key={v}
+                      onClick={() => setProcView(v)}
+                      className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+                        procView === v
+                          ? 'bg-white text-slate-800 shadow-sm'
+                          : 'text-slate-500 hover:text-slate-700'
+                      }`}
+                    >
+                      {v.charAt(0).toUpperCase() + v.slice(1)}
+                    </button>
+                  ))}
+                </div>
+                {/* Month selector (daily only) */}
+                {procView === 'daily' && (
+                  <select
+                    value={procMonth}
+                    onChange={(e) => setProcMonth(Number(e.target.value))}
+                    className="text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   >
-                    <BarChart3 className="w-3 h-3 mr-1 inline" />
-                    Timeline
-                  </button>
-                  <button
-                    onClick={() => setChartMode('scatter')}
-                    className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${
-                      chartMode === 'scatter'
-                        ? 'bg-white text-slate-700 shadow-sm'
-                        : 'text-slate-500 hover:text-slate-700'
-                    }`}
-                  >
-                    <MousePointer2 className="w-3 h-3 mr-1 inline" />
-                    Scatter
-                  </button>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <div className="w-3 h-3 bg-gradient-to-r from-blue-500 to-blue-600 rounded-full"></div>
-                  <span className="text-sm text-slate-600">Events</span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <div className="w-3 h-3 bg-gradient-to-r from-emerald-500 to-emerald-600 rounded-full"></div>
-                  <span className="text-sm text-slate-600">Seats</span>
-                </div>
+                    {['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'].map((m, i) => (
+                      <option key={i} value={i + 1}>{m}</option>
+                    ))}
+                  </select>
+                )}
+                <select
+                  value={procYear}
+                  onChange={(e) => setProcYear(Number(e.target.value))}
+                  className="text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  {[2024, 2025, 2026].map((y) => (
+                    <option key={y} value={y}>{y}</option>
+                  ))}
+                </select>
               </div>
             </div>
-            
-            {stats.loading ? (
-              <div className="space-y-4">
-                <div className="animate-pulse">
-                  <div className="flex items-end space-x-3 h-64">
-                    {[1, 2, 3, 4, 5, 6, 7].map((i) => {
-                      // Fixed heights to prevent hydration mismatch
-                      const heights = [
-                        [80, 120], [95, 140], [70, 100], [110, 160],
-                        [85, 130], [75, 110], [90, 150]
-                      ];
-                      const [height1, height2] = heights[i - 1];
-                      return (
-                        <div key={i} className="flex-1 space-y-2">
-                          <div className="bg-slate-200 rounded-t" style={{ height: `${height1}px` }}></div>
-                          <div className="bg-slate-200 rounded-t" style={{ height: `${height2}px` }}></div>
-                        </div>
-                      );
-                    })}
-                  </div>
+
+            {procTime.loading ? (
+              <div className="animate-pulse space-y-4">
+                <div className="flex items-end gap-1 h-48 px-2">
+                  {Array.from({ length: 12 }).map((_, i) => (
+                    <div key={i} className="flex-1 bg-gradient-to-t from-slate-100 to-slate-50 rounded-full" style={{ height: `${50 + Math.sin(i) * 40}px` }} />
+                  ))}
+                </div>
+                <div className="flex gap-3">
+                  {[1,2,3].map(i => <div key={i} className="flex-1 h-14 bg-slate-50 rounded-xl" />)}
                 </div>
               </div>
-            ) : chartMode === 'time' ? (
-              <div className="space-y-6">
-                <div className="relative">
-                  {/* Y-axis labels */}
-                  <div className="absolute left-0 top-0 bottom-16 w-8 flex flex-col justify-between text-xs text-slate-400">
-                    <span>{Math.max(...stats.weeklyEventsData.map(d => Math.max(d.count, d.seats)))}</span>
-                    <span>{Math.floor(Math.max(...stats.weeklyEventsData.map(d => Math.max(d.count, d.seats))) / 2)}</span>
-                    <span>0</span>
-                  </div>
-                  
-                  {/* Chart area */}
-                  <div className="ml-10 border-l border-b border-slate-200">
-                    <div className="flex items-end space-x-3 h-64 px-4 pb-2">
-                      {stats.weeklyEventsData.map((day, index) => {
-                        const maxValue = Math.max(...stats.weeklyEventsData.map(d => Math.max(d.count, d.seats)), 1);
-                        const eventsHeight = (day.count / maxValue) * 240;
-                        const seatsHeight = (day.seats / maxValue) * 240;
-                        const isHovered = hoveredBar === index;
-                        
-                        return (
-                          <div 
-                            key={index} 
-                            className="flex-1 flex flex-col items-center relative group cursor-pointer"
-                            onMouseEnter={() => setHoveredBar(index)}
-                            onMouseLeave={() => setHoveredBar(null)}
-                          >
-                            <div className="w-full flex space-x-1 items-end relative">
-                              {/* Events Bar */}
-                              <div 
-                                className={`flex-1 bg-gradient-to-t from-blue-500 to-blue-400 rounded-t-lg transition-all duration-300 relative ${
-                                  isHovered ? 'from-blue-600 to-blue-500 shadow-lg scale-105' : 'hover:from-blue-600 hover:to-blue-500'
-                                }`}
-                                style={{ height: `${Math.max(eventsHeight, 8)}px` }}
-                              >
-                                {isHovered && (
-                                  <div className="absolute -top-12 left-1/2 transform -translate-x-1/2 bg-slate-800 text-white text-xs px-3 py-2 rounded-lg shadow-lg z-10 whitespace-nowrap">
-                                    <div className="font-semibold">{day.count} Events</div>
-                                    <div className="text-slate-300">{day.day}</div>
-                                    <div className="absolute top-full left-1/2 transform -translate-x-1/2 w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-slate-800"></div>
-                                  </div>
-                                )}
-                              </div>
-                              
-                              {/* Seats Bar */}
-                              <div 
-                                className={`flex-1 bg-gradient-to-t from-emerald-500 to-emerald-400 rounded-t-lg transition-all duration-300 relative ${
-                                  isHovered ? 'from-emerald-600 to-emerald-500 shadow-lg scale-105' : 'hover:from-emerald-600 hover:to-emerald-500'
-                                }`}
-                                style={{ height: `${Math.max(seatsHeight, 8)}px` }}
-                              >
-                                {isHovered && (
-                                  <div className="absolute -top-12 left-1/2 transform -translate-x-1/2 bg-slate-800 text-white text-xs px-3 py-2 rounded-lg shadow-lg z-10 whitespace-nowrap">
-                                    <div className="font-semibold">{day.seats.toLocaleString()} Seats</div>
-                                    <div className="text-slate-300">{day.day}</div>
-                                    <div className="absolute top-full left-1/2 transform -translate-x-1/2 w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-slate-800"></div>
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                            
-                            <div className="mt-3 text-center">
-                              <div className={`text-xs font-medium transition-colors ${isHovered ? 'text-slate-800' : 'text-slate-600'}`}>
-                                {day.day}
-                              </div>
-                              <div className="text-xs text-slate-400 mt-1">
-                                {day.count}E · {day.seats}S
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                    
-                    {/* X-axis label */}
-                    <div className="text-center mt-2 text-xs font-medium text-slate-500">
-                      Days of the Week
-                    </div>
-                  </div>
-                  
-                  {/* Y-axis label */}
-                  <div className="absolute -left-8 top-1/2 transform -translate-y-1/2 -rotate-90 text-xs font-medium text-slate-500 whitespace-nowrap">
-                    Count
-                  </div>
+            ) : procTime.totalOrders === 0 ? (
+              <div className="text-center py-14">
+                <div className="w-14 h-14 bg-violet-50 rounded-2xl flex items-center justify-center mx-auto mb-3">
+                  <Timer className="w-7 h-7 text-violet-300" />
                 </div>
-                
-                {/* Summary Stats */}
-                <div className="bg-gradient-to-r from-slate-50 to-slate-100 rounded-xl p-4">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="text-center">
-                      <div className="text-2xl font-bold text-blue-600">
-                        {stats.weeklyEventsData.reduce((sum, day) => sum + day.count, 0)}
-                      </div>
-                      <div className="text-sm text-slate-600">Total Events This Week</div>
-                    </div>
-                    <div className="text-center">
-                      <div className="text-2xl font-bold text-emerald-600">
-                        {stats.weeklyEventsData.reduce((sum, day) => sum + day.seats, 0).toLocaleString()}
-                      </div>
-                      <div className="text-sm text-slate-600">Total Seats Added</div>
-                    </div>
-                  </div>
-                </div>
+                <p className="text-slate-600 font-medium">No processing data yet</p>
+                <p className="text-slate-400 text-sm mt-1">Confirmed orders will show up here</p>
               </div>
             ) : (
-              // Scatter plot view: Events vs Seats
-              <div className="space-y-6">
-                <div className="relative">
-                  {/* Y-axis labels */}
-                  <div className="absolute left-0 top-0 bottom-16 w-12 flex flex-col justify-between text-xs text-slate-400">
-                    <span>{Math.max(...stats.weeklyEventsData.map(d => d.seats))}</span>
-                    <span>{Math.floor(Math.max(...stats.weeklyEventsData.map(d => d.seats)) / 2)}</span>
-                    <span>0</span>
+              <div className="space-y-4">
+                {/* Inline stats row */}
+                <div className="flex items-center gap-6 text-sm">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-lg bg-violet-100 flex items-center justify-center">
+                      <Clock className="w-4 h-4 text-violet-600" />
+                    </div>
+                    <div>
+                      <div className="font-bold text-violet-700 tabular-nums leading-tight">
+                        {(() => { const m = procTime.overallAvgMinutes; return m >= 60 ? `${(m / 60).toFixed(1)}h` : `${m}m`; })()}
+                      </div>
+                      <div className="text-[10px] text-slate-400">avg time</div>
+                    </div>
                   </div>
-                  
-                  {/* Chart area */}
-                  <div className="ml-14 border-l border-b border-slate-200 relative">
-                    <div className="h-64 p-4 relative">
-                      {stats.weeklyEventsData.map((day, index) => {
-                        const maxEvents = Math.max(...stats.weeklyEventsData.map(d => d.count), 1);
-                        const maxSeats = Math.max(...stats.weeklyEventsData.map(d => d.seats), 1);
-                        const x = (day.count / maxEvents) * 90; // 90% of width for positioning
-                        const y = (day.seats / maxSeats) * 90; // 90% of height for positioning
-                        const isHovered = hoveredBar === index;
-                        
-                        return (
-                          <div
-                            key={index}
-                            className={`absolute w-6 h-6 bg-gradient-to-br from-purple-500 to-purple-600 rounded-full cursor-pointer transition-all duration-300 ${
-                              isHovered ? 'scale-150 shadow-lg from-purple-600 to-purple-700' : 'hover:scale-125'
-                            }`}
-                            style={{
-                              left: `${x}%`,
-                              bottom: `${y}%`,
-                              transform: 'translate(-50%, 50%)'
-                            }}
-                            onMouseEnter={() => setHoveredBar(index)}
-                            onMouseLeave={() => setHoveredBar(null)}
-                          >
-                            {isHovered && (
-                              <div className="absolute -top-16 left-1/2 transform -translate-x-1/2 bg-slate-800 text-white text-xs px-3 py-2 rounded-lg shadow-lg z-10 whitespace-nowrap">
-                                <div className="font-semibold">{day.day}</div>
-                                <div className="text-slate-300">{day.count} Events</div>
-                                <div className="text-slate-300">{day.seats} Seats</div>
-                                <div className="absolute top-full left-1/2 transform -translate-x-1/2 w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-slate-800"></div>
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center">
+                      <ShoppingCart className="w-4 h-4 text-blue-500" />
+                    </div>
+                    <div>
+                      <div className="font-bold text-blue-600 tabular-nums leading-tight">{procTime.totalOrders}</div>
+                      <div className="text-[10px] text-slate-400">orders</div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center">
+                      <TrendingUp className="w-4 h-4 text-emerald-500" />
+                    </div>
+                    <div>
+                      <div className="font-bold text-emerald-600 tabular-nums leading-tight">
+                        {(() => { const w = procTime.data.filter(d => d.count > 0); if (!w.length) return '-'; const f = Math.min(...w.map(d => d.avgMinutes)); return f >= 60 ? `${(f / 60).toFixed(1)}h` : `${f}m`; })()}
+                      </div>
+                      <div className="text-[10px] text-slate-400">best avg</div>
+                    </div>
+                  </div>
+                  {procTime.excludedCount > 0 && (
+                    <div className="flex items-center gap-1.5 ml-auto text-[10px] text-slate-400">
+                      <AlertTriangle className="w-3 h-3" />
+                      {procTime.excludedCount} excluded (&gt;60m)
+                    </div>
+                  )}
+                </div>
+
+                {/* Chart area */}
+                {(() => {
+                  const fmtMin = (m: number) => {
+                    if (m >= 60) return `${(m / 60).toFixed(1)}h`;
+                    if (m >= 1) return `${m.toFixed(1)}m`;
+                    if (m > 0) return `${Math.round(m * 60)}s`;
+                    return '0';
+                  };
+                  const chartH = 220;
+
+                  // Daily view: scatter plot with individual order dots
+                  if (procView === 'daily' && procTime.orders && procTime.orders.length > 0) {
+                    const orders = procTime.orders;
+                    const maxMin = Math.max(...orders.map(o => o.minutes), 1);
+                    const daysInMonth = new Date(procYear, procMonth, 0).getDate();
+                    // Color based on speed: green (<5m), blue (5-15m), amber (15-30m), rose (30-60m)
+                    const dotColor = (m: number) => {
+                      if (m <= 5) return { bg: 'rgba(16,185,129,0.7)', border: 'rgba(16,185,129,1)', glow: 'rgba(16,185,129,0.3)' };
+                      if (m <= 15) return { bg: 'rgba(99,102,241,0.7)', border: 'rgba(99,102,241,1)', glow: 'rgba(99,102,241,0.3)' };
+                      if (m <= 30) return { bg: 'rgba(245,158,11,0.7)', border: 'rgba(245,158,11,1)', glow: 'rgba(245,158,11,0.3)' };
+                      return { bg: 'rgba(244,63,94,0.7)', border: 'rgba(244,63,94,1)', glow: 'rgba(244,63,94,0.3)' };
+                    };
+
+                    return (
+                      <div className="relative rounded-xl bg-gradient-to-b from-slate-50/80 to-white pt-3 pb-1 px-2">
+                        {/* Color legend */}
+                        <div className="flex items-center gap-3 mb-3 ml-10 text-[10px] text-slate-400">
+                          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" /> &lt;5m</span>
+                          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-indigo-500 inline-block" /> 5-15m</span>
+                          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500 inline-block" /> 15-30m</span>
+                          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-500 inline-block" /> 30-60m</span>
+                        </div>
+                        {/* Y-axis labels */}
+                        <div className="absolute left-2 top-12 w-8 flex flex-col justify-between text-[9px] text-slate-300 tabular-nums text-right pointer-events-none" style={{ height: `${chartH}px` }}>
+                          <span>{fmtMin(maxMin)}</span>
+                          <span>{fmtMin(maxMin * 0.75)}</span>
+                          <span>{fmtMin(maxMin * 0.5)}</span>
+                          <span>{fmtMin(maxMin * 0.25)}</span>
+                          <span>0</span>
+                        </div>
+
+                        {/* Scatter area */}
+                        <div className="ml-10 mr-1 relative" style={{ height: `${chartH}px` }}>
+                          {/* Grid lines */}
+                          {[0, 0.25, 0.5, 0.75, 1].map((pct) => (
+                            <div
+                              key={pct}
+                              className="absolute left-0 right-0 border-t border-dashed border-slate-100"
+                              style={{ top: `${pct * chartH}px` }}
+                            />
+                          ))}
+
+                          {/* Average line */}
+                          {procTime.overallAvgMinutes > 0 && procTime.overallAvgMinutes <= maxMin && (
+                            <div
+                              className="absolute left-0 right-0 z-10 flex items-center pointer-events-none"
+                              style={{ bottom: `${(procTime.overallAvgMinutes / maxMin) * chartH}px` }}
+                            >
+                              <div className="flex-1 border-t-2 border-violet-200" style={{ borderStyle: 'dashed' }} />
+                              <span className="text-[9px] font-medium text-violet-500 bg-violet-50/80 px-1.5 py-0.5 rounded ml-1 whitespace-nowrap">
+                                avg {fmtMin(procTime.overallAvgMinutes)}
+                              </span>
+                            </div>
+                          )}
+
+                          {/* Day column separators (subtle) */}
+                          {Array.from({ length: daysInMonth + 1 }).map((_, i) => (
+                            <div
+                              key={i}
+                              className="absolute top-0 bottom-0 border-l border-slate-50"
+                              style={{ left: `${(i / daysInMonth) * 100}%` }}
+                            />
+                          ))}
+
+                          {/* Order dots */}
+                          {orders.map((order, idx) => {
+                            const xPct = ((order.day - 0.5) / daysInMonth) * 100;
+                            const yPct = (order.minutes / maxMin) * chartH;
+                            const colors = dotColor(order.minutes);
+                            const isHovered = hoveredDot === idx;
+                            // Add slight horizontal jitter for overlapping dots on same day
+                            const sameDay = orders.filter(o => o.day === order.day);
+                            const posInDay = sameDay.indexOf(order);
+                            const jitter = sameDay.length > 1 ? (posInDay - (sameDay.length - 1) / 2) * 1.2 : 0;
+
+                            return (
+                              <div
+                                key={idx}
+                                className="absolute z-20 transition-all duration-150"
+                                style={{
+                                  left: `calc(${xPct}% + ${jitter}px)`,
+                                  bottom: `${yPct}px`,
+                                  transform: `translate(-50%, 50%) ${isHovered ? 'scale(1.6)' : 'scale(1)'}`,
+                                }}
+                                onMouseEnter={() => setHoveredDot(idx)}
+                                onMouseLeave={() => setHoveredDot(null)}
+                              >
+                                <div
+                                  className="w-[10px] h-[10px] rounded-full cursor-pointer"
+                                  style={{
+                                    background: colors.bg,
+                                    border: `1.5px solid ${colors.border}`,
+                                    boxShadow: isHovered ? `0 0 10px ${colors.glow}, 0 0 20px ${colors.glow}` : `0 1px 3px ${colors.glow}`,
+                                  }}
+                                />
+                                {/* Tooltip */}
+                                {isHovered && (
+                                  <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-40 pointer-events-none">
+                                    <div className="bg-white/95 backdrop-blur text-slate-700 text-[11px] px-3 py-2.5 rounded-xl shadow-xl border border-slate-200/80 whitespace-nowrap min-w-[160px]">
+                                      <div className="font-bold text-sm mb-1" style={{ color: colors.border }}>{fmtMin(order.minutes)}</div>
+                                      <div className="text-slate-600 font-medium text-[11px] truncate max-w-[200px]">{order.event_name || 'Unknown event'}</div>
+                                      <div className="text-slate-400 text-[10px] mt-0.5 space-y-0.5">
+                                        <div>Order: {order.order_id}</div>
+                                        {order.section && <div>Sec {order.section}{order.row ? ` / Row ${order.row}` : ''}</div>}
+                                        {order.quantity > 0 && <div>Qty: {order.quantity}</div>}
+                                      </div>
+                                    </div>
+                                    <div className="flex justify-center">
+                                      <div className="w-2 h-2 bg-white border-b border-r border-slate-200/80 rotate-45 -mt-1" />
+                                    </div>
+                                  </div>
+                                )}
                               </div>
-                            )}
+                            );
+                          })}
+                        </div>
+
+                        {/* X-axis day labels */}
+                        <div className="ml-10 mr-1 flex mt-2">
+                          {Array.from({ length: daysInMonth }).map((_, i) => {
+                            const day = i + 1;
+                            const showLabel = daysInMonth > 20 ? day % 5 === 0 || day === 1 : day % 3 === 0 || day === 1;
+                            return (
+                              <div key={i} className="flex-1 text-center">
+                                <span className={`text-[9px] tabular-nums ${showLabel ? 'text-slate-400' : 'text-transparent'}`}>
+                                  {day}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  // Weekly / Monthly: bar chart
+                  const maxMin = Math.max(...procTime.data.map(d => d.avgMinutes), 0.1);
+                  return (
+                    <div className="relative bg-gradient-to-b from-slate-50/50 to-white rounded-xl pt-3 pb-1 px-2">
+                      {/* Y-axis labels */}
+                      <div className="absolute left-2 top-3 bottom-6 w-8 flex flex-col justify-between text-[9px] text-slate-300 tabular-nums text-right pointer-events-none">
+                        <span>{fmtMin(maxMin)}</span>
+                        <span>{fmtMin(maxMin / 2)}</span>
+                        <span>0</span>
+                      </div>
+
+                      {/* Grid lines */}
+                      <div className="ml-10 mr-1 relative" style={{ height: `${chartH}px` }}>
+                        {[0, 0.5, 1].map((pct) => (
+                          <div
+                            key={pct}
+                            className="absolute left-0 right-0 border-t border-dashed border-slate-100"
+                            style={{ top: `${pct * chartH}px` }}
+                          />
+                        ))}
+
+                        {/* Average line */}
+                        {procTime.overallAvgMinutes > 0 && procTime.overallAvgMinutes <= maxMin && (
+                          <div
+                            className="absolute left-0 right-0 z-10 flex items-center"
+                            style={{ bottom: `${(procTime.overallAvgMinutes / maxMin) * chartH}px` }}
+                          >
+                            <div className="flex-1 border-t border-violet-300" style={{ borderStyle: 'dashed' }} />
+                            <span className="text-[9px] font-medium text-violet-500 bg-violet-50 px-1.5 py-0.5 rounded ml-1 whitespace-nowrap">
+                              avg {fmtMin(procTime.overallAvgMinutes)}
+                            </span>
                           </div>
-                        );
-                      })}
+                        )}
+
+                        {/* Bars */}
+                        <div className="flex items-end h-full gap-3">
+                          {procTime.data.map((bar, index) => {
+                            const pct = bar.avgMinutes / maxMin;
+                            const barH = pct * chartH;
+                            const isHovered = hoveredProcBar === index;
+                            const hasData = bar.count > 0;
+                            const opacity = hasData ? 0.4 + pct * 0.6 : 0;
+
+                            return (
+                              <div
+                                key={index}
+                                className="flex-1 flex flex-col items-center relative"
+                                onMouseEnter={() => setHoveredProcBar(index)}
+                                onMouseLeave={() => setHoveredProcBar(null)}
+                                style={{ cursor: hasData ? 'pointer' : 'default' }}
+                              >
+                                <div
+                                  className={`w-full transition-all duration-200 rounded-t-md ${isHovered && hasData ? 'scale-x-110' : ''}`}
+                                  style={{
+                                    height: `${hasData ? Math.max(barH, 2) : 0}px`,
+                                    background: hasData
+                                      ? `linear-gradient(to top, rgba(124,58,237,${opacity}), rgba(139,92,246,${opacity * 0.7}))`
+                                      : 'transparent',
+                                    boxShadow: isHovered && hasData ? '0 -4px 12px rgba(124,58,237,0.2)' : 'none',
+                                  }}
+                                >
+                                  {isHovered && hasData && (
+                                    <div className="absolute -top-[76px] left-1/2 -translate-x-1/2 z-30 pointer-events-none">
+                                      <div className="bg-white text-slate-700 text-[11px] px-3 py-2 rounded-lg shadow-lg border border-slate-200 whitespace-nowrap">
+                                        <div className="font-semibold text-violet-700 text-xs mb-0.5">{fmtMin(bar.avgMinutes)}</div>
+                                        <div className="text-slate-500 space-x-2">
+                                          <span>{bar.count} order{bar.count !== 1 ? 's' : ''}</span>
+                                          <span className="text-slate-300">|</span>
+                                          <span>med {fmtMin(bar.medianMinutes)}</span>
+                                        </div>
+                                        <div className="text-slate-400 text-[10px]">
+                                          {fmtMin(bar.minMinutes)}~{fmtMin(bar.maxMinutes)}
+                                        </div>
+                                      </div>
+                                      <div className="flex justify-center -mt-[1px]">
+                                        <div className="w-2 h-2 bg-white border-b border-r border-slate-200 rotate-45 -mt-1" />
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                                {!hasData && <div className="w-1 h-1 rounded-full bg-slate-200 mb-0" />}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* X-axis labels */}
+                      <div className="ml-10 mr-1 flex mt-1.5 gap-3">
+                        {procTime.data.map((bar, index) => {
+                          const isHovered = hoveredProcBar === index;
+                          return (
+                            <div key={index} className="flex-1 text-center overflow-hidden">
+                              <span className={`text-[9px] tabular-nums transition-all ${
+                                isHovered ? 'text-violet-600 font-semibold' : 'text-slate-300'
+                              }`}>
+                                {bar.label}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
-                    
-                    {/* X-axis label */}
-                    <div className="text-center mt-2 text-xs font-medium text-slate-500">
-                      Number of Events
-                    </div>
-                  </div>
-                  
-                  {/* Y-axis label */}
-                  <div className="absolute -left-10 top-1/2 transform -translate-y-1/2 -rotate-90 text-xs font-medium text-slate-500 whitespace-nowrap">
-                    Number of Seats
-                  </div>
-                </div>
-                
-                {/* Scatter plot explanation */}
-                <div className="bg-gradient-to-r from-purple-50 to-violet-50 rounded-xl p-4">
-                  <div className="text-center">
-                    <div className="text-sm font-medium text-purple-800 mb-2">
-                      Events vs Seats Correlation
-                    </div>
-                    <div className="text-xs text-purple-600">
-                      Each point represents a day of the week. Position shows the relationship between number of events created and total seats added.
-                    </div>
-                  </div>
-                </div>
+                  );
+                })()}
               </div>
             )}
           </div>

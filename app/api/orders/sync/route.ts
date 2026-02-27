@@ -9,6 +9,7 @@ export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 const SYNC_API_BASE = 'https://app.seatscouts.com/sync/api';
+const CONFIRMED_STATUSES = new Set(['confirmed', 'confirmed_delay', 'delivery_problem']);
 
 function escapeRegex(str: string) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -96,49 +97,70 @@ export async function GET() {
     const incomingOrderIds = orders.map((o: any) => o.order_id);
     const existingOrders = await Order.find(
       { order_id: { $in: incomingOrderIds } },
-      { order_id: 1 }
+      { order_id: 1, status: 1, confirmedAt: 1 }
     ).lean();
+    const existingMap = new Map<string, { status: string; confirmedAt?: Date }>();
+    for (const e of existingOrders) {
+      const doc = e as any;
+      existingMap.set(doc.order_id, { status: doc.status, confirmedAt: doc.confirmedAt });
+    }
     const existingSet = new Set(existingOrders.map((e: any) => e.order_id));
 
     // Upsert all orders
-    const bulkOps = orders.map((o: any) => ({
-      updateOne: {
-        filter: { order_id: o.order_id },
-        update: {
-          $set: {
-            sync_id: o.id || null,
-            external_id: o.external_id || '',
-            event_name: o.event_name || '',
-            venue: o.venue || o.venue_name || '',
-            city: o.city || '',
-            state: o.state || '',
-            country: o.country || '',
-            occurs_at: o.occurs_at ? new Date(o.occurs_at) : null,
-            section: o.section || '',
-            row: o.row || '',
-            low_seat: o.low_seat ?? null,
-            high_seat: o.high_seat ?? null,
-            quantity: o.quantity ?? 0,
-            status: o.status || 'pending',
-            delivery: o.delivery || '',
-            marketplace: o.marketplace || '',
-            total: parseFloat(o.total) || 0,
-            unit_price: parseFloat(o.unit_price) || 0,
-            order_date: o.order_date ? new Date(o.order_date) : null,
-            transfer_count: o.transfer_count ?? 0,
-            pos_event_id: o.pos_event_id || '',
-            pos_inventory_id: o.pos_inventory_id || '',
-            pos_invoice_id: o.pos_invoice_id || '',
-            from_csv: o.from_csv ?? false,
-            last_seen_internal_notes: o.last_seen_internal_notes || '',
+    const bulkOps = orders.map((o: any) => {
+      const incomingStatus = o.status || 'pending';
+      const existing = existingMap.get(o.order_id);
+
+      // Set confirmedAt only once: when status first transitions to a confirmed state
+      const shouldSetConfirmedAt =
+        CONFIRMED_STATUSES.has(incomingStatus) &&
+        (!existing || (!existing.confirmedAt && !CONFIRMED_STATUSES.has(existing.status)));
+
+      const $set: Record<string, any> = {
+        sync_id: o.id || null,
+        external_id: o.external_id || '',
+        event_name: o.event_name || '',
+        venue: o.venue || o.venue_name || '',
+        city: o.city || '',
+        state: o.state || '',
+        country: o.country || '',
+        occurs_at: o.occurs_at ? new Date(o.occurs_at) : null,
+        section: o.section || '',
+        row: o.row || '',
+        low_seat: o.low_seat ?? null,
+        high_seat: o.high_seat ?? null,
+        quantity: o.quantity ?? 0,
+        status: incomingStatus,
+        delivery: o.delivery || '',
+        marketplace: o.marketplace || '',
+        total: parseFloat(o.total) || 0,
+        unit_price: parseFloat(o.unit_price) || 0,
+        order_date: o.order_date ? new Date(o.order_date) : null,
+        transfer_count: o.transfer_count ?? 0,
+        pos_event_id: o.pos_event_id || '',
+        pos_inventory_id: o.pos_inventory_id || '',
+        pos_invoice_id: o.pos_invoice_id || '',
+        from_csv: o.from_csv ?? false,
+        last_seen_internal_notes: o.last_seen_internal_notes || '',
+      };
+
+      if (shouldSetConfirmedAt) {
+        $set.confirmedAt = new Date();
+      }
+
+      return {
+        updateOne: {
+          filter: { order_id: o.order_id },
+          update: {
+            $set,
+            $setOnInsert: {
+              acknowledged: false,
+            },
           },
-          $setOnInsert: {
-            acknowledged: false,
-          },
+          upsert: true,
         },
-        upsert: true,
-      },
-    }));
+      };
+    });
 
     await Order.bulkWrite(bulkOps);
     console.log(`[sync] bulkWrite: ${Date.now() - t0}ms`);

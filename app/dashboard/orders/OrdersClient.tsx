@@ -159,11 +159,36 @@ export default function OrdersClient({ initialOrders, initialTotal, initialTotal
   const [recheckAllProgress, setRecheckAllProgress] = useState({ done: 0, total: 0 });
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
 
-  const copyUrl = useCallback((url: string) => {
-    navigator.clipboard.writeText(url).then(() => {
+  const copyUrl = useCallback(async (url: string) => {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(url);
+      } else {
+        // Fallback for non-HTTPS contexts
+        const ta = document.createElement('textarea');
+        ta.value = url;
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
       setCopiedUrl(url);
       setTimeout(() => setCopiedUrl(null), 2000);
-    });
+    } catch {
+      // Last resort fallback
+      const ta = document.createElement('textarea');
+      ta.value = url;
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); } catch { /* ignore */ }
+      document.body.removeChild(ta);
+      setCopiedUrl(url);
+      setTimeout(() => setCopiedUrl(null), 2000);
+    }
   }, []);
 
   // Flag issue modal state
