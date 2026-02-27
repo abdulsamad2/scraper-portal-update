@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { flagOrderIssue, unflagOrderIssue } from '@/actions/orderActions';
 import { useOrderAlert } from './useOrderAlert';
+import EmptyState from './EmptyState';
 
 
 interface OrderData {
@@ -903,17 +904,7 @@ export default function OrdersClient({
 
       {/* ── Orders Table ── */}
       {orders.length === 0 ? (
-        <div className="bg-white rounded-xl border border-gray-200 p-16 text-center">
-          <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
-            <AlertCircle className="w-10 h-10 text-gray-400" />
-          </div>
-          <h3 className="text-lg font-semibold text-gray-700 mb-2">No orders found</h3>
-          <p className="text-gray-500 max-w-md mx-auto">
-            {statusFilter.length > 0
-              ? `No orders match the selected status filter${search ? ' and search term' : ''}.`
-              : 'No orders match your current filters.'}
-          </p>
-        </div>
+        <EmptyState search={search} hasStatusFilter={statusFilter.length > 0} onClearSearch={() => handleSearchChange('')} />
       ) : (
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
           <div className="overflow-x-auto">
@@ -1018,6 +1009,13 @@ export default function OrdersClient({
                                   </>
                                 )}
                               </div>
+                              {/* Delivery problem reason */}
+                              {o.status === 'delivery_problem' && o.reason && (
+                                <div className="flex items-center gap-1.5 mt-1 text-xs text-red-600">
+                                  <AlertTriangle className="w-3 h-3 shrink-0" />
+                                  <span className="truncate">{o.reason}</span>
+                                </div>
+                              )}
                             </div>
                           </div>
                         </td>
