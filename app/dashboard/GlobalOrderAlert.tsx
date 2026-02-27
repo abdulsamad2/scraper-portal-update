@@ -32,10 +32,6 @@ export default function GlobalOrderAlert() {
       const count = data.unacknowledgedCount ?? 0;
       setUnackCount(count);
 
-      if (data.newOrderIds && data.newOrderIds.length > 0) {
-        setNewOrderCount(data.newOrderIds.length);
-      }
-
       hasSyncedRef.current = true;
     } catch {
       // Network error, ignore
