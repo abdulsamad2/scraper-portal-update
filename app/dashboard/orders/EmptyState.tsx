@@ -523,7 +523,7 @@ export default function EmptyState({ search, hasStatusFilter, onClearSearch }: E
     config: { tension: 120, friction: 14 },
   });
 
-  // Auto-cycle scene every 15s
+  // Auto-cycle scene every 30s
   useEffect(() => {
     if (search) return;
     const iv = setInterval(() => {
@@ -532,16 +532,16 @@ export default function EmptyState({ search, hasStatusFilter, onClearSearch }: E
         setSceneIndex(i => (i + 1) % SCENES.length);
         setVisible(true);
       }, 450);
-    }, 15000);
+    }, 30000);
     return () => clearInterval(iv);
   }, [search]);
 
-  // Rotate tips every 8s with progress bar
+  // Rotate tips every 25s with progress bar
   useEffect(() => {
     if (search) return;
     setTipProgress(0);
     const progressIv = setInterval(() => {
-      setTipProgress(p => Math.min(p + 1.25, 100));
+      setTipProgress(p => Math.min(p + 0.4, 100));
     }, 100);
     const iv = setInterval(() => {
       setTipVisible(false);
@@ -550,7 +550,7 @@ export default function EmptyState({ search, hasStatusFilter, onClearSearch }: E
         setTipIndex(i => (i + 1) % FUN_TIPS.length);
         setTipVisible(true);
       }, 280);
-    }, 8000);
+    }, 25000);
     return () => { clearInterval(iv); clearInterval(progressIv); };
   }, [search]);
 

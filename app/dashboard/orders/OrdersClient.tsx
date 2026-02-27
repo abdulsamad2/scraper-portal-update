@@ -6,7 +6,7 @@ import {
   RefreshCw, Search, ChevronLeft, ChevronRight,
   Loader2, X, Bell, ExternalLink, MapPin,
   AlertTriangle, Filter, ShoppingCart,
-  ChevronDown, AlertCircle, Smartphone, Mail,
+  ChevronDown, Smartphone, Mail,
   Truck, Send, CheckCircle, RotateCw,
   FileText, Clock, XCircle, Package, Ticket,
   Flag, FlagOff, MessageSquareWarning, Copy, ClipboardCheck,
