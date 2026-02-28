@@ -1,22 +1,23 @@
 'use server';
 
 /**
- * Auto-Delete Service for Upcoming Events (Timezone-Aware)
- * 
- * This service automatically stops scraping and deletes events before they take place.
- * 
+ * Auto-Stop Service for Upcoming Events (Timezone-Aware)
+ *
+ * This service automatically stops scraping and clears inventory for events
+ * before they take place. Events are kept in the database (not deleted).
+ *
  * KEY: Timezone is AUTO-DETECTED from the Venue field. No manual timezone input needed.
- * 
+ *
  * For each event, the system:
  *   1. Reads the Venue field (e.g., "Hard Rock Stadium", "Miami", "Dallas TX")
  *   2. Auto-detects the timezone from venue/city/state
  *   3. Gets the CURRENT local time in that timezone
- *   4. Compares: if (local_now + stopBeforeHours) >= event_time → stop & delete
- * 
+ *   4. Compares: if (local_now + stopBeforeHours) >= event_time → stop & clear inventory
+ *
  * Example: Event in Miami at 7pm, stopBeforeHours=2
  *   - Current time in Miami (Eastern): 5:00pm
  *   - Cutoff = 5pm + 2h = 7pm
- *   - Event(7pm) <= Cutoff(7pm) → STOP & DELETE
+ *   - Event(7pm) <= Cutoff(7pm) → STOP & CLEAR INVENTORY
  */
 
 import dbConnect from '@/lib/dbConnect';
@@ -69,10 +70,10 @@ export interface AutoDeleteStats {
 }
 
 /**
- * Stops scraping and deletes events based on timezone-aware time comparison.
- * Each event's timezone is auto-detected from its Venue field.
- * 
- * @param stopBeforeHours - Hours before event time to stop and delete (e.g., 2 = delete 2h before event)
+ * Stops scraping and clears inventory based on timezone-aware time comparison.
+ * Events are kept in the database. Each event's timezone is auto-detected from its Venue field.
+ *
+ * @param stopBeforeHours - Hours before event time to stop (e.g., 2 = stop 2h before event)
  * @returns Promise<AutoDeleteStats>
  */
 export async function deleteExpiredEvents(stopBeforeHours: number = 2): Promise<AutoDeleteStats> {
@@ -266,10 +267,10 @@ export async function deleteExpiredEvents(stopBeforeHours: number = 2): Promise<
 }
 
 /**
- * Gets statistics about events that would be stopped and deleted (dry run / preview)
+ * Gets statistics about active events that would be stopped on the next run (dry run / preview).
  * Uses timezone-aware comparison per event.
- * 
- * @param stopBeforeHours - Hours before event time to stop and delete
+ *
+ * @param stopBeforeHours - Hours before event time to stop
  * @returns Preview data with timezone info per event
  */
 export async function getExpiredEventsStats(stopBeforeHours: number = 2) {
@@ -279,8 +280,8 @@ export async function getExpiredEventsStats(stopBeforeHours: number = 2) {
   await ensureTimeSynced();
   
   try {
-    // Fetch all events and check each against its venue timezone
-    const allEvents = await Event.find({})
+    // Only fetch active events — stopped events are already handled
+    const allEvents = await Event.find({ Skip_Scraping: { $ne: true } })
       .select('Event_ID Event_Name Event_DateTime Venue Skip_Scraping').lean();
 
     const eventsToDelete = [];
@@ -353,7 +354,7 @@ export async function getExpiredEventsStats(stopBeforeHours: number = 2) {
 }
 
 /**
- * Get the last 4 events deleted by the auto-delete timer.
+ * Get all events stopped by the auto-delete timer.
  * Each record includes both PKT and event-local timezone info.
  */
 export async function getLastDeletedEvents() {

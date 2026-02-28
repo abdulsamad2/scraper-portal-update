@@ -1142,10 +1142,10 @@ export default function DashboardPage() {
                 <AlertTriangle className="w-5 h-5 text-amber-500 mt-0.5 flex-shrink-0" />
                 <div>
                   <p className="text-sm font-medium text-amber-800">
-                    {autoDeleteInfo.count} event{autoDeleteInfo.count !== 1 ? 's' : ''} will be stopped &amp; deleted
+                    {autoDeleteInfo.count} event{autoDeleteInfo.count !== 1 ? 's' : ''} will be stopped &amp; inventory cleared
                   </p>
                   <p className="text-xs text-amber-600 mt-0.5">
-                    These events are within {autoDeleteInfo.stopBeforeHours} hours of their event time and will be removed on the next auto-delete run.
+                    These events are within {autoDeleteInfo.stopBeforeHours} hours of their event time and will be stopped on the next run.
                   </p>
                 </div>
               </div>
@@ -1158,8 +1158,8 @@ export default function DashboardPage() {
                     className="flex items-center space-x-4 p-3 rounded-xl hover:bg-red-50/50 transition-colors duration-150 border border-transparent hover:border-red-100"
                   >
                     {/* Icon */}
-                    <div className="w-10 h-10 bg-gradient-to-br from-red-100 to-orange-100 rounded-lg flex items-center justify-center flex-shrink-0">
-                      <Trash2 className="w-5 h-5 text-red-500" />
+                    <div className="w-10 h-10 bg-gradient-to-br from-amber-100 to-orange-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                      <Shield className="w-5 h-5 text-amber-500" />
                     </div>
 
                     {/* Event info */}
@@ -1236,7 +1236,7 @@ export default function DashboardPage() {
           {autoDeleteInfo.isEnabled && autoDeleteInfo.lastRunAt && (
             <div className="mt-4 pt-4 border-t border-slate-100 flex items-center justify-between text-xs text-slate-400">
               <span>Last checked: {formatDateTime(autoDeleteInfo.lastRunAt)}</span>
-              <span>Total deleted: {autoDeleteInfo.totalEventsDeleted} events</span>
+              <span>Total stopped: {autoDeleteInfo.totalEventsDeleted} events</span>
             </div>
           )}
         </div>
