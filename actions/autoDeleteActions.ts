@@ -93,8 +93,9 @@ export async function deleteExpiredEvents(stopBeforeHours: number = 2): Promise<
   };
 
   try {
-    // Fetch ALL events — we need to check each one against its own timezone
-    const allEvents = await Event.find({})
+    // Only fetch events that are still active (not already stopped)
+    // Since we no longer delete events, stopped events would be re-processed every cycle
+    const allEvents = await Event.find({ Skip_Scraping: { $ne: true } })
       .select('_id Event_ID Event_Name Event_DateTime Venue Skip_Scraping');
 
     stats.totalEventsChecked = allEvents.length;
@@ -159,7 +160,7 @@ export async function deleteExpiredEvents(stopBeforeHours: number = 2): Promise<
       console.log(`  → ${e.event.Event_ID} | ${e.event.Event_Name} | Event: ${e.event.Event_DateTime.toISOString()} | Venue: ${e.event.Venue} | TZ: ${tz} | Local now: ${localTimeStr} | PKT now: ${pktNow} | Cutoff: ${e.cutoff.toISOString()}`);
     }
 
-    // Stop scraping first
+    // Stop scraping for all matching events
     if (notYetStopped.length > 0) {
       try {
         await Event.updateMany(
@@ -174,15 +175,15 @@ export async function deleteExpiredEvents(stopBeforeHours: number = 2): Promise<
       }
     }
 
-    // Delete associated seat data first
+    // Clear inventory (seat data) from DB and Sync — but keep the events themselves
     try {
       await deleteConsecutiveGroupsByEventIds(eventIds);
-      console.log(`Auto-delete: Deleted seat data for ${eventIds.length} events`);
+      console.log(`Auto-delete: Cleared inventory for ${eventIds.length} events`);
     } catch (error) {
-      const errorMsg = `Failed to delete seat data: ${(error as Error).message}`;
+      const errorMsg = `Failed to clear inventory: ${(error as Error).message}`;
       stats.errors.push(errorMsg);
-      console.error('Auto-delete seat deletion error:', error);
-      
+      console.error('Auto-delete inventory clear error:', error);
+
       await createErrorLog({
         errorType: 'AUTO_DELETE_SEATS_ERROR',
         errorMessage: errorMsg,
@@ -191,16 +192,11 @@ export async function deleteExpiredEvents(stopBeforeHours: number = 2): Promise<
       });
     }
 
-    // Delete the events
-    const deleteResult = await Event.deleteMany({
-      _id: { $in: eventIds }
-    });
+    console.log(`Auto-delete: Successfully stopped ${stats.eventsStopped} events and cleared inventory for ${eventIds.length} events (events kept in DB)`);
 
-    console.log(`Auto-delete: Successfully stopped and deleted ${deleteResult.deletedCount} events`);
-
-    // Build last-deleted records with dual timezone info
+    // Build last-stopped records with dual timezone info
     const nowAccurate = getAccurateNow();
-    const deletedRecords = eventsToDelete.map(e => {
+    const stoppedRecords = eventsToDelete.map(e => {
       const tz = getTimezoneAbbr(e.timezone);
       return {
         eventId: e.event.Event_ID,
@@ -215,11 +211,11 @@ export async function deleteExpiredEvents(stopBeforeHours: number = 2): Promise<
       };
     });
 
-    // Save last 4 deleted events to settings (prepend new, keep max 4)
+    // Save all stopped events to settings (prepend new, keep all)
     try {
       const currentSettings = await AutoDeleteSettings.findOne();
       const existing = currentSettings?.lastDeletedEvents || [];
-      const merged = [...deletedRecords, ...existing].slice(0, 4);
+      const merged = [...stoppedRecords, ...existing];
       await AutoDeleteSettings.findOneAndUpdate(
         {},
         { $set: { lastDeletedEvents: merged } },
@@ -229,10 +225,10 @@ export async function deleteExpiredEvents(stopBeforeHours: number = 2): Promise<
       console.error('Auto-delete: Failed to save lastDeletedEvents:', saveErr);
     }
 
-    // Log successful deletion with timezone details (including PKT)
+    // Log successful stop & inventory clear with timezone details (including PKT)
     await createErrorLog({
       errorType: 'AUTO_DELETE_SUCCESS',
-      errorMessage: `Auto-deleted ${deleteResult.deletedCount} events (${stopBeforeHours}h before event time, timezone-aware)`,
+      errorMessage: `Auto-stopped ${eventIds.length} events and cleared inventory (${stopBeforeHours}h before event time, timezone-aware)`,
       stackTrace: '',
       metadata: { 
         deletedEvents: eventsToDelete.map(e => {

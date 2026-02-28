@@ -565,6 +565,10 @@ async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]
     const inventory = doc.inventory;
     const isResale = inventory?.splitType !== 'NEVERLEAVEONE';
 
+    // Detect GA/Lawn rows — scraper stores synthetic row names like "GA1", "GA2", etc.
+    const row = inventory?.row || '';
+    const isGALawn = /^GA\d+$/i.test(row);
+
     // Apply per-ticket-type markup adjustment on top of already-marked-up listPrice.
     // Formula: adjustedPrice = listPrice * (1 + (defaultPct + adj) / 100) / (1 + defaultPct / 100)
     const rawListPrice = inventory?.listPrice || 0;
@@ -575,8 +579,10 @@ async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]
       : rawListPrice;
 
     // Pre-compute expensive operations with null safety
-    const seatsString = doc.seats && doc.seats.length > 0 ?
-      doc.seats.map((seat: { number: string | number }) => String(seat.number)).join(',') : '';
+    // GA/Lawn seats have synthetic seat numbers — clear them so Sync doesn't see fake numbers
+    const seatsString = isGALawn ? '' :
+      (doc.seats && doc.seats.length > 0 ?
+        doc.seats.map((seat: { number: string | number }) => String(seat.number)).join(',') : '');
     const eventDateString = doc.event_date ?
       new Date(doc.event_date).toISOString() : '';
 
@@ -599,19 +605,37 @@ async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]
     }
 
     // Calculate split configuration based on quantity and split type
-    const { finalSplitType, customSplit } = calculateSplitConfiguration(
-      inventory?.quantity || 0, 
-      inventory?.splitType
-    );
+    // If the scraper stored a custom_split on the inventory, prefer that over computed values
+    let finalSplitType: CsvRow['split_type'];
+    let customSplit: string;
+    if (inventory?.custom_split) {
+      finalSplitType = 'CUSTOM';
+      customSplit = inventory.custom_split;
+    } else {
+      const splitConfig = calculateSplitConfiguration(
+        inventory?.quantity || 0,
+        inventory?.splitType
+      );
+      finalSplitType = splitConfig.finalSplitType;
+      customSplit = splitConfig.customSplit;
+    }
 
     // Check if row is SRO and handle public notes accordingly
-    const row = inventory?.row || '';
     const isSRO = row.toUpperCase() === 'SRO';
     const existingPublicNotes = inventory?.publicNotes || '';
-    const publicNotes = isSRO 
+    const publicNotes = isSRO
       ? (existingPublicNotes ? `${existingPublicNotes} - STANDING ROOM ONLY` : 'STANDING ROOM ONLY')
       : existingPublicNotes;
-    
+
+    // Tags: GA tickets get GA_STANDARD / GA_RESALE, regular tickets get STANDARD / RESALE
+    const isStandard = inventory?.splitType === 'NEVERLEAVEONE';
+    let tags: string;
+    if (isGALawn) {
+      tags = isStandard ? 'GA_STANDARD' : 'GA_RESALE';
+    } else {
+      tags = isStandard ? 'STANDARD' : 'RESALE';
+    }
+
     return {
       inventory_id: inventory?.inventoryId || 0,
       event_name: doc.event_name || "",
@@ -625,7 +649,7 @@ async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]
       barcodes: inventory?.barcodes || "",
       internal_notes: "-tnow -tmplus",
       public_notes: publicNotes,
-      tags: inventory?.splitType === "NEVERLEAVEONE" ? "STANDARD" : "RESALE",
+      tags,
       list_price: Number(adjustedListPrice.toFixed(2)),
       face_price: Number((inventory?.cost || 0).toFixed(2)),
       taxed_cost: Number((inventory?.cost || 0).toFixed(2)),
@@ -639,7 +663,7 @@ async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]
       custom_split: customSplit,
       stock_type:
         (inventory?.stockType as CsvRow["stock_type"]) || "ELECTRONIC",
-      zone: "N",
+      zone: isGALawn ? "Y" : "N",
       shown_quantity: inventory?.shown_quantity || undefined,
       passthrough: inventory?.passthrough || "",
     } as CsvRow;
@@ -1009,7 +1033,7 @@ export async function runAutoDelete() {
 
     return {
       success: true,
-      message: `Auto-delete completed. Stopped ${stats.eventsStopped} and deleted ${stats.eventsDeleted} events.`,
+      message: `Auto-delete completed. Stopped ${stats.eventsStopped} events and cleared inventory for ${stats.eventsDeleted} events.`,
       stats
     };
   } catch (error) {

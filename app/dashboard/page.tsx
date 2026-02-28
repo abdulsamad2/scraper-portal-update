@@ -137,6 +137,7 @@ export default function DashboardPage() {
     loading: true,
   });
   const [showAllDeleteEvents, setShowAllDeleteEvents] = useState(false);
+  const [showAllStoppedEvents, setShowAllStoppedEvents] = useState(false);
   const [lastDeletedEvents, setLastDeletedEvents] = useState<LastDeletedEvent[]>([]);
   const [orderStats, setOrderStats] = useState<{ totalOrders: number; delivered: number; rejected: number; pending: number; fulfillRate: number; loading: boolean }>({
     totalOrders: 0, delivered: 0, rejected: 0, pending: 0, fulfillRate: 0, loading: true,
@@ -213,15 +214,19 @@ export default function DashboardPage() {
     fetchData();
   }, []);
 
-  // Fetch auto-delete data
+  // Fetch auto-delete data and ensure scheduler is initialized
   useEffect(() => {
     async function fetchAutoDeleteData() {
       try {
+        // Ping the auto-delete API route to ensure the scheduler is initialized
+        // (the scheduler starts via module-level init when the route is first loaded)
+        fetch('/api/auto-delete').catch(() => {});
+
         const [settings, preview] = await Promise.all([
           getAutoDeleteSettings(),
           getAutoDeletePreview(),
         ]);
-        
+
         const previewData = preview as { events?: AutoDeleteEvent[]; count?: number; totalEvents?: number; skippedCount?: number };
         setAutoDeleteInfo({
           isEnabled: settings?.isEnabled || false,
@@ -1237,26 +1242,40 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Last 4 Deleted Events by Auto-Delete Timer */}
+      {/* Recently Auto-Stopped Events */}
       {lastDeletedEvents.length > 0 && (
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-          <div className="px-6 py-5 border-b border-slate-100 bg-gradient-to-r from-rose-50 via-pink-50 to-purple-50">
-            <div className="flex items-center space-x-3">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-rose-500 to-purple-500 flex items-center justify-center">
-                <Trash2 className="w-5 h-5 text-white" />
+          <div className="px-6 py-5 border-b border-slate-100 bg-gradient-to-r from-amber-50 via-orange-50 to-rose-50">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 to-orange-500 flex items-center justify-center">
+                  <Shield className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-slate-800">Recently Auto-Stopped</h3>
+                  <p className="text-sm text-slate-500">{lastDeletedEvents.length} events stopped &amp; inventory cleared</p>
+                </div>
               </div>
-              <div>
-                <h3 className="text-lg font-semibold text-slate-800">Recently Auto-Deleted</h3>
-                <p className="text-sm text-slate-500">Last {lastDeletedEvents.length} events removed by the auto-delete timer</p>
-              </div>
+              {lastDeletedEvents.length > 5 && (
+                <button
+                  onClick={() => setShowAllStoppedEvents(!showAllStoppedEvents)}
+                  className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-orange-700 bg-orange-100 hover:bg-orange-200 rounded-lg transition-colors"
+                >
+                  {showAllStoppedEvents ? (
+                    <>Show Less <ChevronUp className="w-3 h-3" /></>
+                  ) : (
+                    <>Show All ({lastDeletedEvents.length}) <ChevronDown className="w-3 h-3" /></>
+                  )}
+                </button>
+              )}
             </div>
           </div>
           <div className="p-6">
             <div className="space-y-3">
-              {lastDeletedEvents.map((evt, i) => (
+              {(showAllStoppedEvents ? lastDeletedEvents : lastDeletedEvents.slice(0, 5)).map((evt, i) => (
                 <div
                   key={`${evt.eventId}-${i}`}
-                  className="p-4 rounded-xl bg-gradient-to-r from-slate-50 to-rose-50/30 border border-slate-100 hover:border-rose-200 transition-colors"
+                  className="p-4 rounded-xl bg-gradient-to-r from-slate-50 to-amber-50/30 border border-slate-100 hover:border-amber-200 transition-colors"
                 >
                   <div className="flex items-start justify-between">
                     <div className="flex-1 min-w-0">
@@ -1268,8 +1287,8 @@ export default function DashboardPage() {
                         </div>
                       )}
                     </div>
-                    <span className="ml-3 inline-flex px-2 py-0.5 rounded-full text-[10px] font-medium bg-rose-100 text-rose-700 flex-shrink-0">
-                      Deleted
+                    <span className="ml-3 inline-flex px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-100 text-amber-700 flex-shrink-0">
+                      Stopped
                     </span>
                   </div>
 
@@ -1297,10 +1316,10 @@ export default function DashboardPage() {
                     </div>
                   </div>
 
-                  {/* Event date + deleted time */}
+                  {/* Event date + stopped time */}
                   <div className="mt-2 flex items-center justify-between text-[10px] text-slate-400">
                     <span>Event: {formatDateTime(evt.eventDateTime)}</span>
-                    <span>Deleted: {formatDateTime(evt.deletedAt)}</span>
+                    <span>Stopped: {formatDateTime(evt.deletedAt)}</span>
                   </div>
                 </div>
               ))}
