@@ -77,12 +77,11 @@ export async function GET(request: NextRequest) {
       'X-Api-Token': apiToken,
     };
 
-    // Fast mode (default/pending tab): only fetch invoiced orders (limit 20) for speed
-    // Full mode (other tabs/filters): fetch all orders (no status filter) to pick up status changes
+    // Fast mode (default/pending tab): smaller limit for speed, no status filter so status changes are detected
+    // Full mode (other tabs/filters): larger limit to cover all orders
     const isFast = mode === 'fast';
-    const apiUrl = isFast
-      ? `${SYNC_API_BASE}/orders?limit=20&status=invoiced`
-      : `${SYNC_API_BASE}/orders?limit=200`;
+    const limit = isFast ? 50 : 200;
+    const apiUrl = `${SYNC_API_BASE}/orders?limit=${limit}`;
 
     const res = await fetch(apiUrl, {
       headers, cache: 'no-store', signal: AbortSignal.timeout(20000),
@@ -101,11 +100,11 @@ export async function GET(request: NextRequest) {
 
     if (dedupedOrders.length === 0) {
       // Still check DB for unacknowledged orders (may exist from previous syncs)
-      const unacknowledgedCount = await Order.countDocuments({
-        acknowledged: false,
-        status: { $in: ['invoiced', 'pending', 'problem'] },
-      });
-      return NextResponse.json({ synced: 0, newOrderIds: [], newOrders: [], unacknowledgedCount });
+      const [unacknowledgedCount, unacknowledgedProblemCount] = await Promise.all([
+        Order.countDocuments({ acknowledged: false, status: { $in: ['invoiced', 'pending'] } }),
+        Order.countDocuments({ acknowledged: false, status: 'problem' }),
+      ]);
+      return NextResponse.json({ synced: 0, newOrderIds: [], newOrders: [], unacknowledgedCount, unacknowledgedProblemCount });
     }
 
     // Get existing order_ids to detect new orders
@@ -252,9 +251,10 @@ export async function GET(request: NextRequest) {
       ).lean();
     }
 
-    // Get unack count + tab counts in a single aggregation to reduce DB calls
-    const [unacknowledgedCount, tabPipeline] = await Promise.all([
-      Order.countDocuments({ acknowledged: false, status: { $in: ['invoiced', 'pending', 'problem'] } }),
+    // Get unack counts (split invoiced vs problem) + tab counts
+    const [unacknowledgedCount, unacknowledgedProblemCount, tabPipeline] = await Promise.all([
+      Order.countDocuments({ acknowledged: false, status: { $in: ['invoiced', 'pending'] } }),
+      Order.countDocuments({ acknowledged: false, status: 'problem' }),
       Order.aggregate([
         {
           $facet: {
@@ -292,6 +292,7 @@ export async function GET(request: NextRequest) {
       newOrderIds,
       newOrders: JSON.parse(JSON.stringify(newOrdersWithUrls)),
       unacknowledgedCount,
+      unacknowledgedProblemCount,
       tabCounts,
     });
   } catch (error) {

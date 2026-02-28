@@ -53,7 +53,8 @@ interface SyncNewOrder {
 interface SyncResult {
   synced?: number; newOrderIds?: string[];
   newOrders?: SyncNewOrder[];
-  unacknowledgedCount?: number; error?: string;
+  unacknowledgedCount?: number; unacknowledgedProblemCount?: number;
+  error?: string;
   tabCounts?: TabCounts;
 }
 
@@ -190,6 +191,7 @@ export default function OrdersClient({
   // Local UI state
   const [syncing, setSyncing] = useState(false);
   const [unackCount, setUnackCount] = useState(serverUnackCount);
+  const [problemCount, setProblemCount] = useState(0);
   const [syncError, setSyncError] = useState('');
   const [countdown, setCountdown] = useState(getSyncRemaining);
   const [hydrated, setHydrated] = useState(false);
@@ -377,11 +379,14 @@ export default function OrdersClient({
       }
       if (data.unacknowledgedCount !== undefined) {
         setUnackCount(data.unacknowledgedCount);
-        // After first sync: if there are unacked orders, start alert immediately
-        // (handles case where server count matches sync count so effect doesn't re-fire)
-        if (!hasSyncedRef.current && data.unacknowledgedCount > 0) {
+        // After first sync: if there are unacked orders (invoiced OR problem), start alert
+        const totalUnack = (data.unacknowledgedCount || 0) + (data.unacknowledgedProblemCount || 0);
+        if (!hasSyncedRef.current && totalUnack > 0) {
           startAlert();
         }
+      }
+      if (data.unacknowledgedProblemCount !== undefined) {
+        setProblemCount(data.unacknowledgedProblemCount);
       }
       // Update tab counts instantly from sync response (no need to wait for router.refresh)
       if (data.tabCounts) {
@@ -403,19 +408,18 @@ export default function OrdersClient({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Alert logic — ring when unacked orders exist after sync confirms the count
+  // Alert logic — ring when any unacked orders exist (invoiced OR problem)
+  const totalUnack = unackCount + problemCount;
   useEffect(() => {
-    if (unackCount === 0) {
+    if (totalUnack === 0) {
       newIdsRef.current.clear();
       stopAlert();
     } else if (hasSyncedRef.current) {
-      // After first sync: start alert if there are unacked orders
-      // This covers both: new orders arriving AND existing unacked orders on load
       startAlert();
     }
     prevUnackRef.current = unackCount;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [unackCount]);
+  }, [totalUnack]);
 
   useEffect(() => {
     return () => stopAlert();
@@ -938,13 +942,27 @@ export default function OrdersClient({
         </div>
       )}
 
-      {/* Unack Banner */}
+      {/* Unack Banners */}
       {unackCount > 0 && (
         <div className="flex items-center bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
           <span className="text-sm font-medium text-amber-800 flex items-center gap-2">
             <Bell className="w-4 h-4 animate-pulse" />
-            <span><span className="font-bold">{unackCount}</span> unacknowledged invoiced order{unackCount > 1 ? 's' : ''} — alert ringing</span>
+            <span><span className="font-bold">{unackCount}</span> new invoiced order{unackCount > 1 ? 's' : ''} need{unackCount === 1 ? 's' : ''} action — alert ringing</span>
           </span>
+        </div>
+      )}
+      {problemCount > 0 && (
+        <div className="flex items-center bg-red-50 border border-red-200 rounded-xl px-4 py-3 justify-between">
+          <span className="text-sm font-medium text-red-800 flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4" />
+            <span><span className="font-bold">{problemCount}</span> order{problemCount > 1 ? 's have' : ' has'} a problem — check the <span className="font-bold">Problem</span> tab</span>
+          </span>
+          <button
+            onClick={() => setPresetFilter(['problem'])}
+            className="ml-3 px-3 py-1 text-xs font-semibold bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+          >
+            View Problems
+          </button>
         </div>
       )}
 
