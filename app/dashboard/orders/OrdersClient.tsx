@@ -54,6 +54,7 @@ interface SyncResult {
   synced?: number; newOrderIds?: string[];
   newOrders?: SyncNewOrder[];
   unacknowledgedCount?: number; error?: string;
+  tabCounts?: TabCounts;
 }
 
 interface TabCounts {
@@ -160,7 +161,7 @@ function DeliveryBadge({ delivery }: { delivery: string }) {
 
 // Module-level sync timer (survives Suspense remounts)
 let _lastSyncAt = Date.now();
-const SYNC_INTERVAL = 10; // seconds
+const SYNC_INTERVAL = 5; // seconds — keep low for near-instant sync with remote API
 
 function getSyncRemaining() {
   return Math.max(0, SYNC_INTERVAL - Math.floor((Date.now() - _lastSyncAt) / 1000));
@@ -175,6 +176,16 @@ export default function OrdersClient({
   const router = useRouter();
   const searchParams = useSearchParams();
   const [isPending, startTransition] = useTransition();
+
+  // Local data state — allows instant optimistic updates without waiting for router.refresh()
+  const [localOrders, setLocalOrders] = useState(orders);
+  const [localTabCounts, setLocalTabCounts] = useState(tabCounts);
+  const [localTotal, setLocalTotal] = useState(total);
+
+  // Keep local state in sync when server props change (e.g. after router.refresh or navigation)
+  useEffect(() => { setLocalOrders(orders); }, [orders]);
+  useEffect(() => { setLocalTabCounts(tabCounts); }, [tabCounts]);
+  useEffect(() => { setLocalTotal(total); }, [total]);
 
   // Local UI state
   const [syncing, setSyncing] = useState(false);
@@ -348,7 +359,10 @@ export default function OrdersClient({
     setSyncing(true);
     setSyncError('');
     try {
-      const res = await fetch(`/api/orders/sync?t=${Date.now()}`, { cache: 'no-store' });
+      // Default "pending" tab → fast sync (invoiced only). Other filters → full sync (all statuses)
+      const isDefaultTab = statusFilter.length === 0 || (statusFilter.length === 1 && statusFilter[0] === 'pending');
+      const mode = isDefaultTab ? 'fast' : 'full';
+      const res = await fetch(`/api/orders/sync?t=${Date.now()}&mode=${mode}`, { cache: 'no-store' });
       if (!res.ok) { setSyncError(`HTTP ${res.status}`); return; }
       const data: SyncResult = await res.json();
       if (data.error) { setSyncError(data.error); return; }
@@ -363,15 +377,24 @@ export default function OrdersClient({
       }
       if (data.unacknowledgedCount !== undefined) {
         setUnackCount(data.unacknowledgedCount);
+        // After first sync: if there are unacked orders, start alert immediately
+        // (handles case where server count matches sync count so effect doesn't re-fire)
+        if (!hasSyncedRef.current && data.unacknowledgedCount > 0) {
+          startAlert();
+        }
+      }
+      // Update tab counts instantly from sync response (no need to wait for router.refresh)
+      if (data.tabCounts) {
+        setLocalTabCounts(data.tabCounts);
       }
       _lastSyncAt = Date.now();
       setCountdown(SYNC_INTERVAL);
       hasSyncedRef.current = true;
     } catch { setSyncError('Network error'); }
     finally { setSyncing(false); }
-    // Refresh server component to get latest data
+    // Refresh server component to get latest order list data
     refresh();
-  }, [refresh]);
+  }, [refresh, startAlert, statusFilter]);
 
   // Initial sync after mount
   useEffect(() => {
@@ -380,17 +403,15 @@ export default function OrdersClient({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Alert logic
+  // Alert logic — ring when unacked orders exist after sync confirms the count
   useEffect(() => {
     if (unackCount === 0) {
       newIdsRef.current.clear();
       stopAlert();
     } else if (hasSyncedRef.current) {
-      if (unackCount > prevUnackRef.current || prevUnackRef.current === 0) {
-        startAlert();
-      } else if (unackCount < prevUnackRef.current) {
-        stopAlert();
-      }
+      // After first sync: start alert if there are unacked orders
+      // This covers both: new orders arriving AND existing unacked orders on load
+      startAlert();
     }
     prevUnackRef.current = unackCount;
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -427,7 +448,7 @@ export default function OrdersClient({
   // --- Actions ---
   const handleAck = async (id: string) => {
     await fetch('/api/orders/acknowledge', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ orderId: id }) });
-    newIdsRef.current.delete(orders.find(o => o._id === id)?.order_id || '');
+    newIdsRef.current.delete(localOrders.find(o => o._id === id)?.order_id || '');
     refresh();
   };
 
@@ -511,6 +532,30 @@ export default function OrdersClient({
         setModalError(data.error || `Failed to ${modalAction}`);
         return;
       }
+      const newStatus = modalAction === 'confirm' ? 'confirmed' : 'rejected';
+      const oldStatus = modalOrder.status;
+
+      // Optimistic update — instantly reflect the status change in the UI
+      setLocalOrders(prev => prev.map(o =>
+        o.order_id === modalOrder.order_id
+          ? { ...o, status: newStatus, acknowledged: true, acknowledgedAt: new Date().toISOString() }
+          : o
+      ));
+
+      // Optimistic tab count update
+      setLocalTabCounts(prev => {
+        const updated = { ...prev };
+        // Decrement old status count
+        if (oldStatus === 'invoiced' || oldStatus === 'pending') updated.invoiced = Math.max(0, updated.invoiced - 1);
+        else if (oldStatus === 'problem') updated.problem = Math.max(0, updated.problem - 1);
+        else if (oldStatus === 'confirmed') updated.confirmed = Math.max(0, updated.confirmed - 1);
+        else if (oldStatus === 'rejected') updated.rejected = Math.max(0, updated.rejected - 1);
+        // Increment new status count
+        if (newStatus === 'confirmed') updated.confirmed += 1;
+        else if (newStatus === 'rejected') updated.rejected += 1;
+        return updated;
+      });
+
       closeModal();
       newIdsRef.current.delete(modalOrder.order_id);
       if (modalAction === 'confirm' && modalOrder.sync_id) {
@@ -520,6 +565,7 @@ export default function OrdersClient({
           body: JSON.stringify({ syncId: modalOrder.sync_id }),
         }).catch(() => {});
       }
+      // Background refresh to sync with server (non-blocking)
       refresh();
     } catch {
       setModalError('Network error');
@@ -551,7 +597,7 @@ export default function OrdersClient({
   };
 
   const handleRecheckAll = async () => {
-    const confirmOrders = orders.filter(o =>
+    const confirmOrders = localOrders.filter(o =>
       ['confirmed', 'confirmed_delay', 'delivery_problem'].includes(o.status) && o.sync_id
     );
     if (confirmOrders.length === 0) return;
@@ -574,8 +620,8 @@ export default function OrdersClient({
     }
   };
 
-  const startIndex = total > 0 ? (currentPage - 1) * perPage + 1 : 0;
-  const endIndex = Math.min(currentPage * perPage, total);
+  const startIndex = localTotal > 0 ? (currentPage - 1) * perPage + 1 : 0;
+  const endIndex = Math.min(currentPage * perPage, localTotal);
 
   const pageNums: number[] = [];
   if (totalPages > 1) {
@@ -583,7 +629,7 @@ export default function OrdersClient({
     for (let i = s; i <= Math.min(totalPages, s + 4); i++) pageNums.push(i);
   }
 
-  const hasConfirmableOrders = orders.some(o =>
+  const hasConfirmableOrders = localOrders.some(o =>
     ['confirmed', 'confirmed_delay', 'delivery_problem'].includes(o.status)
   );
 
@@ -627,24 +673,24 @@ export default function OrdersClient({
                   <span className="text-slate-300 mx-1.5">/</span>
                 </>
               )}
-              <span className="font-semibold text-blue-600 tabular-nums">{tabCounts.invoiced}</span>
+              <span className="font-semibold text-blue-600 tabular-nums">{localTabCounts.invoiced}</span>
               <span className="text-slate-400"> invoiced</span>
-              {tabCounts.problem > 0 && (
+              {localTabCounts.problem > 0 && (
                 <>
                   <span className="text-slate-300 mx-1.5">/</span>
-                  <span className="font-semibold text-orange-600 tabular-nums">{tabCounts.problem}</span>
+                  <span className="font-semibold text-orange-600 tabular-nums">{localTabCounts.problem}</span>
                   <span className="text-slate-400"> problem</span>
                 </>
               )}
-              {tabCounts.flagged > 0 && (
+              {localTabCounts.flagged > 0 && (
                 <>
                   <span className="text-slate-300 mx-1.5">/</span>
-                  <span className="font-semibold text-orange-600 tabular-nums">{tabCounts.flagged}</span>
+                  <span className="font-semibold text-orange-600 tabular-nums">{localTabCounts.flagged}</span>
                   <span className="text-slate-400"> flagged</span>
                 </>
               )}
               <span className="text-slate-300 mx-1.5">/</span>
-              <span className="font-semibold text-slate-700 tabular-nums">{tabCounts.all.toLocaleString()}</span>
+              <span className="font-semibold text-slate-700 tabular-nums">{localTabCounts.all.toLocaleString()}</span>
               <span className="text-slate-400"> total</span>
             </span>
           </div>
@@ -768,13 +814,13 @@ export default function OrdersClient({
                   // Get count for this status
                   // pending = invoiced+pending in DB, confirmed includes confirmed_delay count separately
                   const countMap: Record<string, number> = {
-                    pending: tabCounts.invoiced, // invoiced count already includes pending
-                    problem: tabCounts.problem,
-                    confirmed: tabCounts.confirmed, // already includes confirmed_delay
+                    pending: localTabCounts.invoiced, // invoiced count already includes pending
+                    problem: localTabCounts.problem,
+                    confirmed: localTabCounts.confirmed, // already includes confirmed_delay
                     confirmed_delay: 0,
-                    delivery_problem: tabCounts.deliveryIssue,
-                    delivered: tabCounts.delivered,
-                    rejected: tabCounts.rejected,
+                    delivery_problem: localTabCounts.deliveryIssue,
+                    delivered: localTabCounts.delivered,
+                    rejected: localTabCounts.rejected,
                   };
                   return (
                     <button
@@ -868,8 +914,8 @@ export default function OrdersClient({
         {/* Results Summary */}
         <div className="border-t border-gray-200 pt-2.5 flex justify-between items-center">
           <div className="text-xs text-gray-500 uppercase tracking-wide font-semibold">
-            {total > 0 ? (
-              <>Showing {startIndex}–{endIndex} of {total}</>
+            {localTotal > 0 ? (
+              <>Showing {startIndex}–{endIndex} of {localTotal}</>
             ) : (
               <span>No orders found</span>
             )}
@@ -903,7 +949,7 @@ export default function OrdersClient({
       )}
 
       {/* ── Orders Table ── */}
-      {orders.length === 0 ? (
+      {localOrders.length === 0 ? (
         <EmptyState search={search} hasStatusFilter={statusFilter.length > 0} onClearSearch={() => handleSearchChange('')} />
       ) : (
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
@@ -919,7 +965,7 @@ export default function OrdersClient({
                 </tr>
               </thead>
               <tbody>
-                {orders.map((o, idx) => {
+                {localOrders.map((o, idx) => {
                   const sc = ST[o.status] || ST.pending;
                   const mp = MP[o.marketplace];
                   const isNew = !o.acknowledged;
@@ -1180,7 +1226,7 @@ export default function OrdersClient({
               Page <span className="font-semibold text-gray-700">{currentPage}</span> of{' '}
               <span className="font-semibold text-gray-700">{totalPages}</span>
               {' '}&middot;{' '}
-              <span className="font-semibold text-gray-700">{total}</span> total orders
+              <span className="font-semibold text-gray-700">{localTotal}</span> total orders
             </div>
             <div className="flex items-center gap-1.5">
               <button onClick={() => navigate({ page: String(Math.max(1, currentPage - 1)) })} disabled={currentPage <= 1}

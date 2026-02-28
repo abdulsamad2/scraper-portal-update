@@ -1,4 +1,5 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
+import { revalidatePath } from 'next/cache';
 import dbConnect from '@/lib/dbConnect';
 import { Order } from '@/models/orderModel';
 import { Event } from '@/models/eventModel';
@@ -59,7 +60,7 @@ async function findEventUrl(o: Record<string, any>): Promise<{ eventId: any; url
   return null;
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const t0 = Date.now();
   try {
     const apiToken = process.env.SYNC_API_TOKEN;
@@ -68,17 +69,24 @@ export async function GET() {
       return NextResponse.json({ error: 'SeatScouts API credentials not configured' }, { status: 500 });
     }
 
-    // Fetch invoiced orders from SeatScouts (the ones needing action)
-    const PAGE_SIZE = 20;
+    const { searchParams } = new URL(request.url);
+    const mode = searchParams.get('mode') || 'fast';
+
     const headers = {
       'X-Company-Id': companyId,
       'X-Api-Token': apiToken,
     };
 
-    const res = await fetch(
-      `${SYNC_API_BASE}/orders?limit=${PAGE_SIZE}&status=invoiced`,
-      { headers, cache: 'no-store', signal: AbortSignal.timeout(20000) }
-    );
+    // Fast mode (default/pending tab): only fetch invoiced orders (limit 20) for speed
+    // Full mode (other tabs/filters): fetch all orders (no status filter) to pick up status changes
+    const isFast = mode === 'fast';
+    const apiUrl = isFast
+      ? `${SYNC_API_BASE}/orders?limit=20&status=invoiced`
+      : `${SYNC_API_BASE}/orders?limit=200`;
+
+    const res = await fetch(apiUrl, {
+      headers, cache: 'no-store', signal: AbortSignal.timeout(20000),
+    });
 
     if (!res.ok) {
       const text = await res.text().catch(() => '');
@@ -86,12 +94,12 @@ export async function GET() {
     }
 
     const data = await res.json();
-    const orders: any[] = data.data || [];
-    console.log(`[sync] API: ${Date.now() - t0}ms, ${orders.length} orders`);
+    const dedupedOrders: any[] = data.data || [];
+    console.log(`[sync] API (${mode}): ${Date.now() - t0}ms, ${dedupedOrders.length} orders`);
 
     await dbConnect();
 
-    if (orders.length === 0) {
+    if (dedupedOrders.length === 0) {
       // Still check DB for unacknowledged orders (may exist from previous syncs)
       const unacknowledgedCount = await Order.countDocuments({
         acknowledged: false,
@@ -101,7 +109,7 @@ export async function GET() {
     }
 
     // Get existing order_ids to detect new orders
-    const incomingOrderIds = orders.map((o: any) => o.order_id);
+    const incomingOrderIds = dedupedOrders.map((o: any) => o.order_id);
     const existingOrders = await Order.find(
       { order_id: { $in: incomingOrderIds } },
       { order_id: 1, status: 1, confirmedAt: 1 }
@@ -114,7 +122,7 @@ export async function GET() {
     const existingSet = new Set(existingOrders.map((e: any) => e.order_id));
 
     // Upsert all orders
-    const bulkOps = orders.map((o: any) => {
+    const bulkOps = dedupedOrders.map((o: any) => {
       const incomingStatus = o.status || 'pending';
       const existing = existingMap.get(o.order_id);
 
@@ -163,14 +171,26 @@ export async function GET() {
         $set.confirmedAt = new Date();
       }
 
+      // Auto-acknowledge: if an order's status moved out of invoiced/pending/problem
+      // (i.e. someone handled it via the remote API), mark it acknowledged so the bell stops
+      const NEEDS_ACTION_STATUSES = new Set(['invoiced', 'pending', 'problem']);
+      const isHandled = !NEEDS_ACTION_STATUSES.has(incomingStatus);
+
+      if (isHandled) {
+        // Order was handled remotely — auto-acknowledge
+        $set.acknowledged = true;
+        if (!existing) {
+          // New order arriving already handled — also set acknowledgedAt
+          $set.acknowledgedAt = new Date();
+        }
+      }
+
       return {
         updateOne: {
           filter: { order_id: o.order_id },
           update: {
             $set,
-            $setOnInsert: {
-              acknowledged: false,
-            },
+            ...(!isHandled ? { $setOnInsert: { acknowledged: false } } : {}),
           },
           upsert: true,
         },
@@ -262,10 +282,13 @@ export async function GET() {
       flagged: flagged[0]?.count || 0,
     };
 
-    console.log(`[sync] done: ${Date.now() - t0}ms total, ${orders.length} synced, ${newOrderIds.length} new`);
+    console.log(`[sync] done: ${Date.now() - t0}ms total, ${dedupedOrders.length} synced, ${newOrderIds.length} new`);
+
+    // Invalidate cached page data so router.refresh() gets fresh results
+    revalidatePath('/dashboard/orders');
 
     return NextResponse.json({
-      synced: orders.length,
+      synced: dedupedOrders.length,
       newOrderIds,
       newOrders: JSON.parse(JSON.stringify(newOrdersWithUrls)),
       unacknowledgedCount,

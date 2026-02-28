@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { revalidatePath } from 'next/cache';
 import { acknowledgeOrder, unacknowledgeOrder, acknowledgeAllPending } from '@/actions/orderActions';
 
 export async function POST(req: NextRequest) {
@@ -7,16 +8,19 @@ export async function POST(req: NextRequest) {
 
     if (body.all) {
       const result = await acknowledgeAllPending();
+      revalidatePath('/dashboard/orders');
       return NextResponse.json(result);
     }
 
     if (body.orderId && body.undo) {
       const result = await unacknowledgeOrder(body.orderId);
+      revalidatePath('/dashboard/orders');
       return NextResponse.json(result);
     }
 
     if (body.orderId) {
       const result = await acknowledgeOrder(body.orderId);
+      revalidatePath('/dashboard/orders');
       return NextResponse.json(result);
     }
 

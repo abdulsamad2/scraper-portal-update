@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { revalidatePath } from 'next/cache';
 import dbConnect from '@/lib/dbConnect';
 import { Order } from '@/models/orderModel';
 
@@ -69,6 +70,7 @@ export async function POST(req: NextRequest) {
       { $set: { status: newStatus, acknowledged: true, acknowledgedAt: new Date() } }
     );
 
+    revalidatePath('/dashboard/orders');
     return NextResponse.json({ success: true, data });
   } catch (error) {
     console.error('Order status update error:', error);

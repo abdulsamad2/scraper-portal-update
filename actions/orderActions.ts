@@ -1,5 +1,6 @@
 'use server';
 
+import { unstable_noStore as noStore } from 'next/cache';
 import dbConnect from '@/lib/dbConnect';
 import { Order } from '@/models/orderModel';
 import { Event } from '@/models/eventModel';
@@ -27,6 +28,7 @@ export async function getPaginatedOrders(
   sortBy = 'order_date',
   sortOrder: 'asc' | 'desc' = 'desc'
 ) {
+  noStore();
   await dbConnect();
 
   const query: Record<string, any> = {};
@@ -148,6 +150,7 @@ export async function acknowledgeAllPending() {
 }
 
 export async function getOrderTabCounts() {
+  noStore();
   await dbConnect();
   const pipeline = await Order.aggregate([
     {
