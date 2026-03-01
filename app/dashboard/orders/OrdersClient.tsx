@@ -1128,10 +1128,10 @@ export default function OrdersClient({
                               <div className="text-base font-bold text-gray-900 leading-tight">{o.row || '—'}</div>
                               <div className="text-[9px] text-gray-400 uppercase font-medium tracking-wide">Row</div>
                             </div>
-                            {(o.low_seat || o.high_seat) && (
+                            {(o.low_seat != null || o.high_seat != null) && (
                               <div className="text-center min-w-[36px]">
                                 <div className="text-base font-bold text-gray-900 tabular-nums leading-tight">
-                                  {o.low_seat && o.high_seat ? `${o.low_seat}–${o.high_seat}` : o.low_seat || o.high_seat}
+                                  {o.low_seat != null && o.high_seat != null ? `${o.low_seat}–${o.high_seat}` : (o.low_seat ?? o.high_seat)}
                                 </div>
                                 <div className="text-[9px] text-gray-400 uppercase font-medium tracking-wide">Seats</div>
                               </div>
@@ -1392,13 +1392,16 @@ export default function OrdersClient({
                         <div className="text-[10px] text-gray-400 uppercase tracking-wide">Row</div>
                         <div className="text-lg font-bold text-gray-900 mt-0.5">{selectedOrder.row || '—'}</div>
                       </div>
-                      {(selectedOrder.low_seat || selectedOrder.high_seat || drawerDetail?.low_seat || drawerDetail?.high_seat) && (
+                      {((selectedOrder.low_seat ?? drawerDetail?.low_seat) != null || (selectedOrder.high_seat ?? drawerDetail?.high_seat) != null) && (
                         <div className="col-span-2 bg-white rounded-lg p-3 border border-gray-100">
                           <div className="text-[10px] text-gray-400 uppercase tracking-wide">Seats</div>
                           <div className="text-sm font-bold text-gray-900 mt-0.5">
-                            {(selectedOrder.low_seat || drawerDetail?.low_seat) && (selectedOrder.high_seat || drawerDetail?.high_seat)
-                              ? `${selectedOrder.low_seat || drawerDetail?.low_seat} – ${selectedOrder.high_seat || drawerDetail?.high_seat}`
-                              : selectedOrder.low_seat || drawerDetail?.low_seat || '—'}
+                            {(() => {
+                              const lo = selectedOrder.low_seat ?? drawerDetail?.low_seat;
+                              const hi = selectedOrder.high_seat ?? drawerDetail?.high_seat;
+                              if (lo != null && hi != null) return `${lo} – ${hi}`;
+                              return lo ?? hi ?? '—';
+                            })()}
                           </div>
                         </div>
                       )}
@@ -1810,8 +1813,8 @@ export default function OrdersClient({
                   <span className="text-gray-500">Seats</span>
                   <span className="font-semibold text-gray-900">
                     Sec {modalOrder.section || '—'}, Row {modalOrder.row || '—'}
-                    {(modalOrder.low_seat || modalOrder.high_seat) && (
-                      <>, Seats {modalOrder.low_seat && modalOrder.high_seat ? `${modalOrder.low_seat}–${modalOrder.high_seat}` : modalOrder.low_seat || modalOrder.high_seat}</>
+                    {(modalOrder.low_seat != null || modalOrder.high_seat != null) && (
+                      <>, Seats {modalOrder.low_seat != null && modalOrder.high_seat != null ? `${modalOrder.low_seat}–${modalOrder.high_seat}` : (modalOrder.low_seat ?? modalOrder.high_seat)}</>
                     )}
                   </span>
                 </div>
