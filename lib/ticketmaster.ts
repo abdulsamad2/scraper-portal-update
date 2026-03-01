@@ -64,8 +64,8 @@ export interface TMSearchParams {
   venueId?: string;
   city?: string;
   stateCode?: string;
-  startDateTime?: string;    // ISO 8601 with Z
-  endDateTime?: string;
+  localStartDateTime?: string;  // Date or datetime, no Z (e.g. 2026-03-07)
+  localEndDateTime?: string;    // Date or datetime, no Z (e.g. 2026-03-07)
   classificationName?: string;
   size?: number;
   page?: number;
@@ -95,13 +95,22 @@ export async function searchEvents(params: TMSearchParams): Promise<TMSearchResu
   qs.set('page', String(params.page ?? 0));
   qs.set('sort', params.sort ?? 'date,asc');
   qs.set('countryCode', 'US');
+  qs.set('source', 'ticketmaster');
 
   if (params.keyword) qs.set('keyword', params.keyword);
   if (params.venueId) qs.set('venueId', params.venueId);
   if (params.city) qs.set('city', params.city);
   if (params.stateCode) qs.set('stateCode', params.stateCode);
-  if (params.startDateTime) qs.set('startDateTime', params.startDateTime);
-  if (params.endDateTime) qs.set('endDateTime', params.endDateTime);
+  if (params.localStartDateTime) {
+    // Append T00:00:00 if only a date was provided
+    const start = params.localStartDateTime.includes('T') ? params.localStartDateTime : `${params.localStartDateTime}T00:00:00`;
+    qs.set('localStartDateTime', start);
+  }
+  if (params.localEndDateTime) {
+    // Append T23:59:59 if only a date was provided
+    const end = params.localEndDateTime.includes('T') ? params.localEndDateTime : `${params.localEndDateTime}T23:59:59`;
+    qs.set('localStartEndDateTime', end);
+  }
   if (params.classificationName) qs.set('classificationName', params.classificationName);
 
   const url = `${TM_BASE}/events.json?${qs.toString()}`;
