@@ -204,7 +204,12 @@ export default function ExclusionManagementPage({ eventId, eventName }: Exclusio
                           className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white shadow-sm font-medium"
                         >
                           <option value="">Select Section</option>
-                          {sections.map(section => (
+                          {sections
+                            .filter(section =>
+                              section.section === exclusion.section ||
+                              !sectionRowExclusions.some((other, otherIdx) => otherIdx !== index && other.section === section.section)
+                            )
+                            .map(section => (
                             <option key={section.section} value={section.section}>
                               {section.section} ({section.totalListings} listings)
                             </option>
@@ -256,10 +261,11 @@ export default function ExclusionManagementPage({ eventId, eventName }: Exclusio
               
               <button
                 onClick={addSectionExclusion}
-                className="flex items-center justify-center space-x-3 w-full py-4 border-2 border-dashed border-slate-300 rounded-2xl text-slate-600 hover:border-blue-400 hover:text-blue-600 hover:bg-blue-50 transition-all duration-200 font-semibold"
+                disabled={sectionRowExclusions.filter(e => e.section).length >= sections.length}
+                className="flex items-center justify-center space-x-3 w-full py-4 border-2 border-dashed border-slate-300 rounded-2xl text-slate-600 hover:border-blue-400 hover:text-blue-600 hover:bg-blue-50 transition-all duration-200 font-semibold disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-slate-300 disabled:hover:text-slate-600 disabled:hover:bg-transparent"
               >
                 <Plus size={24} />
-                <span>Add Section Exclusion</span>
+                <span>{sectionRowExclusions.filter(e => e.section).length >= sections.length ? 'All Sections Assigned' : 'Add Section Exclusion'}</span>
               </button>
             </div>
           </div>
