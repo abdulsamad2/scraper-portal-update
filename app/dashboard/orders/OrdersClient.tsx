@@ -162,10 +162,13 @@ function DeliveryBadge({ delivery }: { delivery: string }) {
 
 // Module-level sync timer (survives Suspense remounts)
 let _lastSyncAt = Date.now();
-const SYNC_INTERVAL = 5; // seconds — keep low for near-instant sync with remote API
+const POLL_INTERVAL = 8;  // seconds — lightweight DB-only check for notifications
+const SYNC_INTERVAL = 30; // seconds — full sync with remote SeatScouts API (reduced from 15s)
+let _lastFullSyncAt = 0;
+let _lastPollHash = '';   // tracks poll hash to avoid unnecessary refreshes
 
 function getSyncRemaining() {
-  return Math.max(0, SYNC_INTERVAL - Math.floor((Date.now() - _lastSyncAt) / 1000));
+  return Math.max(0, POLL_INTERVAL - Math.floor((Date.now() - _lastSyncAt) / 1000));
 }
 
 /* ------------------------------------------------------------------ */
@@ -338,7 +341,17 @@ export default function OrdersClient({
         const res = await fetch(`/api/orders/detail?syncId=${order.sync_id}`, { cache: 'no-store' });
         if (res.ok) {
           const data = await res.json();
-          if (data.detail) setDrawerDetail(data.detail);
+          if (data.detail) {
+            setDrawerDetail(data.detail);
+            // Propagate seat data back to table row
+            if (data.detail.low_seat != null || data.detail.high_seat != null) {
+              setLocalOrders(prev => prev.map(o =>
+                o._id === order._id
+                  ? { ...o, low_seat: data.detail.low_seat ?? o.low_seat, high_seat: data.detail.high_seat ?? o.high_seat }
+                  : o
+              ));
+            }
+          }
         }
       } catch { /* ignore */ }
       finally { setDrawerLoading(false); }
@@ -356,12 +369,39 @@ export default function OrdersClient({
     return () => window.removeEventListener('keydown', handleKey);
   }, [drawerOpen, closeDrawer]);
 
-  // --- Sync ---
+  // --- Lightweight poll (DB counts only, no external API) ---
+  const pollOnly = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/orders/poll?t=${Date.now()}`, { cache: 'no-store' });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.error) return;
+
+      // Use hash to detect actual changes — skip refresh if nothing changed
+      const newHash = data.hash || '';
+      const changed = newHash !== _lastPollHash;
+      _lastPollHash = newHash;
+
+      if (data.unacknowledgedCount !== undefined) setUnackCount(data.unacknowledgedCount);
+      if (data.unacknowledgedProblemCount !== undefined) setProblemCount(data.unacknowledgedProblemCount);
+      if (data.tabCounts) setLocalTabCounts(data.tabCounts);
+
+      // Only refresh the table when counts actually changed
+      if (changed && _lastPollHash !== '') {
+        refresh();
+      }
+
+      _lastSyncAt = Date.now();
+      setCountdown(POLL_INTERVAL);
+    } catch { /* silent */ }
+  }, [refresh]);
+
+  // --- Full sync (calls SeatScouts API, writes to DB) ---
   const syncOnly = useCallback(async () => {
     setSyncing(true);
     setSyncError('');
+    let needsRefresh = false;
     try {
-      // Default "pending" tab → fast sync (invoiced only). Other filters → full sync (all statuses)
       const isDefaultTab = statusFilter.length === 0 || (statusFilter.length === 1 && statusFilter[0] === 'pending');
       const mode = isDefaultTab ? 'fast' : 'full';
       const res = await fetch(`/api/orders/sync?t=${Date.now()}&mode=${mode}`, { cache: 'no-store' });
@@ -371,32 +411,40 @@ export default function OrdersClient({
 
       if (data.newOrderIds && data.newOrderIds.length > 0) {
         data.newOrderIds.forEach(id => newIdsRef.current.add(id));
+        needsRefresh = true; // New orders found — must refresh table
       }
       if (data.unacknowledgedCount !== undefined) {
+        if (data.unacknowledgedCount !== unackCount) needsRefresh = true;
         setUnackCount(data.unacknowledgedCount);
-        // After first sync: if there are unacked orders (invoiced OR problem), start alert
-        const totalUnack = (data.unacknowledgedCount || 0) + (data.unacknowledgedProblemCount || 0);
-        if (!hasSyncedRef.current && totalUnack > 0) {
+        const totalUnackNew = (data.unacknowledgedCount || 0) + (data.unacknowledgedProblemCount || 0);
+        if (!hasSyncedRef.current && totalUnackNew > 0) {
           startAlert();
         }
       }
       if (data.unacknowledgedProblemCount !== undefined) {
+        if (data.unacknowledgedProblemCount !== problemCount) needsRefresh = true;
         setProblemCount(data.unacknowledgedProblemCount);
       }
-      // Update tab counts instantly from sync response (no need to wait for router.refresh)
       if (data.tabCounts) {
+        // Check if tab counts changed
+        const oldHash = `${localTabCounts.invoiced}:${localTabCounts.problem}:${localTabCounts.confirmed}:${localTabCounts.delivered}:${localTabCounts.all}`;
+        const newHash = `${data.tabCounts.invoiced}:${data.tabCounts.problem}:${data.tabCounts.confirmed}:${data.tabCounts.delivered}:${data.tabCounts.all}`;
+        if (oldHash !== newHash) needsRefresh = true;
         setLocalTabCounts(data.tabCounts);
       }
       _lastSyncAt = Date.now();
-      setCountdown(SYNC_INTERVAL);
+      _lastFullSyncAt = Date.now();
+      setCountdown(POLL_INTERVAL);
       hasSyncedRef.current = true;
     } catch { setSyncError('Network error'); }
     finally { setSyncing(false); }
-    // Refresh server component to get latest order list data
-    refresh();
-  }, [refresh, startAlert, statusFilter]);
+    // Only refresh the page when data actually changed
+    if (needsRefresh || !hasSyncedRef.current) {
+      refresh();
+    }
+  }, [refresh, startAlert, statusFilter, unackCount, problemCount, localTabCounts]);
 
-  // Initial sync after mount
+  // Initial full sync after mount
   useEffect(() => {
     const t = setTimeout(() => syncOnly(), 500);
     return () => clearTimeout(t);
@@ -421,11 +469,49 @@ export default function OrdersClient({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Sync polling
+  // Smart polling: lightweight poll every 8s, full sync every 30s
+  // Pauses when tab is hidden, re-syncs when tab becomes visible
   useEffect(() => {
-    const iv = setInterval(syncOnly, SYNC_INTERVAL * 1000);
-    return () => clearInterval(iv);
-  }, [syncOnly]);
+    let iv: ReturnType<typeof setInterval> | null = null;
+
+    const startPolling = () => {
+      if (iv) clearInterval(iv);
+      iv = setInterval(() => {
+        // Don't poll when tab is hidden
+        if (document.hidden) return;
+        const sinceLastFullSync = (Date.now() - _lastFullSyncAt) / 1000;
+        if (sinceLastFullSync >= SYNC_INTERVAL) {
+          syncOnly();
+        } else {
+          pollOnly();
+        }
+      }, POLL_INTERVAL * 1000);
+    };
+
+    const handleVisibility = () => {
+      if (!document.hidden) {
+        // Tab became visible — do an immediate sync to catch up
+        const sinceLastSync = (Date.now() - _lastFullSyncAt) / 1000;
+        if (sinceLastSync >= SYNC_INTERVAL / 2) {
+          // Stale enough, do a full sync
+          syncOnly();
+        } else {
+          // Just poll counts to update badges quickly
+          pollOnly();
+        }
+        startPolling();
+      }
+      // When hidden, the interval still runs but the guard above skips execution
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    startPolling();
+
+    return () => {
+      if (iv) clearInterval(iv);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [syncOnly, pollOnly]);
 
   // Countdown tick
   useEffect(() => {
@@ -1128,14 +1214,15 @@ export default function OrdersClient({
                               <div className="text-base font-bold text-gray-900 leading-tight">{o.row || '—'}</div>
                               <div className="text-[9px] text-gray-400 uppercase font-medium tracking-wide">Row</div>
                             </div>
-                            {(o.low_seat != null || o.high_seat != null) && (
-                              <div className="text-center min-w-[36px]">
-                                <div className="text-base font-bold text-gray-900 tabular-nums leading-tight">
-                                  {o.low_seat != null && o.high_seat != null ? `${o.low_seat}–${o.high_seat}` : (o.low_seat ?? o.high_seat)}
-                                </div>
-                                <div className="text-[9px] text-gray-400 uppercase font-medium tracking-wide">Seats</div>
+                            <div className="text-center min-w-[36px]">
+                              <div className="text-base font-bold text-gray-900 tabular-nums leading-tight">
+                                {o.low_seat != null && o.high_seat != null ? `${o.low_seat}–${o.high_seat}`
+                                  : o.low_seat != null ? String(o.low_seat)
+                                  : o.high_seat != null ? String(o.high_seat)
+                                  : '—'}
                               </div>
-                            )}
+                              <div className="text-[9px] text-gray-400 uppercase font-medium tracking-wide">Seats</div>
+                            </div>
                           </div>
                         </td>
 
@@ -1392,19 +1479,17 @@ export default function OrdersClient({
                         <div className="text-[10px] text-gray-400 uppercase tracking-wide">Row</div>
                         <div className="text-lg font-bold text-gray-900 mt-0.5">{selectedOrder.row || '—'}</div>
                       </div>
-                      {((selectedOrder.low_seat ?? drawerDetail?.low_seat) != null || (selectedOrder.high_seat ?? drawerDetail?.high_seat) != null) && (
-                        <div className="col-span-2 bg-white rounded-lg p-3 border border-gray-100">
-                          <div className="text-[10px] text-gray-400 uppercase tracking-wide">Seats</div>
-                          <div className="text-sm font-bold text-gray-900 mt-0.5">
-                            {(() => {
-                              const lo = selectedOrder.low_seat ?? drawerDetail?.low_seat;
-                              const hi = selectedOrder.high_seat ?? drawerDetail?.high_seat;
-                              if (lo != null && hi != null) return `${lo} – ${hi}`;
-                              return lo ?? hi ?? '—';
-                            })()}
-                          </div>
+                      <div className="bg-white rounded-lg p-3 border border-gray-100">
+                        <div className="text-[10px] text-gray-400 uppercase tracking-wide">Seats</div>
+                        <div className="text-lg font-bold text-gray-900 mt-0.5">
+                          {(() => {
+                            const lo = selectedOrder.low_seat ?? drawerDetail?.low_seat;
+                            const hi = selectedOrder.high_seat ?? drawerDetail?.high_seat;
+                            if (lo != null && hi != null) return `${lo} – ${hi}`;
+                            return lo ?? hi ?? '—';
+                          })()}
                         </div>
-                      )}
+                      </div>
                     </div>
                   </div>
 
@@ -1812,10 +1897,7 @@ export default function OrdersClient({
                 <div className="flex justify-between">
                   <span className="text-gray-500">Seats</span>
                   <span className="font-semibold text-gray-900">
-                    Sec {modalOrder.section || '—'}, Row {modalOrder.row || '—'}
-                    {(modalOrder.low_seat != null || modalOrder.high_seat != null) && (
-                      <>, Seats {modalOrder.low_seat != null && modalOrder.high_seat != null ? `${modalOrder.low_seat}–${modalOrder.high_seat}` : (modalOrder.low_seat ?? modalOrder.high_seat)}</>
-                    )}
+                    Sec {modalOrder.section || '—'}, Row {modalOrder.row || '—'}, Seats {modalOrder.low_seat != null && modalOrder.high_seat != null ? `${modalOrder.low_seat}–${modalOrder.high_seat}` : (modalOrder.low_seat ?? modalOrder.high_seat ?? '—')}
                   </span>
                 </div>
                 <div className="flex justify-between">

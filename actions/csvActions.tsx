@@ -561,15 +561,7 @@ async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]
     }
   }));
 
-  // Filter out Standard listings with 2 or fewer seats
-  const filteredBatch = batch.filter(doc => {
-    const isStandard = doc.inventory?.splitType === 'NEVERLEAVEONE';
-    const quantity = doc.inventory?.quantity || 0;
-    if (isStandard && quantity <= 2) return false;
-    return true;
-  });
-
-  return filteredBatch.map(doc => {
+  return batch.map(doc => {
     const inventory = doc.inventory;
     const isResale = inventory?.splitType !== 'NEVERLEAVEONE';
 

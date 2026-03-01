@@ -16,6 +16,35 @@ function escapeRegex(str: string) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/**
+ * Fetch seat range from the /transfers endpoint for a single order.
+ */
+async function fetchSeatRange(
+  syncId: number,
+  companyId: string,
+  apiToken: string
+): Promise<{ low_seat: number; high_seat: number } | null> {
+  try {
+    const res = await fetch(`${SYNC_API_BASE}/transfers?order_id=${syncId}`, {
+      headers: { 'X-Company-Id': companyId, 'X-Api-Token': apiToken, 'Accept': 'application/json' },
+      cache: 'no-store',
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const transfers = data.transfers || data.data || data || [];
+    const transferArr = Array.isArray(transfers) ? transfers : [transfers];
+    const seats: number[] = [];
+    for (const transfer of transferArr) {
+      for (const ticket of (transfer.tickets || [])) {
+        if (ticket.seat != null && typeof ticket.seat === 'number') seats.push(ticket.seat);
+      }
+    }
+    if (seats.length === 0) return null;
+    return { low_seat: Math.min(...seats), high_seat: Math.max(...seats) };
+  } catch { return null; }
+}
+
 async function findEventUrl(o: Record<string, any>): Promise<{ eventId: any; url: string } | null> {
   try {
     // Strategy 1 (deterministic): pos_event_id IS the mapping_id on Event
@@ -76,6 +105,86 @@ export async function GET(request: NextRequest) {
       'X-Company-Id': companyId,
       'X-Api-Token': apiToken,
     };
+
+    // Resync mode: page through ALL orders from the API
+    if (mode === 'resync') {
+      await dbConnect();
+      let page = 1;
+      const perPage = 200;
+      let totalSynced = 0;
+      let totalPages = 1;
+
+      while (page <= totalPages) {
+        const apiUrl = `${SYNC_API_BASE}/orders?limit=${perPage}&page=${page}`;
+        const res = await fetch(apiUrl, {
+          headers, cache: 'no-store', signal: AbortSignal.timeout(30000),
+        });
+        if (!res.ok) {
+          const text = await res.text().catch(() => '');
+          return NextResponse.json({ error: `API error ${res.status} on page ${page}: ${text}` }, { status: 502 });
+        }
+        const data = await res.json();
+        const orders: any[] = data.data || [];
+        if (orders.length === 0) break;
+
+        // Calculate total pages from count
+        if (page === 1 && data.count) {
+          totalPages = Math.ceil(data.count / perPage);
+          console.log(`[resync] Total orders: ${data.count}, pages: ${totalPages}`);
+        }
+
+        const bulkOps = orders.map((o: any) => ({
+          updateOne: {
+            filter: { order_id: o.order_id },
+            update: {
+              $set: {
+                sync_id: o.id || null,
+                external_id: o.external_id || '',
+                event_name: o.event_name || '',
+                venue: o.venue || o.venue_name || '',
+                city: o.city || '',
+                state: o.state || '',
+                country: o.country || '',
+                occurs_at: o.occurs_at ? new Date(o.occurs_at) : null,
+                section: o.section || '',
+                row: o.row || '',
+                low_seat: o.low_seat ?? null,
+                high_seat: o.high_seat ?? null,
+                quantity: o.quantity ?? 0,
+                status: o.status || 'pending',
+                delivery: o.delivery || '',
+                marketplace: o.marketplace || '',
+                total: parseFloat(o.total) || 0,
+                unit_price: parseFloat(o.unit_price) || 0,
+                order_date: o.order_date ? new Date(o.order_date) : null,
+                transfer_count: o.transfer_count ?? 0,
+                pos_event_id: o.pos_event_id || '',
+                pos_inventory_id: o.pos_inventory_id || '',
+                pos_invoice_id: o.pos_invoice_id || '',
+                from_csv: o.from_csv ?? false,
+                last_seen_internal_notes: o.last_seen_internal_notes || '',
+              },
+              $setOnInsert: { acknowledged: false },
+            },
+            upsert: true,
+          },
+        }));
+
+        await Order.bulkWrite(bulkOps);
+        totalSynced += orders.length;
+        console.log(`[resync] Page ${page}/${totalPages}: ${orders.length} orders synced (total: ${totalSynced})`);
+        page++;
+
+        // Small delay between pages to respect rate limits
+        if (page <= totalPages) {
+          await new Promise(r => setTimeout(r, 300));
+        }
+      }
+
+      revalidatePath('/dashboard/orders');
+      console.log(`[resync] Complete: ${totalSynced} orders in ${Date.now() - t0}ms`);
+      return NextResponse.json({ success: true, synced: totalSynced, pages: totalPages, elapsed: Date.now() - t0 });
+    }
 
     // Fast mode (default/pending tab): smaller limit for speed, no status filter so status changes are detected
     // Full mode (other tabs/filters): larger limit to cover all orders
@@ -241,6 +350,28 @@ export async function GET(request: NextRequest) {
       }
     }
     console.log(`[sync] cross-ref (${unmatchedOrders.length} checked): ${Date.now() - t0}ms`);
+
+    // Fetch seat data from /transfers only for NEW orders
+    if (newOrderIds.length > 0) {
+      const newOrdersForSeats = await Order.find(
+        { order_id: { $in: newOrderIds }, sync_id: { $ne: null } },
+        { sync_id: 1, order_id: 1 }
+      ).lean();
+
+      if (newOrdersForSeats.length > 0) {
+        const seatResults = await Promise.all(
+          newOrdersForSeats.map(async (o: any) => {
+            const range = await fetchSeatRange(o.sync_id, companyId, apiToken);
+            if (range) {
+              await Order.updateOne({ _id: o._id }, { $set: { low_seat: range.low_seat, high_seat: range.high_seat } });
+            }
+            return range ? 1 : 0;
+          })
+        );
+        const seatUpdated = seatResults.reduce((a, b) => a + b, 0);
+        if (seatUpdated > 0) console.log(`[sync] seat data: ${seatUpdated}/${newOrdersForSeats.length} new orders updated`);
+      }
+    }
 
     // Get new orders with their TM URLs for auto-open
     let newOrdersWithUrls: any[] = [];

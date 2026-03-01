@@ -7,7 +7,8 @@ import { useOrderAlert } from './orders/useOrderAlert';
 
 /**
  * Global component that lives in the dashboard layout.
- * - Polls /api/orders/sync every 10s on ALL pages (not just orders page)
+ * - Uses lightweight /api/orders/poll (DB-only, no remote API calls) every 15s on non-orders pages
+ * - Pauses polling when browser tab is hidden
  * - Plays alarm sound on ANY page when new unacknowledged orders exist
  * - Shows a floating modal on non-orders pages to direct user to orders
  */
@@ -17,20 +18,24 @@ export default function GlobalOrderAlert() {
   const isOrdersPage = pathname === '/dashboard/orders';
 
   const [unackCount, setUnackCount] = useState(0);
+  const [problemCount, setProblemCount] = useState(0);
   const [showModal, setShowModal] = useState(false);
   const hasSyncedRef = useRef(false);
   const prevUnackRef = useRef(0);
   const { startAlert, stopAlert } = useOrderAlert();
 
-  const doSync = useCallback(async () => {
+  // Lightweight poll — DB counts only, no remote API calls (~200ms vs ~3000ms sync)
+  const doPoll = useCallback(async () => {
+    // Skip if tab is hidden
+    if (document.hidden) return;
     try {
-      const res = await fetch(`/api/orders/sync?t=${Date.now()}`, { cache: 'no-store' });
+      const res = await fetch(`/api/orders/poll?t=${Date.now()}`, { cache: 'no-store' });
       if (!res.ok) return;
       const data = await res.json();
       if (data.error) return;
 
-      const count = data.unacknowledgedCount ?? 0;
-      setUnackCount(count);
+      setUnackCount(data.unacknowledgedCount ?? 0);
+      setProblemCount(data.unacknowledgedProblemCount ?? 0);
 
       hasSyncedRef.current = true;
     } catch {
@@ -39,26 +44,27 @@ export default function GlobalOrderAlert() {
   }, []);
 
   // Alert logic: play alarm on ANY page when unack count increases
+  const totalUnack = unackCount + problemCount;
   useEffect(() => {
     if (!hasSyncedRef.current) return;
 
-    if (unackCount === 0) {
+    if (totalUnack === 0) {
       stopAlert();
       setShowModal(false);
-    } else if (unackCount > prevUnackRef.current || prevUnackRef.current === 0) {
+    } else if (totalUnack > prevUnackRef.current || prevUnackRef.current === 0) {
       // New unacknowledged orders — alarm on ANY page
       startAlert();
       // Show modal only on non-orders pages
       if (!isOrdersPage) {
         setShowModal(true);
       }
-    } else if (unackCount < prevUnackRef.current) {
+    } else if (totalUnack < prevUnackRef.current) {
       // Count decreased (orders confirmed/handled) — stop alarm
       stopAlert();
     }
-    prevUnackRef.current = unackCount;
+    prevUnackRef.current = totalUnack;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [unackCount]);
+  }, [totalUnack]);
 
   // Stop alert only on unmount
   useEffect(() => {
@@ -75,16 +81,33 @@ export default function GlobalOrderAlert() {
   }, [isOrdersPage, stopAlert]);
 
   // Polling — only run when NOT on orders page (orders page has its own sync)
+  // Uses lightweight poll (DB-only) every 15s, pauses when tab hidden
   useEffect(() => {
     if (isOrdersPage) return;
-    // Initial sync
-    const t = setTimeout(doSync, 1000);
-    const iv = setInterval(doSync, 10000);
-    return () => { clearTimeout(t); clearInterval(iv); };
-  }, [doSync, isOrdersPage]);
+
+    // Initial poll (delayed slightly)
+    const t = setTimeout(doPoll, 2000);
+    const iv = setInterval(doPoll, 15000);
+
+    // Re-poll immediately when tab becomes visible after being hidden
+    const handleVisibility = () => {
+      if (!document.hidden) {
+        doPoll();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      clearTimeout(t);
+      clearInterval(iv);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [doPoll, isOrdersPage]);
 
   // On orders page, OrdersClient handles its own sync + alerts — skip everything
   if (!showModal || isOrdersPage) return null;
+
+  const displayCount = unackCount + problemCount;
 
   return (
     <>
@@ -156,7 +179,7 @@ export default function GlobalOrderAlert() {
                 className="absolute -top-2 -right-2 min-w-[28px] h-7 bg-red-600 text-white text-sm font-black rounded-full flex items-center justify-center px-1.5 z-20 border-2 border-white shadow-md"
                 style={{ animation: 'badge-bounce 1s ease-in-out infinite' }}
               >
-                {unackCount}
+                {displayCount}
               </span>
             </div>
           </div>
@@ -171,14 +194,14 @@ export default function GlobalOrderAlert() {
           </div>
 
           <h2 className="text-2xl font-black text-gray-900 text-center mb-2 mt-3">
-            New Order{unackCount > 1 ? 's' : ''} Received!
+            New Order{displayCount > 1 ? 's' : ''} Received!
           </h2>
           <p className="text-gray-500 text-center text-sm mb-6">
             You have{' '}
             <span className="font-black text-red-600 text-lg" style={{ animation: 'badge-bounce 1.5s ease-in-out infinite' }}>
-              {unackCount}
+              {displayCount}
             </span>{' '}
-            unacknowledged order{unackCount > 1 ? 's' : ''} waiting for action.
+            unacknowledged order{displayCount > 1 ? 's' : ''} waiting for action.
           </p>
 
           <div className="flex flex-col gap-3">
