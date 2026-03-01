@@ -1113,7 +1113,7 @@ export default function OrdersClient({
                           </div>
                         </td>
 
-                        {/* TICKET — Qty / Section / Row / Seat grid */}
+                        {/* TICKET — Qty / Section / Row / Seats grid */}
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-5">
                             <div className="text-center min-w-[28px]">
@@ -1128,6 +1128,14 @@ export default function OrdersClient({
                               <div className="text-base font-bold text-gray-900 leading-tight">{o.row || '—'}</div>
                               <div className="text-[9px] text-gray-400 uppercase font-medium tracking-wide">Row</div>
                             </div>
+                            {(o.low_seat || o.high_seat) && (
+                              <div className="text-center min-w-[36px]">
+                                <div className="text-base font-bold text-gray-900 tabular-nums leading-tight">
+                                  {o.low_seat && o.high_seat ? `${o.low_seat}–${o.high_seat}` : o.low_seat || o.high_seat}
+                                </div>
+                                <div className="text-[9px] text-gray-400 uppercase font-medium tracking-wide">Seats</div>
+                              </div>
+                            )}
                           </div>
                         </td>
 
@@ -1672,7 +1680,7 @@ export default function OrdersClient({
                               Change
                             </button>
                             <button
-                              onClick={() => handleProofUpload(proofFile)}
+                              onClick={() => proofFile && handleProofUpload(proofFile)}
                               disabled={proofUploading}
                               className="flex-1 px-4 py-1.5 rounded-md bg-blue-600 text-white hover:bg-blue-700 transition-all text-sm font-bold flex items-center justify-center gap-1.5 disabled:opacity-50"
                             >
@@ -1800,7 +1808,12 @@ export default function OrdersClient({
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-500">Seats</span>
-                  <span className="font-semibold text-gray-900">Sec {modalOrder.section || '—'}, Row {modalOrder.row || '—'}</span>
+                  <span className="font-semibold text-gray-900">
+                    Sec {modalOrder.section || '—'}, Row {modalOrder.row || '—'}
+                    {(modalOrder.low_seat || modalOrder.high_seat) && (
+                      <>, Seats {modalOrder.low_seat && modalOrder.high_seat ? `${modalOrder.low_seat}–${modalOrder.high_seat}` : modalOrder.low_seat || modalOrder.high_seat}</>
+                    )}
+                  </span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-500">Quantity</span>

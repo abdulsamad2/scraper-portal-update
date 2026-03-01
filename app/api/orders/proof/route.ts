@@ -39,7 +39,7 @@ export async function POST(req: NextRequest) {
     const body = {
       data: [
         {
-          image: base64,
+          file: base64,
           extension: ext,
         },
       ],
