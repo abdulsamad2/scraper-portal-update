@@ -7,7 +7,7 @@ import {
   Search, Import, Calendar, MapPin, ChevronLeft, ChevronRight,
   Loader2, Check, X, ExternalLink, DollarSign, Flame,
   Package, RefreshCw, ChevronDown, ChevronUp, Shield, Ticket,
-  Users, Music, AlertTriangle, Twitter, Instagram, Globe, ClipboardPaste,
+  Users, Music, AlertTriangle, Twitter, Instagram, Globe,
 } from 'lucide-react';
 
 /* ------------------------------------------------------------------ */
