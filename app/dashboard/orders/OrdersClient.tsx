@@ -371,11 +371,6 @@ export default function OrdersClient({
 
       if (data.newOrderIds && data.newOrderIds.length > 0) {
         data.newOrderIds.forEach(id => newIdsRef.current.add(id));
-        if (data.newOrders) {
-          for (const o of data.newOrders) {
-            if (o.ticketmasterUrl) openEvent(o.ticketmasterUrl);
-          }
-        }
       }
       if (data.unacknowledgedCount !== undefined) {
         setUnackCount(data.unacknowledgedCount);
