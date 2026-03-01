@@ -368,7 +368,7 @@ export async function GET(request: NextRequest) {
             return range ? 1 : 0;
           })
         );
-        const seatUpdated = seatResults.reduce((a, b) => a + b, 0);
+        const seatUpdated = seatResults.reduce((a: number, b) => a + b, 0 as number);
         if (seatUpdated > 0) console.log(`[sync] seat data: ${seatUpdated}/${newOrdersForSeats.length} new orders updated`);
       }
     }
