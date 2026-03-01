@@ -17,10 +17,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'image file required' }, { status: 400 });
     }
 
-    // Validate file type
-    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif'];
-    if (!allowedTypes.includes(image.type)) {
-      return NextResponse.json({ error: 'Only jpg, jpeg, png, gif files are supported' }, { status: 400 });
+    // Validate it's an image
+    if (!image.type.startsWith('image/')) {
+      return NextResponse.json({ error: 'Only image files are supported' }, { status: 400 });
     }
 
     const apiToken = process.env.SYNC_API_TOKEN;
@@ -29,17 +28,35 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'API credentials not configured' }, { status: 500 });
     }
 
-    // Forward the image to the Sync API as multipart form data
-    const proofForm = new FormData();
-    proofForm.append('image', image, image.name);
+    // Convert the image file to base64
+    const arrayBuffer = await image.arrayBuffer();
+    const base64 = Buffer.from(arrayBuffer).toString('base64');
 
-    const res = await fetch(`${SYNC_API_BASE}/orders/${syncId}/proofs`, {
+    // Determine the file extension
+    const ext = image.name.split('.').pop()?.toLowerCase() || 'jpg';
+
+    // Build the JSON body the Sync API expects
+    const body = {
+      data: [
+        {
+          image: base64,
+          extension: ext,
+        },
+      ],
+    };
+
+    const url = `${SYNC_API_BASE}/orders/${syncId}/proofs`;
+    console.log(`Uploading proof for order ${syncId}: ${url} (${image.name}, ${image.size} bytes, ${image.type})`);
+
+    const res = await fetch(url, {
       method: 'POST',
       headers: {
         'X-Company-Id': companyId,
         'X-Api-Token': apiToken,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
       },
-      body: proofForm,
+      body: JSON.stringify(body),
       signal: AbortSignal.timeout(30000),
     });
 
@@ -48,7 +65,9 @@ export async function POST(req: NextRequest) {
     try { data = JSON.parse(text); } catch { data = { raw: text }; }
 
     if (!res.ok) {
-      return NextResponse.json({ error: data.error || `API error ${res.status}` }, { status: 502 });
+      const errorMsg = data.error || data.message || data.errors?.[0]?.message || data.raw || `API error ${res.status}`;
+      console.error(`Proof upload API error ${res.status} for syncId ${syncId}:`, text);
+      return NextResponse.json({ error: errorMsg }, { status: 502 });
     }
 
     return NextResponse.json({ success: true, data });

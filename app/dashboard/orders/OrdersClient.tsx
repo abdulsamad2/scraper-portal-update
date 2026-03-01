@@ -480,14 +480,48 @@ export default function OrdersClient({
     }
   };
 
+  const convertToJpeg = (file: File): Promise<File> => {
+    return new Promise((resolve, reject) => {
+      if (file.type === 'image/jpeg' || file.type === 'image/jpg') {
+        resolve(file);
+        return;
+      }
+      const img = new window.Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) { resolve(file); return; }
+        // White background for transparency (png/gif)
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0);
+        canvas.toBlob(
+          (blob) => {
+            if (!blob) { resolve(file); return; }
+            const name = file.name.replace(/\.[^.]+$/, '.jpg');
+            resolve(new File([blob], name, { type: 'image/jpeg' }));
+          },
+          'image/jpeg',
+          0.92
+        );
+      };
+      img.onerror = () => reject(new Error('Failed to load image for conversion'));
+      img.src = URL.createObjectURL(file);
+    });
+  };
+
   const handleProofUpload = async (file: File) => {
     if (!selectedOrder?.sync_id) return;
     setProofUploading(true);
     setProofResult(null);
     try {
+      // Convert non-JPEG images to JPEG for API compatibility
+      const jpegFile = await convertToJpeg(file);
       const formData = new FormData();
       formData.append('syncId', String(selectedOrder.sync_id));
-      formData.append('image', file);
+      formData.append('image', jpegFile);
       const res = await fetch('/api/orders/proof', { method: 'POST', body: formData });
       const data = await res.json();
       if (res.ok && data.success) {
@@ -1603,7 +1637,7 @@ export default function OrdersClient({
                       <input
                         ref={proofInputRef}
                         type="file"
-                        accept=".jpg,.jpeg,.png,.gif"
+                        accept="image/*,.jpg,.jpeg,.png,.gif,.webp,.bmp,.heic"
                         className="hidden"
                         onChange={(e) => {
                           const file = e.target.files?.[0];
