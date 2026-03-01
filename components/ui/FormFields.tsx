@@ -144,7 +144,7 @@ export const EventFormFields = {
         onChange={onChange}
         onBlur={onBlur}
         disabled={disabled}
-        placeholder="https://www.ticketmaster.com/event/..."
+        placeholder="https://www.ticketmaster.com (.ca/.co.uk)/event/..."
         icon={<Globe className="h-5 w-5 text-gray-400" />}
       />
     </FormField.Root>

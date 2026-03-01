@@ -70,7 +70,7 @@ const validationRules: {
   URL: (value: string) => {
     try {
       const parsed = new URL(value);
-      return parsed.hostname.includes("ticketmaster.com") && parsed.pathname.includes("/event/");
+      return /ticketmaster\.(com|ca|co\.uk)$/i.test(parsed.hostname) && parsed.pathname.includes("/event/");
     } catch {
       return false;
     }

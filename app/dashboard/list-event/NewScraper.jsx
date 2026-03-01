@@ -42,7 +42,7 @@ const EventFormContent = ({ mode, onCancel, onSuccess, initialData }) => {
     try {
       const parsed = new URL(url);
       if (
-        parsed.hostname.includes("ticketmaster.com") &&
+        /ticketmaster\.(com|ca|co\.uk)$/i.test(parsed.hostname) &&
         parsed.pathname.includes("/event/")
       ) {
         const pathParts = parsed.pathname.split("/");
@@ -63,7 +63,7 @@ const EventFormContent = ({ mode, onCancel, onSuccess, initialData }) => {
     try {
       const parsed = new URL(url);
       if (
-        parsed.hostname.includes("ticketmaster.com") &&
+        /ticketmaster\.(com|ca|co\.uk)$/i.test(parsed.hostname) &&
         parsed.pathname.includes("/event/")
       ) {
         // Extract event ID
