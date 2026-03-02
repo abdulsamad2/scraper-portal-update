@@ -212,11 +212,14 @@ export async function deleteExpiredEvents(stopBeforeHours: number = 2): Promise<
       };
     });
 
-    // Save all stopped events to settings (prepend new, keep all)
+    // Save stopped events to settings (prepend new, auto-clear records older than 24h)
     try {
       const currentSettings = await AutoDeleteSettings.findOne();
       const existing = currentSettings?.lastDeletedEvents || [];
-      const merged = [...stoppedRecords, ...existing];
+      const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const recentOnly = existing.filter((e: any) => new Date(e.deletedAt) > oneDayAgo);
+      const merged = [...stoppedRecords, ...recentOnly];
       await AutoDeleteSettings.findOneAndUpdate(
         {},
         { $set: { lastDeletedEvents: merged } },
@@ -363,7 +366,11 @@ export async function getLastDeletedEvents() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const settings: any = await AutoDeleteSettings.findOne().lean();
     const lastDeleted = settings?.lastDeletedEvents || [];
-    return JSON.parse(JSON.stringify(lastDeleted));
+    // Only return records from the last 24 hours
+    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const recent = lastDeleted.filter((e: any) => new Date(e.deletedAt) > oneDayAgo);
+    return JSON.parse(JSON.stringify(recent));
   } catch (error) {
     console.error('Error getting last deleted events:', error);
     return [];

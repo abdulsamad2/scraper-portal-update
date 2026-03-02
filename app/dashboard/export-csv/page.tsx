@@ -730,34 +730,34 @@ const ExportCsvPage: React.FC = () => {
         </div>
       )}
 
-      {/* Auto-Delete Past Events Section */}
+      {/* Auto-Stop Events Section */}
       <div className="bg-white rounded-lg shadow-md p-6 mb-5">
-        <h3 className="text-lg font-semibold mb-4 border-b pb-2">Auto Stop & Delete Events</h3>
+        <h3 className="text-lg font-semibold mb-4 border-b pb-2">Auto-Stop Events</h3>
         <div className="space-y-4">
           <div className="bg-yellow-50 p-4 rounded-lg">
             <p className="text-yellow-800 text-sm">
-              <strong>Auto Stop & Delete:</strong> Automatically stops scraping and deletes events a configurable number of hours BEFORE the event takes place. 
-              Example: An event at 7pm today with &quot;Stop Before&quot; set to 2 hours will be stopped and deleted at 5pm today.
+              <strong>Auto-Stop:</strong> Automatically stops scraping and clears inventory a configurable number of hours BEFORE the event takes place. Events are kept in the database. Stopped event records auto-clear from the dashboard after 24 hours.
+              Example: An event at 7pm today with &quot;Stop Before&quot; set to 2 hours will be stopped at 5pm today.
             </p>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                Stop & Delete Before Event (Hours)
+                Stop Before Event (Hours)
               </label>
               <input
                 type="number"
                 value={autoDeleteSettings.stopBeforeHours}
-                onChange={(e) => setAutoDeleteSettings((prev: AutoDeleteSettings) => ({ 
-                  ...prev, 
-                  stopBeforeHours: parseInt(e.target.value) || 2 
+                onChange={(e) => setAutoDeleteSettings((prev: AutoDeleteSettings) => ({
+                  ...prev,
+                  stopBeforeHours: parseInt(e.target.value) || 2
                 }))}
                 min="0"
                 max="168"
                 className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
               />
-              <p className="text-xs text-gray-500 mt-1">Hours before event time to stop scraping and delete (0 = at event time, 2 = 2 hours before)</p>
+              <p className="text-xs text-gray-500 mt-1">Hours before event time to stop scraping and clear inventory (0 = at event time, 2 = 2 hours before)</p>
             </div>
 
             <div>
@@ -767,28 +767,28 @@ const ExportCsvPage: React.FC = () => {
               <input
                 type="number"
                 value={autoDeleteSettings.scheduleIntervalMinutes}
-                onChange={(e) => setAutoDeleteSettings((prev: AutoDeleteSettings) => ({ 
-                  ...prev, 
-                  scheduleIntervalMinutes: parseInt(e.target.value) || 15 
+                onChange={(e) => setAutoDeleteSettings((prev: AutoDeleteSettings) => ({
+                  ...prev,
+                  scheduleIntervalMinutes: parseInt(e.target.value) || 15
                 }))}
                 min="1"
                 max="1440"
                 className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
               />
-              <p className="text-xs text-gray-500 mt-1">How often to check for events to stop and delete (default: 15 minutes)</p>
+              <p className="text-xs text-gray-500 mt-1">How often to check for events to stop (default: 15 minutes)</p>
             </div>
           </div>
 
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-4">
-              <span className="text-sm font-medium text-gray-700">Auto-Delete Status:</span>
+              <span className="text-sm font-medium text-gray-700">Auto-Stop Status:</span>
               <span className={`text-sm font-semibold ${
                 autoDeleteSettings.schedulerStatus === 'Running' ? 'text-green-600' : 'text-red-600'
               }`}>
                 {autoDeleteSettings.schedulerStatus}
               </span>
             </div>
-            
+
             <div className="flex space-x-2">
               <button
                 onClick={() => handleAutoDeleteSettingsUpdate({
@@ -807,7 +807,7 @@ const ExportCsvPage: React.FC = () => {
                   disabled={isLoadingAutoDelete}
                   className="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-md transition-colors disabled:bg-gray-400"
                 >
-                  {isLoadingAutoDelete ? 'Starting...' : 'Start Auto-Delete'}
+                  {isLoadingAutoDelete ? 'Starting...' : 'Start Auto-Stop'}
                 </button>
               ) : (
                 <button
@@ -815,7 +815,7 @@ const ExportCsvPage: React.FC = () => {
                   disabled={isLoadingAutoDelete}
                   className="bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-md transition-colors disabled:bg-gray-400"
                 >
-                  {isLoadingAutoDelete ? 'Stopping...' : 'Stop Auto-Delete'}
+                  {isLoadingAutoDelete ? 'Stopping...' : 'Stop Auto-Stop'}
                 </button>
               )}
             </div>
@@ -827,9 +827,9 @@ const ExportCsvPage: React.FC = () => {
               disabled={isLoadingAutoDelete}
               className="bg-blue-100 hover:bg-blue-200 text-blue-800 font-medium py-2 px-4 rounded-md transition-colors disabled:bg-gray-100"
             >
-              Preview Events to Delete
+              Preview Events to Stop
             </button>
-            
+
             <button
               onClick={handleAutoDeleteRunNow}
               disabled={isLoadingAutoDelete || !autoDeleteSettings.isEnabled}
@@ -839,17 +839,17 @@ const ExportCsvPage: React.FC = () => {
             </button>
           </div>
 
-          {/* Auto-Delete Statistics */}
+          {/* Auto-Stop Statistics */}
           {autoDeleteSettings.lastRunAt && (
             <div className="bg-gray-50 p-4 rounded-lg">
-              <h4 className="text-sm font-semibold mb-2">Auto-Delete Statistics</h4>
+              <h4 className="text-sm font-semibold mb-2">Auto-Stop Statistics</h4>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                 <div>
                   <div className="text-gray-600">Total Runs</div>
                   <div className="font-medium">{autoDeleteSettings.totalRuns}</div>
                 </div>
                 <div>
-                  <div className="text-gray-600">Events Deleted</div>
+                  <div className="text-gray-600">Events Stopped</div>
                   <div className="font-medium">{autoDeleteSettings.totalEventsDeleted}</div>
                 </div>
                 <div>
@@ -861,19 +861,19 @@ const ExportCsvPage: React.FC = () => {
                 <div>
                   <div className="text-gray-600">Next Run</div>
                   <div className="font-medium">
-                    {autoDeleteSettings.nextRunAt 
+                    {autoDeleteSettings.nextRunAt
                       ? moment(autoDeleteSettings.nextRunAt).format('MM/DD HH:mm')
                       : 'Not scheduled'
                     }
                   </div>
                 </div>
               </div>
-              
+
               {autoDeleteSettings.lastRunStats && (
                 <div className="mt-3 pt-3 border-t">
                   <div className="text-xs text-gray-600">
-                    Last run: Checked {autoDeleteSettings.lastRunStats.eventsChecked} events, 
-                    stopped {autoDeleteSettings.lastRunStats.eventsStopped || 0} and deleted {autoDeleteSettings.lastRunStats.eventsDeleted} events
+                    Last run: Checked {autoDeleteSettings.lastRunStats.eventsChecked} events,
+                    stopped {autoDeleteSettings.lastRunStats.eventsStopped || 0} events, cleared inventory for {autoDeleteSettings.lastRunStats.eventsDeleted} events
                     {autoDeleteSettings.lastRunStats.errors && autoDeleteSettings.lastRunStats.errors.length > 0 && (
                       <span className="text-red-600 ml-2">
                         ({autoDeleteSettings.lastRunStats.errors.length} errors)
@@ -1043,14 +1043,14 @@ const ExportCsvPage: React.FC = () => {
         </div>
       )}
 
-      {/* Auto-Delete Preview Dialog */}
+      {/* Auto-Stop Preview Dialog */}
       {showAutoDeletePreview && autoDeletePreview && (
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50 flex items-center justify-center">
           <div className="relative bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto">
             <div className="p-6">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-medium text-gray-900">
-                  Auto-Delete Preview
+                  Auto-Stop Preview
                 </h3>
                 <button
                   onClick={() => setShowAutoDeletePreview(false)}
@@ -1064,7 +1064,7 @@ const ExportCsvPage: React.FC = () => {
               
               <div className="mb-4">
                 <p className="text-sm text-gray-600">
-                  Stop & delete before event: <strong>{autoDeletePreview.stopBeforeHours} hours</strong>
+                  Stop before event: <strong>{autoDeletePreview.stopBeforeHours} hours</strong>
                   <br />
                   <span className="text-gray-500">Each event is checked against its venue&apos;s local timezone (auto-detected from venue/city/state).</span>
                   <br />
@@ -1081,7 +1081,7 @@ const ExportCsvPage: React.FC = () => {
               {autoDeletePreview.count === 0 ? (
                 <div className="text-center py-8">
                   <div className="text-green-600 text-lg font-medium mb-2">
-                    ✅ No events to stop & delete
+                    ✅ No events to stop
                   </div>
                   <p className="text-gray-500">
                     No events fall within the stop window. All events are still far enough from their event time.
@@ -1091,7 +1091,7 @@ const ExportCsvPage: React.FC = () => {
                 <div>
                   <div className="mb-4">
                     <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-red-100 text-red-800">
-                      {autoDeletePreview.count} events will be stopped & deleted
+                      {autoDeletePreview.count} events will be stopped &amp; inventory cleared
                     </span>
                   </div>
                   
@@ -1139,8 +1139,7 @@ const ExportCsvPage: React.FC = () => {
 
                   <div className="mt-4 p-3 bg-yellow-50 rounded-lg">
                     <p className="text-yellow-800 text-sm">
-                      <strong>Warning:</strong> These events will first have scraping stopped, then they and all their associated seat inventory will be permanently deleted.
-                      This action cannot be undone.
+                      <strong>Note:</strong> These events will have scraping stopped and their seat inventory cleared. Events themselves are kept in the database. Stopped event records auto-clear from the dashboard after 24 hours.
                     </p>
                   </div>
 

@@ -341,7 +341,7 @@ export default function DashboardPage() {
     });
   };
 
-  // Format relative time until deletion
+  // Format relative time until auto-stop
   const getTimeUntilDelete = (eventDateTime: string, stopBeforeHours: number) => {
     const eventTime = new Date(eventDateTime).getTime();
     const deleteTime = eventTime - (stopBeforeHours * 60 * 60 * 1000);
@@ -483,11 +483,11 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Auto-Delete Status Card */}
+        {/* Auto-Stop Status Card */}
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 hover:shadow-md transition-shadow duration-200">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-slate-500 mb-1">Auto-Delete</p>
+              <p className="text-sm font-medium text-slate-500 mb-1">Auto-Stop</p>
               <div className="text-3xl font-bold text-slate-800">
                 {autoDeleteInfo.loading ? (
                   <div className="w-16 h-8 bg-slate-200 rounded animate-pulse"></div>
@@ -498,9 +498,9 @@ export default function DashboardPage() {
               <div className="flex items-center mt-2 text-sm">
                 {autoDeleteInfo.isEnabled ? (
                   <>
-                    <div className="w-2 h-2 bg-red-500 rounded-full mr-2 animate-pulse"></div>
-                    <span className="text-red-600 font-medium">Pending</span>
-                    <span className="text-slate-500 ml-1">deletion</span>
+                    <div className="w-2 h-2 bg-orange-500 rounded-full mr-2 animate-pulse"></div>
+                    <span className="text-orange-600 font-medium">Pending</span>
+                    <span className="text-slate-500 ml-1">stop</span>
                   </>
                 ) : (
                   <>
@@ -511,11 +511,11 @@ export default function DashboardPage() {
               </div>
             </div>
             <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${
-              autoDeleteInfo.isEnabled 
-                ? 'bg-gradient-to-br from-red-500 to-red-600' 
+              autoDeleteInfo.isEnabled
+                ? 'bg-gradient-to-br from-orange-500 to-orange-600'
                 : 'bg-gradient-to-br from-slate-400 to-slate-500'
             }`}>
-              <Trash2 className="w-6 h-6 text-white" />
+              <Timer className="w-6 h-6 text-white" />
             </div>
           </div>
         </div>
@@ -1054,11 +1054,11 @@ export default function DashboardPage() {
                 <Timer className="w-5 h-5 text-white" />
               </div>
               <div>
-                <h3 className="text-lg font-semibold text-slate-800">Upcoming Auto-Deletions</h3>
+                <h3 className="text-lg font-semibold text-slate-800">Upcoming Auto-Stop</h3>
                 <p className="text-sm text-slate-500">
-                  Events that will be stopped &amp; deleted{' '}
-                  <span className="font-medium text-red-600">{autoDeleteInfo.stopBeforeHours}h</span>{' '}
-                  before event time
+                  Events that will be stopped{' '}
+                  <span className="font-medium text-orange-600">{autoDeleteInfo.stopBeforeHours}h</span>{' '}
+                  before event time (inventory cleared, event kept in DB)
                 </p>
               </div>
             </div>
@@ -1112,9 +1112,9 @@ export default function DashboardPage() {
               <div className="w-16 h-16 bg-slate-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
                 <Shield className="w-8 h-8 text-slate-400" />
               </div>
-              <p className="text-slate-600 font-medium mb-1">Auto-Delete is Disabled</p>
+              <p className="text-slate-600 font-medium mb-1">Auto-Stop is Disabled</p>
               <p className="text-slate-400 text-sm mb-4">
-                Enable auto-delete in settings to automatically stop and remove events before they take place.
+                Enable auto-stop in settings to automatically stop scraping and clear inventory before events take place.
               </p>
               <button
                 onClick={() => handleQuickAction('export-data')}
@@ -1131,7 +1131,7 @@ export default function DashboardPage() {
               </div>
               <p className="text-green-700 font-medium mb-1">All Clear!</p>
               <p className="text-slate-400 text-sm">
-                No events are within the {autoDeleteInfo.stopBeforeHours}-hour deletion window right now.
+                No events are within the {autoDeleteInfo.stopBeforeHours}-hour stop window right now.
                 Checking every {autoDeleteInfo.scheduleIntervalMinutes} minutes.
               </p>
             </div>
@@ -1142,10 +1142,10 @@ export default function DashboardPage() {
                 <AlertTriangle className="w-5 h-5 text-amber-500 mt-0.5 flex-shrink-0" />
                 <div>
                   <p className="text-sm font-medium text-amber-800">
-                    {autoDeleteInfo.count} event{autoDeleteInfo.count !== 1 ? 's' : ''} will be stopped &amp; inventory cleared
+                    {autoDeleteInfo.count} event{autoDeleteInfo.count !== 1 ? 's' : ''} will be stopped on the next run
                   </p>
                   <p className="text-xs text-amber-600 mt-0.5">
-                    These events are within {autoDeleteInfo.stopBeforeHours} hours of their event time and will be stopped on the next run.
+                    These events are within {autoDeleteInfo.stopBeforeHours} hours of their event time. Scraping will be stopped and inventory cleared.
                   </p>
                 </div>
               </div>
@@ -1253,7 +1253,7 @@ export default function DashboardPage() {
                 </div>
                 <div>
                   <h3 className="text-lg font-semibold text-slate-800">Recently Auto-Stopped</h3>
-                  <p className="text-sm text-slate-500">{lastDeletedEvents.length} events stopped &amp; inventory cleared</p>
+                  <p className="text-sm text-slate-500">{lastDeletedEvents.length} event{lastDeletedEvents.length !== 1 ? 's' : ''} stopped &amp; inventory cleared (auto-clears after 24h)</p>
                 </div>
               </div>
               {lastDeletedEvents.length > 5 && (

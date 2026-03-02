@@ -24,9 +24,11 @@ export interface VSProduction {
 
 /**
  * Search Vivid Seats for a performer and return their performer ID.
- * Scrapes the search page HTML to extract performer links.
+ * Uses the search page redirect — Vivid Seats redirects
+ * /search?searchTerm=X to the matching performer or production page,
+ * so we extract the ID from the final redirect URL.
  */
-export async function findPerformerId(searchTerm: string): Promise<number | null> {
+export async function findPerformerId(searchTerm: string): Promise<{ performerId: number | null; directProductionId: number | null }> {
   try {
     const url = `https://www.vividseats.com/search?searchTerm=${encodeURIComponent(searchTerm)}`;
     const res = await fetch(url, {
@@ -34,32 +36,29 @@ export async function findPerformerId(searchTerm: string): Promise<number | null
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         'Accept': 'text/html',
       },
-      signal: AbortSignal.timeout(10000),
+      redirect: 'follow',
+      signal: AbortSignal.timeout(15000),
     });
 
-    if (!res.ok) return null;
+    const finalUrl = res.url || '';
 
-    const html = await res.text();
-
-    // Look for performer links in the HTML: /performer/{id}
-    const performerMatch = html.match(/\/performer\/(\d+)/);
+    // Check if redirected to a performer page: /performer/{id}
+    const performerMatch = finalUrl.match(/\/performer\/(\d+)/);
     if (performerMatch) {
-      return parseInt(performerMatch[1], 10);
+      return { performerId: parseInt(performerMatch[1], 10), directProductionId: null };
     }
 
-    // Also try production links to extract from them
-    const productionMatch = html.match(/\/production\/(\d+)/);
+    // Check if redirected to a production page: /production/{id}
+    const productionMatch = finalUrl.match(/\/production\/(\d+)/);
     if (productionMatch) {
-      // If we found a production directly, fetch it to get the performer ID
-      const prodId = parseInt(productionMatch[1], 10);
-      const prod = await getProductionById(prodId);
-      if (prod) return prod.id; // Return the production ID directly
+      return { performerId: null, directProductionId: parseInt(productionMatch[1], 10) };
     }
 
-    return null;
+    // No redirect (stayed on search page) — no match found
+    return { performerId: null, directProductionId: null };
   } catch (error) {
     console.error('Error finding VS performer:', error);
-    return null;
+    return { performerId: null, directProductionId: null };
   }
 }
 
@@ -149,12 +148,29 @@ export async function findVividSeatsMappingId(
     return { result: null, failReason: 'Could not extract a search term from event name' };
   }
 
-  // Try each search term until we find a performer
+  // Try each search term until we find a performer or direct production
   let performerId: number | null = null;
+  let directProductionId: number | null = null;
   let usedTerm = '';
   for (const term of searchTerms) {
-    performerId = await findPerformerId(term);
-    if (performerId) { usedTerm = term; break; }
+    const found = await findPerformerId(term);
+    if (found.performerId) { performerId = found.performerId; usedTerm = term; break; }
+    if (found.directProductionId) { directProductionId = found.directProductionId; usedTerm = term; break; }
+  }
+
+  // If search redirected directly to a production, return it immediately
+  if (directProductionId) {
+    const prod = await getProductionById(directProductionId);
+    if (prod) {
+      return {
+        result: {
+          productionId: prod.id,
+          productionName: prod.name || '',
+          venueName: prod.venue?.name || '',
+        },
+        searchTermUsed: usedTerm,
+      };
+    }
   }
 
   if (!performerId) {
