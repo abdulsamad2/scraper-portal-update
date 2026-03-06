@@ -243,8 +243,8 @@ const ExportCsvPage: React.FC = () => {
       setPerformanceMetrics((prev: PerformanceMetrics | null) => ({
         ...prev,
         lastManualGeneration: {
-          recordCount: records,
-          generationTime: genTime,
+          recordCount: records ?? 0,
+          generationTime: genTime ?? 0,
           totalTime: totalTime,
           timestamp: new Date().toISOString()
         }
