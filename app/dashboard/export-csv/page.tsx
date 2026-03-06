@@ -206,20 +206,29 @@ const ExportCsvPage: React.FC = () => {
 
       const contentType = response.headers.get('Content-Type') || '';
       if (contentType.includes('application/json')) {
-        // Error response returned as JSON
         const errorData = await response.json();
         setCsvStatus(prev => ({ ...prev, status: 'Generation failed' }));
         showMessage(errorData.message || 'Failed to generate CSV', 'error');
         return;
       }
 
-      const recordCount = response.headers.get('X-Record-Count');
-      const generationTime = response.headers.get('X-Generation-Time');
-      // X-Excluded-Count available if needed: response.headers.get('X-Excluded-Count')
-
       // Stream response as blob for download
       const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
+      const csvText = await blob.text();
+
+      // Check if stream returned an error instead of CSV data
+      if (csvText.startsWith('ERROR:')) {
+        setCsvStatus(prev => ({ ...prev, status: 'Generation failed' }));
+        showMessage(csvText.replace('ERROR: ', ''), 'error');
+        return;
+      }
+
+      // Count records from CSV content (lines - 1 for header)
+      const lineCount = csvText.split('\n').filter(l => l.trim()).length;
+      const records = Math.max(0, lineCount - 1);
+
+      const downloadBlob = new Blob([csvText], { type: 'text/csv' });
+      const url = window.URL.createObjectURL(downloadBlob);
       const a = document.createElement('a');
       a.style.display = 'none';
       a.href = url;
@@ -230,21 +239,18 @@ const ExportCsvPage: React.FC = () => {
       document.body.removeChild(a);
 
       const totalTime = Date.now() - startTime;
-      const records = recordCount ? parseInt(recordCount, 10) : undefined;
-      const genTime = generationTime ? parseInt(generationTime, 10) : undefined;
       setCsvStatus(prev => ({
         ...prev,
         lastGenerated: moment().toISOString(),
-        status: `Generated successfully! (${records || 'Unknown'} records in ${totalTime}ms)`
+        status: `Generated successfully! (${records} records in ${totalTime}ms)`
       }));
-      showMessage(`CSV generated and downloaded successfully! ${records || 'Records'} processed in ${genTime || totalTime}ms`, 'success');
+      showMessage(`CSV generated and downloaded successfully! ${records} records in ${totalTime}ms`, 'success');
 
-      // Update performance metrics
       setPerformanceMetrics((prev: PerformanceMetrics | null) => ({
         ...prev,
         lastManualGeneration: {
-          recordCount: records ?? 0,
-          generationTime: genTime ?? 0,
+          recordCount: records,
+          generationTime: totalTime,
           totalTime: totalTime,
           timestamp: new Date().toISOString()
         }

@@ -697,6 +697,173 @@ async function generateCsvString(records: CsvRow[]): Promise<string> {
   return chunks.join('\n');
 }
 
+function recordsToCsvChunk(records: CsvRow[]): string {
+  return records.map(record => {
+    return csvColumns.map(col => {
+      const value = record[col.id as keyof CsvRow];
+      if (value === null || value === undefined) return '';
+      const stringValue = String(value);
+      if (stringValue.includes(',') || stringValue.includes('"') || stringValue.includes('\n') || stringValue.includes('\r')) {
+        return `"${stringValue.replace(/"/g, '""')}"`;
+      }
+      return stringValue;
+    }).join(',');
+  }).join('\n');
+}
+
+// Streaming CSV generator — yields CSV text chunks as they're produced.
+// This keeps the HTTP connection alive so reverse proxies don't 504.
+export async function* generateInventoryCsvStream(
+  eventUpdateFilterMinutes: number = 0
+): AsyncGenerator<{ type: 'header' | 'data' | 'done'; text?: string; recordCount?: number; excludedCount?: number; generationTime?: number; error?: string }> {
+  await dbConnect();
+
+  const startTime = Date.now();
+  _venueTzCache.clear();
+
+  try {
+    const activeEventQuery: Record<string, any> = { Skip_Scraping: false };
+    if (eventUpdateFilterMinutes > 0) {
+      const cutoffTime = new Date(Date.now() - eventUpdateFilterMinutes * 60 * 1000);
+      activeEventQuery.updatedAt = { $gte: cutoffTime };
+    }
+
+    const activeEvents = await Event.find(activeEventQuery, { mapping_id: 1 })
+      .read('primary')
+      .maxTimeMS(30000);
+
+    if (activeEvents.length === 0) {
+      yield { type: 'done', error: eventUpdateFilterMinutes > 0
+        ? `No active events updated within the last ${eventUpdateFilterMinutes} minutes.`
+        : 'No active events found (all events have Skip_Scraping enabled).' };
+      return;
+    }
+
+    const eventMappingIds = activeEvents.map(event => event.mapping_id);
+    const eventFilter = { mapping_id: { $in: eventMappingIds } };
+
+    const eventDetailsMap = new Map<string, {
+      url: string; stdAdj: number; resaleAdj: number; defaultPct: number;
+      includeStandard: boolean; includeResale: boolean;
+    }>();
+    const eventDocs = await Event.find(
+      { mapping_id: { $in: eventMappingIds } },
+      { mapping_id: 1, URL: 1, standardMarkupAdjustment: 1, resaleMarkupAdjustment: 1,
+        priceIncreasePercentage: 1, includeStandardSeats: 1, includeResaleSeats: 1 }
+    ).lean();
+    for (const ev of eventDocs) {
+      eventDetailsMap.set(ev.mapping_id, {
+        url: ev.URL || '',
+        stdAdj: ev.standardMarkupAdjustment ?? 0,
+        resaleAdj: ev.resaleMarkupAdjustment ?? 0,
+        defaultPct: ev.priceIncreasePercentage ?? 0,
+        includeStandard: ev.includeStandardSeats !== false,
+        includeResale: ev.includeResaleSeats !== false,
+      });
+    }
+
+    const projection = {
+      'inventory.inventoryId': 1, 'event_name': 1, 'venue_name': 1,
+      'event_date': 1, 'eventId': 1, 'mapping_id': 1,
+      'inventory.quantity': 1, 'inventory.section': 1, 'inventory.row': 1,
+      'seats.number': 1, 'inventory.barcodes': 1, 'inventory.tags': 1,
+      'inventory.notes': 1, 'inventory.publicNotes': 1,
+      'inventory.listPrice': 1, 'inventory.face_price': 1,
+      'inventory.taxed_cost': 1, 'inventory.cost': 1,
+      'inventory.hideSeatNumbers': 1, 'inventory.in_hand': 1,
+      'inventory.inHandDate': 1, 'inventory.instant_transfer': 1,
+      'inventory.files_available': 1, 'inventory.splitType': 1,
+      'inventory.custom_split': 1, 'inventory.stockType': 1,
+      'inventory.zone': 1, 'inventory.shown_quantity': 1,
+      'inventory.passthrough': 1,
+    };
+
+    const CHUNK_SIZE = 10000;
+    const idPipeline: PipelineStage[] = [
+      { $match: eventFilter },
+      { $sort: { _id: 1 as const } },
+      { $project: { _id: 1 } },
+    ];
+    const allIds = await ConsecutiveGroup.aggregate(idPipeline, {
+      allowDiskUse: true, maxTimeMS: 60000,
+    });
+    const totalDocs = allIds.length;
+
+    if (totalDocs === 0) {
+      yield { type: 'done', error: 'No inventory data found.' };
+      return;
+    }
+
+    // Yield CSV header immediately to keep connection alive
+    yield { type: 'header', text: csvColumns.map(col => col.title).join(',') + '\n' };
+
+    let totalRecords = 0;
+    let totalExcluded = 0;
+
+    for (let i = 0; i < totalDocs; i += CHUNK_SIZE) {
+      const chunkIds = allIds.slice(i, i + CHUNK_SIZE).map((d: { _id: string }) => d._id);
+
+      const chunkDocs: ConsecutiveGroupDocument[] = await ConsecutiveGroup.aggregate(
+        [
+          { $match: { _id: { $in: chunkIds } } },
+          { $project: projection },
+        ] as PipelineStage[],
+        { allowDiskUse: true, maxTimeMS: 120000 }
+      );
+
+      if (chunkDocs.length > 0) {
+        const enrichedDocs: ConsecutiveGroupDocument[] = [];
+        for (const doc of chunkDocs) {
+          const evData = doc.mapping_id ? eventDetailsMap.get(doc.mapping_id) : undefined;
+          const isStandard = doc.inventory?.splitType === 'NEVERLEAVEONE';
+          if (isStandard && evData && !evData.includeStandard) continue;
+          if (!isStandard && evData && !evData.includeResale) continue;
+          doc.event_url = evData?.url || '';
+          doc.event_std_adj = evData?.stdAdj ?? 0;
+          doc.event_resale_adj = evData?.resaleAdj ?? 0;
+          doc.event_default_pct = evData?.defaultPct ?? 0;
+          enrichedDocs.push(doc);
+        }
+
+        if (enrichedDocs.length > 0) {
+          const processedBatch = await processBatch(enrichedDocs);
+          const beforeExclusion = processedBatch.length;
+          const filtered = await applyExclusionRules(processedBatch);
+          totalExcluded += beforeExclusion - filtered.length;
+
+          if (filtered.length > 0) {
+            totalRecords += filtered.length;
+            yield { type: 'data', text: recordsToCsvChunk(filtered) + '\n' };
+          }
+        }
+      }
+
+      // Yield control between chunks
+      await new Promise(resolve => (typeof setImmediate !== 'undefined' ? setImmediate : setTimeout)(resolve, 0));
+    }
+
+    const duration = Date.now() - startTime;
+    console.log(`[CSV Stream] Completed in ${duration}ms: ${totalRecords} records, ${totalExcluded} excluded`);
+
+    if (totalRecords === 0) {
+      yield { type: 'done', error: 'No inventory data found after applying exclusion rules.' };
+      return;
+    }
+
+    yield { type: 'done', recordCount: totalRecords, excludedCount: totalExcluded, generationTime: duration };
+  } catch (error) {
+    console.error('[CSV Stream] Error:', error);
+    await createErrorLog({
+      eventUrl: 'CSV_GENERATION_STREAM',
+      errorType: 'DATABASE_ERROR',
+      message: error instanceof Error ? error.message : 'Unknown error',
+      stack: error instanceof Error ? error.stack : undefined,
+      metadata: { operation: 'generateInventoryCsvStream', timestamp: new Date() }
+    });
+    yield { type: 'done', error: 'Failed to generate CSV.' };
+  }
+}
+
 export async function uploadCsvToSyncService(csvContent: string): Promise<{ success: boolean; message: string; uploadId?: string }> {
   return withRetry(async () => {
     try {
