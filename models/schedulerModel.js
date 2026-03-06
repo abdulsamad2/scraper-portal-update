@@ -59,6 +59,16 @@ const schedulerSettingsSchema = new mongoose.Schema({
     type: Date,
     default: null
   },
+  lowSeatAutoStop: {
+    type: Boolean,
+    default: false
+  },
+  lowSeatThreshold: {
+    type: Number,
+    min: 1,
+    max: 1000,
+    default: 10
+  },
   createdAt: {
     type: Date,
     default: Date.now

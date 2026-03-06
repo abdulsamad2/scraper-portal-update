@@ -25,6 +25,8 @@ interface ExportSettings {
   scheduleRateMinutes: number;
   isScheduled: boolean;
   eventUpdateFilterMinutes: number;
+  lowSeatAutoStop: boolean;
+  lowSeatThreshold: number;
 }
 
 interface CsvStatus {
@@ -98,6 +100,8 @@ const ExportCsvPage: React.FC = () => {
     scheduleRateMinutes: 60,
     isScheduled: false,
     eventUpdateFilterMinutes: 0,
+    lowSeatAutoStop: false,
+    lowSeatThreshold: 10,
   });
   const [schedulerStatus, setSchedulerStatus] = useState<string>('Stopped');
   const [csvStatus, setCsvStatus] = useState<CsvStatus>({
@@ -142,7 +146,9 @@ const ExportCsvPage: React.FC = () => {
             scheduleRateMinutes: dbSettings.scheduleRateMinutes,
             uploadToSync: dbSettings.uploadToSync,
             isScheduled: dbSettings.isRunning,
-            eventUpdateFilterMinutes: dbSettings.eventUpdateFilterMinutes || 0
+            eventUpdateFilterMinutes: dbSettings.eventUpdateFilterMinutes || 0,
+            lowSeatAutoStop: dbSettings.lowSeatAutoStop ?? false,
+            lowSeatThreshold: dbSettings.lowSeatThreshold ?? 10,
           });
           setSchedulerStatus(dbSettings.isRunning ? 'Running' : 'Stopped');
           setPerformanceMetrics({
@@ -589,7 +595,9 @@ const ExportCsvPage: React.FC = () => {
           action: 'update-settings',
           intervalMinutes: settings.scheduleRateMinutes,
           uploadToSync: settings.uploadToSync,
-          eventUpdateFilterMinutes: settings.eventUpdateFilterMinutes
+          eventUpdateFilterMinutes: settings.eventUpdateFilterMinutes,
+          lowSeatAutoStop: settings.lowSeatAutoStop,
+          lowSeatThreshold: settings.lowSeatThreshold,
         })
       });
       
@@ -655,6 +663,52 @@ const ExportCsvPage: React.FC = () => {
              />
              <p className="text-xs text-gray-500 mt-1">Filter events updated within last X minutes (0 = no filter, max 7 days)</p>
            </div>
+
+           {/* Low Seat Auto-Stop */}
+           <div className="border border-amber-200 bg-amber-50 rounded-lg p-4 space-y-3">
+             <div className="flex items-center justify-between">
+               <div>
+                 <h4 className="text-sm font-semibold text-gray-800">Low Seat Auto-Stop</h4>
+                 <p className="text-xs text-gray-500 mt-0.5">
+                   Automatically stop events and clear their inventory when the total seat count is at or below the threshold.
+                   Runs before every CSV generation.
+                 </p>
+               </div>
+               <button
+                 type="button"
+                 onClick={() => setSettings(prev => ({ ...prev, lowSeatAutoStop: !prev.lowSeatAutoStop }))}
+                 className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-amber-500 ${
+                   settings.lowSeatAutoStop ? 'bg-amber-500' : 'bg-gray-300'
+                 }`}
+               >
+                 <span
+                   className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                     settings.lowSeatAutoStop ? 'translate-x-6' : 'translate-x-1'
+                   }`}
+                 />
+               </button>
+             </div>
+             {settings.lowSeatAutoStop && (
+               <div>
+                 <label htmlFor="lowSeatThreshold" className="block text-sm font-medium text-gray-700 mb-1">
+                   Seat Threshold
+                 </label>
+                 <input
+                   type="number"
+                   id="lowSeatThreshold"
+                   value={settings.lowSeatThreshold}
+                   onChange={(e) => setSettings(prev => ({ ...prev, lowSeatThreshold: Math.max(1, parseInt(e.target.value) || 10) }))}
+                   min="1"
+                   max="1000"
+                   className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-amber-500 focus:border-amber-500"
+                 />
+                 <p className="text-xs text-gray-500 mt-1">
+                   Events with this many seats or fewer will be stopped and their inventory cleared (default: 10)
+                 </p>
+               </div>
+             )}
+           </div>
+
            <div className="flex items-center space-x-4">
              <div className="flex items-center">
                <span className="text-sm font-medium text-gray-700 mr-2">Scheduler Status:</span>

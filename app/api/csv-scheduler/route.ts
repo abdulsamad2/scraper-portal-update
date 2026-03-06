@@ -254,6 +254,8 @@ interface SchedulerResponse {
     nextRunAt: Date | null;
     totalRuns: number;
     lastCsvGenerated: string | null;
+    lowSeatAutoStop: boolean;
+    lowSeatThreshold: number;
   };
   metrics?: {
     totalRuns: number;
@@ -291,7 +293,9 @@ export async function GET(request: Request) {
         lastRunAt: settings.lastRunAt,
         nextRunAt: settings.nextRunAt,
         totalRuns: settings.totalRuns,
-        lastCsvGenerated: settings.lastCsvGenerated
+        lastCsvGenerated: settings.lastCsvGenerated,
+        lowSeatAutoStop: settings.lowSeatAutoStop ?? false,
+        lowSeatThreshold: settings.lowSeatThreshold ?? 10,
       }
     };
     
@@ -412,10 +416,14 @@ export async function POST(req: NextRequest) {
         scheduleRateMinutes?: number;
         uploadToSync?: boolean;
         eventUpdateFilterMinutes?: number;
+        lowSeatAutoStop?: boolean;
+        lowSeatThreshold?: number;
       } = {};
       if (intervalMinutes !== undefined) updates.scheduleRateMinutes = intervalMinutes;
       if (uploadToSync !== undefined) updates.uploadToSync = uploadToSync;
       if (eventUpdateFilterMinutes !== undefined) updates.eventUpdateFilterMinutes = eventUpdateFilterMinutes;
+      if (typeof body.lowSeatAutoStop === 'boolean') updates.lowSeatAutoStop = body.lowSeatAutoStop;
+      if (typeof body.lowSeatThreshold === 'number') updates.lowSeatThreshold = Math.min(Math.max(body.lowSeatThreshold, 1), 1000);
 
       await updateSchedulerSettings(updates);
 

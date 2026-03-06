@@ -11,6 +11,12 @@ const autoDeleteSettingsSchema = new mongoose.Schema({
     max: 168, // 7 days max
     default: 2 // 2 hours before event time (e.g., 7pm event -> stop/delete at 5pm)
   },
+  lowSeatThreshold: {
+    type: Number,
+    min: 0,
+    max: 1000,
+    default: 20 // Stop event & clear inventory when total seats <= this number (0 = disabled)
+  },
   scheduleIntervalMinutes: {
     type: Number,
     min: 1,

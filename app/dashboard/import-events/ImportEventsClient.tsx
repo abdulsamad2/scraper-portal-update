@@ -933,21 +933,23 @@ export default function ImportEventsClient({
 
       {/* Card Grid */}
       {events.length > 0 && (
-        <div className="relative">
-          {/* Loading overlay - keeps content visible underneath */}
-          {isPending && (
-            <div className="absolute inset-0 z-10 bg-white/60 backdrop-blur-[1px] rounded-xl flex items-start justify-center pt-24">
-              <div className="flex items-center gap-2.5 bg-white px-5 py-3 rounded-xl shadow-lg border border-purple-100">
-                <Loader2 className="w-5 h-5 text-purple-500 animate-spin" />
-                <span className="text-sm font-medium text-slate-600">{isSearch ? 'Searching...' : 'Loading...'}</span>
+        <>
+          <div className="relative">
+            {/* Loading overlay - keeps content visible underneath */}
+            {isPending && (
+              <div className="absolute inset-0 z-10 bg-white/60 backdrop-blur-[1px] rounded-xl flex items-start justify-center pt-24">
+                <div className="flex items-center gap-2.5 bg-white px-5 py-3 rounded-xl shadow-lg border border-purple-100">
+                  <Loader2 className="w-5 h-5 text-purple-500 animate-spin" />
+                  <span className="text-sm font-medium text-slate-600">{isSearch ? 'Searching...' : 'Loading...'}</span>
+                </div>
               </div>
-            </div>
-          )}
+            )}
 
-          <div className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 transition-opacity duration-200 ${isPending ? 'opacity-50 pointer-events-none' : ''}`}>
-            {events.map((ev, i) => renderEventCard(ev, i))}
+            <div className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 transition-opacity duration-200 ${isPending ? 'opacity-50 pointer-events-none' : ''}`}>
+              {events.map((ev, i) => renderEventCard(ev, i))}
+            </div>
           </div>
-          {/* Pagination */}
+          {/* Pagination — placed OUTSIDE the relative/overlay container so buttons stay clickable */}
           {totalPages > 1 && (
             <div className="flex items-center justify-center gap-1.5 pt-4">
               <button onClick={() => handlePageChange(currentPage - 1)} disabled={currentPage <= 0 || isPending}
@@ -956,8 +958,9 @@ export default function ImportEventsClient({
               </button>
               {(() => {
                 const pages: number[] = [];
-                const start = Math.max(0, Math.min(currentPage - 2, totalPages - 5));
-                const end = Math.min(totalPages, start + 5);
+                const maxPage = Math.min(totalPages, Math.floor(999 / 20)); // TM API deep paging limit
+                const start = Math.max(0, Math.min(currentPage - 2, maxPage - 5));
+                const end = Math.min(maxPage, start + 5);
                 for (let i = start; i < end; i++) pages.push(i);
                 return pages.map(p => (
                   <button key={p} onClick={() => handlePageChange(p)} disabled={isPending}
@@ -970,13 +973,13 @@ export default function ImportEventsClient({
                   </button>
                 ));
               })()}
-              <button onClick={() => handlePageChange(currentPage + 1)} disabled={currentPage >= totalPages - 1 || isPending}
+              <button onClick={() => handlePageChange(currentPage + 1)} disabled={currentPage >= Math.min(totalPages, Math.floor(999 / 20)) - 1 || isPending}
                 className="inline-flex items-center gap-1 px-3 py-1.5 text-sm font-medium text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
                 <ChevronRight className="w-4 h-4" />
               </button>
             </div>
           )}
-        </div>
+        </>
       )}
 
       {/* No results */}

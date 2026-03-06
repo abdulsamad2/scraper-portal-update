@@ -9,6 +9,7 @@ import { ExclusionRules } from '../models/exclusionRulesModel';
 import SyncService from '../lib/syncService';
 import { createErrorLog } from './errorLogActions';
 import { deleteExpiredEvents, getExpiredEventsStats } from './autoDeleteActions';
+import { deleteConsecutiveGroupsByEventIds } from './seatActions';
 import { detectTimezoneFromVenueAsync, getCurrentTimeInTimezone } from '../lib/timezone';
 import { PipelineStage } from 'mongoose';
 
@@ -238,6 +239,87 @@ async function withRetry<T>(
 // Cache for resolved venue timezones within a CSV generation run
 const _venueTzCache = new Map<string, string | null>();
 
+// ── Global: stop events with seats <= threshold & clear their inventory ──
+export async function stopLowSeatEvents(): Promise<{ stopped: number; eventIds: string[] }> {
+  await dbConnect();
+  try {
+    // Read settings from DB
+    const schedulerSettings = await SchedulerSettings.findOne({}).lean() as any;
+    const enabled = schedulerSettings?.lowSeatAutoStop ?? false;
+    const threshold = schedulerSettings?.lowSeatThreshold ?? 10;
+
+    if (!enabled) {
+      return { stopped: 0, eventIds: [] };
+    }
+
+    // Get all active events
+    const activeEvents = await Event.find(
+      { Skip_Scraping: false },
+      { mapping_id: 1, Event_ID: 1, Event_Name: 1, Venue: 1 }
+    ).lean();
+
+    if (activeEvents.length === 0) return { stopped: 0, eventIds: [] };
+
+    const mappingIds = activeEvents
+      .map((e: any) => e.mapping_id)
+      .filter(Boolean);
+
+    // Aggregate total inventory quantity per mapping_id
+    const seatCounts: { _id: string; totalQty: number }[] =
+      await ConsecutiveGroup.aggregate([
+        { $match: { mapping_id: { $in: mappingIds } } },
+        { $group: { _id: '$mapping_id', totalQty: { $sum: '$inventory.quantity' } } },
+      ]);
+
+    const qtyMap = new Map(seatCounts.map((s) => [s._id, s.totalQty]));
+
+    // Find events whose total seats > 0 but <= threshold
+    const lowSeatEvents = activeEvents.filter((ev: any) => {
+      const qty = qtyMap.get(ev.mapping_id) ?? 0;
+      return qty > 0 && qty <= threshold;
+    });
+
+    if (lowSeatEvents.length === 0) return { stopped: 0, eventIds: [] };
+
+    const eventIds = lowSeatEvents.map((ev: any) => String(ev._id));
+    const mappingIdsToStop = lowSeatEvents.map((ev: any) => ev.mapping_id).filter(Boolean);
+
+    // Stop scraping
+    await Event.updateMany(
+      { _id: { $in: eventIds } },
+      { $set: { Skip_Scraping: true } }
+    );
+
+    // Clear inventory
+    await deleteConsecutiveGroupsByEventIds(eventIds);
+
+    console.log(
+      `[LowSeat] Stopped ${lowSeatEvents.length} events with <= ${threshold} seats: ${mappingIdsToStop.join(', ')}`
+    );
+
+    await createErrorLog({
+      eventUrl: 'LOW_SEAT_AUTO_STOP',
+      errorType: 'AUTO_STOP',
+      message: `Stopped ${lowSeatEvents.length} event(s) with ${threshold} or fewer seats and cleared inventory`,
+      metadata: {
+        threshold,
+        stoppedEvents: lowSeatEvents.map((ev: any) => ({
+          id: ev._id,
+          mapping_id: ev.mapping_id,
+          name: ev.Event_Name,
+          venue: ev.Venue,
+          seats: qtyMap.get(ev.mapping_id) ?? 0,
+        })),
+      },
+    });
+
+    return { stopped: lowSeatEvents.length, eventIds };
+  } catch (error) {
+    console.error('[LowSeat] Error during low-seat check:', error);
+    return { stopped: 0, eventIds: [] };
+  }
+}
+
 export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0) {
   return withRetry(async () => {
     await dbConnect();
@@ -248,6 +330,12 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
 
     // Clear venue timezone cache at the start of each CSV generation run
     _venueTzCache.clear();
+
+    // ── Stop low-seat events before generating CSV ──
+    const lowSeatResult = await stopLowSeatEvents();
+    if (lowSeatResult.stopped > 0) {
+      console.log(`[CSV] Pre-export: stopped ${lowSeatResult.stopped} low-seat event(s)`);
+    }
 
     try {
       let eventFilter = {};
@@ -721,6 +809,12 @@ export async function* generateInventoryCsvStream(
   const startTime = Date.now();
   _venueTzCache.clear();
 
+  // ── Stop low-seat events before streaming CSV ──
+  const lowSeatResult = await stopLowSeatEvents();
+  if (lowSeatResult.stopped > 0) {
+    console.log(`[CSV-Stream] Pre-export: stopped ${lowSeatResult.stopped} low-seat event(s)`);
+  }
+
   try {
     const activeEventQuery: Record<string, any> = { Skip_Scraping: false };
     if (eventUpdateFilterMinutes > 0) {
@@ -1098,6 +1192,8 @@ export async function updateSchedulerSettings(updates: {
   eventUpdateFilterMinutes?: number;
   nextRunAt?: Date;
   totalRuns?: number;
+  lowSeatAutoStop?: boolean;
+  lowSeatThreshold?: number;
 }) {
   await dbConnect();
   try {
@@ -1169,7 +1265,7 @@ export async function runAutoDelete() {
       };
     }
 
-    const stats = await deleteExpiredEvents(settings.stopBeforeHours);
+    const stats = await deleteExpiredEvents(settings.stopBeforeHours, settings.lowSeatThreshold ?? 20);
     
     // Update settings with run statistics
     const intervalMinutes = settings.scheduleIntervalMinutes || 15;
@@ -1178,7 +1274,7 @@ export async function runAutoDelete() {
       lastRunAt: new Date(),
       ...(isNaN(nextRunDate.getTime()) ? {} : { nextRunAt: nextRunDate }),
       totalRuns: (settings.totalRuns || 0) + 1,
-      totalEventsDeleted: settings.totalEventsDeleted + stats.eventsDeleted,
+      totalEventsDeleted: settings.totalEventsDeleted + stats.eventsDeleted + stats.lowSeatStopped,
       lastRunStats: {
         eventsChecked: stats.totalEventsChecked,
         eventsDeleted: stats.eventsDeleted,
@@ -1188,9 +1284,10 @@ export async function runAutoDelete() {
       }
     });
 
+    const lowMsg = stats.lowSeatStopped > 0 ? ` Low-seat stopped: ${stats.lowSeatStopped}.` : '';
     return {
       success: true,
-      message: `Auto-delete completed. Stopped ${stats.eventsStopped} events and cleared inventory for ${stats.eventsDeleted} events.`,
+      message: `Auto-delete completed. Stopped ${stats.eventsStopped} events and cleared inventory for ${stats.eventsDeleted} events.${lowMsg}`,
       stats
     };
   } catch (error) {

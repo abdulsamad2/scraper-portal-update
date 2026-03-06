@@ -22,6 +22,7 @@
 
 import dbConnect from '@/lib/dbConnect';
 import { Event } from '@/models/eventModel';
+import { ConsecutiveGroup } from '@/models/seatModel';
 import { deleteConsecutiveGroupsByEventIds } from './seatActions';
 import { createErrorLog } from './errorLogActions';
 import { shouldStopEvent, shouldStopEventAsync, detectTimezoneFromVenue, detectTimezoneFromVenueAsync, getTimezoneAbbr, getCurrentTimeInTimezone } from '@/lib/timezone';
@@ -65,6 +66,8 @@ export interface AutoDeleteStats {
   eventsDeleted: number;
   eventsStopped: number;
   deletedEventIds: string[];
+  lowSeatStopped: number;
+  lowSeatEventIds: string[];
   errors: string[];
   lastRunAt: Date;
 }
@@ -76,7 +79,7 @@ export interface AutoDeleteStats {
  * @param stopBeforeHours - Hours before event time to stop (e.g., 2 = stop 2h before event)
  * @returns Promise<AutoDeleteStats>
  */
-export async function deleteExpiredEvents(stopBeforeHours: number = 2): Promise<AutoDeleteStats> {
+export async function deleteExpiredEvents(stopBeforeHours: number = 2, lowSeatThreshold: number = 20): Promise<AutoDeleteStats> {
   await dbConnect();
   
   // Sync clock with external time API before checking events
@@ -89,6 +92,8 @@ export async function deleteExpiredEvents(stopBeforeHours: number = 2): Promise<
     eventsDeleted: 0,
     eventsStopped: 0,
     deletedEventIds: [],
+    lowSeatStopped: 0,
+    lowSeatEventIds: [],
     errors: [],
     lastRunAt: new Date()
   };
@@ -264,6 +269,108 @@ export async function deleteExpiredEvents(stopBeforeHours: number = 2): Promise<
       stackTrace: (error as Error).stack || '',
       metadata: { stopBeforeHours }
     });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Low-Seat-Count Check: stop events whose total inventory <= threshold
+  // Runs AFTER the timezone-based stop to avoid double-processing
+  // ═══════════════════════════════════════════════════════════════════
+  if (lowSeatThreshold > 0) {
+    try {
+      // Re-fetch active events (some may have just been stopped above)
+      const activeEvents = await Event.find({ Skip_Scraping: { $ne: true } })
+        .select('_id Event_ID Event_Name mapping_id Venue')
+        .lean();
+
+      if (activeEvents.length > 0) {
+        const mappingIds = activeEvents
+          .map(e => e.mapping_id)
+          .filter(Boolean) as string[];
+
+        if (mappingIds.length > 0) {
+          // Aggregate total inventory per mapping_id from ConsecutiveGroup
+          const inventoryCounts = await ConsecutiveGroup.aggregate([
+            { $match: { mapping_id: { $in: mappingIds } } },
+            {
+              $group: {
+                _id: '$mapping_id',
+                totalQty: { $sum: '$inventory.quantity' },
+              },
+            },
+          ]);
+
+          const qtyByMapping: Record<string, number> = {};
+          for (const row of inventoryCounts) {
+            qtyByMapping[row._id] = row.totalQty;
+          }
+
+          // Find events with total seats <= threshold (and > 0 — skip events with no inventory at all)
+          const lowSeatEvents = activeEvents.filter(e => {
+            const qty = e.mapping_id ? (qtyByMapping[e.mapping_id] ?? 0) : 0;
+            return qty > 0 && qty <= lowSeatThreshold;
+          });
+
+          if (lowSeatEvents.length > 0) {
+            const lowSeatIds = lowSeatEvents.map(e => e._id.toString());
+            const lowSeatMappings = lowSeatEvents.map(e => e.Event_ID);
+
+            console.log(`Auto-delete (low-seat): Found ${lowSeatEvents.length} events with ≤${lowSeatThreshold} seats — stopping & clearing inventory:`);
+            for (const e of lowSeatEvents) {
+              const qty = e.mapping_id ? (qtyByMapping[e.mapping_id] ?? 0) : 0;
+              console.log(`  → ${e.Event_ID} | ${e.Event_Name} | Seats: ${qty} | Venue: ${e.Venue}`);
+            }
+
+            // Stop scraping
+            try {
+              await Event.updateMany(
+                { _id: { $in: lowSeatIds } },
+                { $set: { Skip_Scraping: true } }
+              );
+              console.log(`Auto-delete (low-seat): Stopped scraping for ${lowSeatEvents.length} events`);
+            } catch (error) {
+              const errorMsg = `Low-seat stop failed: ${(error as Error).message}`;
+              stats.errors.push(errorMsg);
+              console.error('Auto-delete low-seat stop error:', error);
+            }
+
+            // Clear inventory
+            try {
+              await deleteConsecutiveGroupsByEventIds(lowSeatIds);
+              console.log(`Auto-delete (low-seat): Cleared inventory for ${lowSeatIds.length} events`);
+            } catch (error) {
+              const errorMsg = `Low-seat inventory clear failed: ${(error as Error).message}`;
+              stats.errors.push(errorMsg);
+              console.error('Auto-delete low-seat inventory clear error:', error);
+            }
+
+            stats.lowSeatStopped = lowSeatEvents.length;
+            stats.lowSeatEventIds = lowSeatMappings;
+
+            // Log success
+            await createErrorLog({
+              errorType: 'AUTO_DELETE_SUCCESS',
+              errorMessage: `Low-seat auto-stop: Stopped ${lowSeatEvents.length} events with ≤${lowSeatThreshold} seats and cleared inventory`,
+              stackTrace: '',
+              metadata: {
+                lowSeatEvents: lowSeatEvents.map(e => ({
+                  id: e.Event_ID,
+                  name: e.Event_Name,
+                  seats: e.mapping_id ? (qtyByMapping[e.mapping_id] ?? 0) : 0,
+                  venue: e.Venue,
+                })),
+                threshold: lowSeatThreshold,
+              },
+            });
+          } else {
+            console.log(`Auto-delete (low-seat): No active events with ≤${lowSeatThreshold} seats (checked ${activeEvents.length} events)`);
+          }
+        }
+      }
+    } catch (error) {
+      const errorMsg = `Low-seat check failed: ${(error as Error).message}`;
+      stats.errors.push(errorMsg);
+      console.error('Auto-delete low-seat check error:', error);
+    }
   }
 
   return stats;

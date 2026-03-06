@@ -109,14 +109,14 @@ export async function searchEvents(params: TMSearchParams): Promise<TMSearchResu
   if (params.localEndDateTime) {
     // Append T23:59:59 if only a date was provided
     const end = params.localEndDateTime.includes('T') ? params.localEndDateTime : `${params.localEndDateTime}T23:59:59`;
-    qs.set('localStartEndDateTime', end);
+    qs.set('localEndDateTime', end);
   }
   if (params.classificationName) qs.set('classificationName', params.classificationName);
 
   const url = `${TM_BASE}/events.json?${qs.toString()}`;
 
   const res = await fetch(url, {
-    next: { revalidate: 0 },
+    cache: 'no-store',
     signal: AbortSignal.timeout(15000),
   });
 
@@ -199,12 +199,15 @@ export async function searchEvents(params: TMSearchParams): Promise<TMSearchResu
   });
 
   const pageInfo = data.page || {};
+  const size = pageInfo.size || params.size || 20;
+  // Ticketmaster API deep paging limit: page * size must be < 1000
+  const maxPages = Math.floor(999 / size);
 
   return {
     events,
     total: pageInfo.totalElements ?? events.length,
     page: pageInfo.number ?? 0,
-    totalPages: pageInfo.totalPages ?? 1,
+    totalPages: Math.min(pageInfo.totalPages ?? 1, maxPages),
   };
 }
 
