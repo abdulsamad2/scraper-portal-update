@@ -324,13 +324,25 @@ export default function ImportEventsClient({
     return await res.json();
   };
 
+  /** Extract production ID from a Vivid Seats URL */
+  const extractVSProductionIdFromUrl = (url: string): number | null => {
+    try {
+      const parsed = new URL(url);
+      if (!/vividseats\.com$/i.test(parsed.hostname)) return null;
+      const match = parsed.pathname.match(/\/(?:production|tickets)\/(\d+)/);
+      return match ? parseInt(match[1], 10) : null;
+    } catch { return null; }
+  };
+
+  interface VSProd { id: number; localDate?: string; utcDate?: string; venue?: { name?: string } }
+
   /** Match productions by date and venue (runs entirely in the browser) */
-  const matchProduction = (productions: any[], eventDate: string, venueName: string) => {
+  const matchProduction = (productions: VSProd[], eventDate: string, venueName: string): VSProd | null => {
     const targetDate = eventDate.slice(0, 10);
     const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
 
     // Exact date match
-    const dateMatches = productions.filter((p: any) => {
+    const dateMatches = productions.filter((p) => {
       if (p.localDate?.slice(0, 10) === targetDate) return true;
       if (p.utcDate) {
         try { if (new Date(p.utcDate).toISOString().slice(0, 10) === targetDate) return true; } catch { /* skip */ }
@@ -340,7 +352,7 @@ export default function ImportEventsClient({
 
     if (dateMatches.length === 1) return dateMatches[0];
     if (dateMatches.length > 1) {
-      const venueMatch = dateMatches.find((p: any) =>
+      const venueMatch = dateMatches.find((p) =>
         norm(p.venue?.name || '').includes(norm(venueName)) ||
         norm(venueName).includes(norm(p.venue?.name || ''))
       );
@@ -349,8 +361,8 @@ export default function ImportEventsClient({
 
     // Close date match (within 36h for timezone differences)
     const targetTime = new Date(eventDate).getTime();
-    return productions.find((p: any) => {
-      const pDate = new Date(p.utcDate || p.localDate);
+    return productions.find((p) => {
+      const pDate = new Date(p.utcDate || p.localDate || '');
       return Math.abs(pDate.getTime() - targetTime) < 36 * 60 * 60 * 1000;
     }) || null;
   };
@@ -358,7 +370,25 @@ export default function ImportEventsClient({
   const handleFetchVividId = async (event: TMEvent) => {
     setFetchingVividId(prev => ({ ...prev, [event.id]: true }));
     try {
+      // Check if user pasted a VS URL directly in the mapping field
+      const currentMappingVal = imports[event.id]?.mappingId || '';
+      const urlProductionId = extractVSProductionIdFromUrl(currentMappingVal);
+      if (urlProductionId) {
+        updateImportState(event.id, { mappingId: String(urlProductionId), status: 'idle', error: undefined });
+        return;
+      }
+
       const searchTerms = extractSearchTerms(event.name);
+      // Also try the event URL as a VS URL (in case it's a VS link)
+      const eventUrlProdId = event.url ? extractVSProductionIdFromUrl(event.url) : null;
+      if (eventUrlProdId) {
+        const prod = await fetchProduction(eventUrlProdId);
+        if (prod?.id) {
+          updateImportState(event.id, { mappingId: String(prod.id), status: 'idle', error: undefined });
+          return;
+        }
+      }
+
       if (searchTerms.length === 0) {
         updateImportState(event.id, { status: 'idle', error: 'Could not extract search term from event name' });
         return;
@@ -688,9 +718,15 @@ export default function ImportEventsClient({
                   <div className="flex gap-1.5">
                     <input
                       type="text"
-                      placeholder="Vivid Seats Mapping ID"
+                      placeholder="Vivid ID or paste VS URL"
                       value={impState.mappingId || ''}
-                      onChange={e => updateImportState(event.id, { mappingId: e.target.value, status: 'idle', error: undefined })}
+                      onChange={e => {
+                        let val = e.target.value;
+                        // Auto-extract production ID from pasted VS URLs
+                        const prodId = extractVSProductionIdFromUrl(val);
+                        if (prodId) val = String(prodId);
+                        updateImportState(event.id, { mappingId: val, status: 'idle', error: undefined });
+                      }}
                       disabled={isImporting}
                       className="flex-1 px-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent disabled:bg-slate-50 transition-all"
                     />
