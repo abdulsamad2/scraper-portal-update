@@ -9,6 +9,42 @@
 
 const VS_BASE = 'https://www.vividseats.com/hermes/api/v1';
 
+// Rotate through realistic browser User-Agent strings
+const USER_AGENTS = [
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0',
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 Edg/129.0.0.0',
+];
+
+function getRandomUA(): string {
+  return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+}
+
+function getBrowserHeaders(ua: string): Record<string, string> {
+  const isFirefox = ua.includes('Firefox');
+  const isSafari = ua.includes('Safari') && !ua.includes('Chrome');
+  return {
+    'User-Agent': ua,
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Cache-Control': 'no-cache',
+    'Pragma': 'no-cache',
+    ...(isFirefox ? { 'Sec-Fetch-Dest': 'document', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Site': 'none', 'Sec-Fetch-User': '?1' } : {}),
+    ...(!isFirefox && !isSafari ? { 'Sec-Ch-Ua-Platform': '"Windows"', 'Sec-Fetch-Dest': 'document', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Site': 'none', 'Sec-Fetch-User': '?1', 'Upgrade-Insecure-Requests': '1' } : {}),
+  };
+}
+
+/** Random delay between min and max ms */
+function randomDelay(minMs: number, maxMs: number): Promise<void> {
+  const ms = minMs + Math.random() * (maxMs - minMs);
+  return new Promise(r => setTimeout(r, ms));
+}
+
 export interface VSProduction {
   id: number;
   name: string;
@@ -27,39 +63,53 @@ export interface VSProduction {
  * Uses the search page redirect — Vivid Seats redirects
  * /search?searchTerm=X to the matching performer or production page,
  * so we extract the ID from the final redirect URL.
+ * Retries up to 2 times with random delays on failure.
  */
 export async function findPerformerId(searchTerm: string): Promise<{ performerId: number | null; directProductionId: number | null }> {
-  try {
-    const url = `https://www.vividseats.com/search?searchTerm=${encodeURIComponent(searchTerm)}`;
-    const res = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'text/html',
-      },
-      redirect: 'follow',
-      signal: AbortSignal.timeout(15000),
-    });
+  const MAX_RETRIES = 2;
 
-    const finalUrl = res.url || '';
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      if (attempt > 0) {
+        await randomDelay(1500, 4000);
+      }
 
-    // Check if redirected to a performer page: /performer/{id}
-    const performerMatch = finalUrl.match(/\/performer\/(\d+)/);
-    if (performerMatch) {
-      return { performerId: parseInt(performerMatch[1], 10), directProductionId: null };
+      const ua = getRandomUA();
+      const url = `https://www.vividseats.com/search?searchTerm=${encodeURIComponent(searchTerm)}`;
+      const res = await fetch(url, {
+        headers: getBrowserHeaders(ua),
+        redirect: 'follow',
+        signal: AbortSignal.timeout(15000),
+      });
+
+      const finalUrl = res.url || '';
+
+      // Check if redirected to a performer page: /performer/{id}
+      const performerMatch = finalUrl.match(/\/performer\/(\d+)/);
+      if (performerMatch) {
+        return { performerId: parseInt(performerMatch[1], 10), directProductionId: null };
+      }
+
+      // Check if redirected to a production page: /production/{id}
+      const productionMatch = finalUrl.match(/\/production\/(\d+)/);
+      if (productionMatch) {
+        return { performerId: null, directProductionId: parseInt(productionMatch[1], 10) };
+      }
+
+      // Got a response but no redirect — could be blocked or genuinely no match
+      // If status is not 200 or page looks like a block, retry
+      if (res.status !== 200 && attempt < MAX_RETRIES) continue;
+
+      // No redirect (stayed on search page) — no match found
+      return { performerId: null, directProductionId: null };
+    } catch (error) {
+      if (attempt < MAX_RETRIES) continue;
+      console.error('Error finding VS performer:', error);
+      return { performerId: null, directProductionId: null };
     }
-
-    // Check if redirected to a production page: /production/{id}
-    const productionMatch = finalUrl.match(/\/production\/(\d+)/);
-    if (productionMatch) {
-      return { performerId: null, directProductionId: parseInt(productionMatch[1], 10) };
-    }
-
-    // No redirect (stayed on search page) — no match found
-    return { performerId: null, directProductionId: null };
-  } catch (error) {
-    console.error('Error finding VS performer:', error);
-    return { performerId: null, directProductionId: null };
   }
+
+  return { performerId: null, directProductionId: null };
 }
 
 /**
@@ -67,7 +117,15 @@ export async function findPerformerId(searchTerm: string): Promise<{ performerId
  */
 async function getProductionById(productionId: number): Promise<any | null> {
   try {
+    await randomDelay(300, 800);
     const res = await fetch(`${VS_BASE}/productions/${productionId}`, {
+      headers: {
+        'User-Agent': getRandomUA(),
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': 'https://www.vividseats.com/',
+        'Origin': 'https://www.vividseats.com',
+      },
       signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) return null;
@@ -82,7 +140,15 @@ async function getProductionById(productionId: number): Promise<any | null> {
  */
 export async function getProductionsByPerformer(performerId: number): Promise<VSProduction[]> {
   try {
+    await randomDelay(300, 800);
     const res = await fetch(`${VS_BASE}/productions?performerId=${performerId}`, {
+      headers: {
+        'User-Agent': getRandomUA(),
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': 'https://www.vividseats.com/',
+        'Origin': 'https://www.vividseats.com',
+      },
       signal: AbortSignal.timeout(15000),
     });
 

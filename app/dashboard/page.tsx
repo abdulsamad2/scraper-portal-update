@@ -16,7 +16,6 @@ import {
   Plus,
   Download,
   Filter,
-  Trash2,
   Clock,
   ChevronDown,
   ChevronUp,

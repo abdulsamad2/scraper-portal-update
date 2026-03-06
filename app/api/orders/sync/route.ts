@@ -233,7 +233,7 @@ export async function GET(request: NextRequest) {
               return 0;
             })
           );
-          seatUpdated += results.reduce((a, b) => a + b, 0);
+          seatUpdated += (results as number[]).reduce((a, b) => a + b, 0);
           if (i + BATCH < missingSeats.length) await new Promise(r => setTimeout(r, 200));
         }
         console.log(`[resync] seat backfill: ${seatUpdated}/${missingSeats.length} orders updated`);

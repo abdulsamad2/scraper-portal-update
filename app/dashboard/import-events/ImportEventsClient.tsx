@@ -286,32 +286,143 @@ export default function ImportEventsClient({
     navigate({ page: String(p) });
   };
 
-  /* ---- Vivid ID fetch ---- */
+  /* ---- Vivid ID fetch (client-side matching, server only for search redirect) ---- */
+
+  /** Extract search terms from TM event name */
+  const extractSearchTerms = (eventName: string): string[] => {
+    const terms: string[] = [];
+    const atMatch = eventName.match(/(.+?)\s+at\s+(.+)/i);
+    if (atMatch) { terms.push(atMatch[2].trim()); terms.push(atMatch[1].trim()); }
+    const vsMatch = eventName.match(/(.+?)\s+vs\.?\s+(.+)/i);
+    if (vsMatch) { terms.push(vsMatch[1].trim()); terms.push(vsMatch[2].trim()); }
+    if (terms.length === 0) {
+      const parts = eventName.split(/[|–—]/);
+      const primary = parts[0]?.trim().replace(/\(.*?\)/g, '').replace(/\s*tickets?\s*$/i, '').trim();
+      if (primary) terms.push(primary);
+      const full = eventName.replace(/\(.*?\)/g, '').replace(/\s*tickets?\s*$/i, '').trim();
+      if (full && !terms.includes(full)) terms.push(full);
+    }
+    return [...new Set(terms)].filter(Boolean);
+  };
+
+  /** Fetch productions from Hermes API via our proxy */
+  const fetchProductions = async (performerId: number) => {
+    const res = await fetch(`/api/vividseats/proxy?path=productions&performerId=${performerId}`, {
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.items || data || [];
+  };
+
+  /** Fetch single production by ID via proxy */
+  const fetchProduction = async (productionId: number) => {
+    const res = await fetch(`/api/vividseats/proxy?path=productions/${productionId}`, {
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  };
+
+  /** Match productions by date and venue (runs entirely in the browser) */
+  const matchProduction = (productions: any[], eventDate: string, venueName: string) => {
+    const targetDate = eventDate.slice(0, 10);
+    const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+    // Exact date match
+    const dateMatches = productions.filter((p: any) => {
+      if (p.localDate?.slice(0, 10) === targetDate) return true;
+      if (p.utcDate) {
+        try { if (new Date(p.utcDate).toISOString().slice(0, 10) === targetDate) return true; } catch { /* skip */ }
+      }
+      return false;
+    });
+
+    if (dateMatches.length === 1) return dateMatches[0];
+    if (dateMatches.length > 1) {
+      const venueMatch = dateMatches.find((p: any) =>
+        norm(p.venue?.name || '').includes(norm(venueName)) ||
+        norm(venueName).includes(norm(p.venue?.name || ''))
+      );
+      return venueMatch || dateMatches[0];
+    }
+
+    // Close date match (within 36h for timezone differences)
+    const targetTime = new Date(eventDate).getTime();
+    return productions.find((p: any) => {
+      const pDate = new Date(p.utcDate || p.localDate);
+      return Math.abs(pDate.getTime() - targetTime) < 36 * 60 * 60 * 1000;
+    }) || null;
+  };
+
   const handleFetchVividId = async (event: TMEvent) => {
     setFetchingVividId(prev => ({ ...prev, [event.id]: true }));
     try {
-      const qs = new URLSearchParams();
-      qs.set('eventName', event.name);
-      qs.set('eventDate', event.localDate || event.dateTime);
-      qs.set('venueName', event.venue);
-      const res = await fetch(`/api/vividseats/lookup?${qs.toString()}`);
-      const data = await res.json();
-      if (data.success && data.productionId) {
-        updateImportState(event.id, { mappingId: String(data.productionId), status: 'idle', error: undefined });
-      } else {
-        const reason = data.message || 'No match found';
-        const searchTerm = data.searchTermUsed || event.name;
-        const vsSearchUrl = `https://www.vividseats.com/search?searchTerm=${encodeURIComponent(searchTerm)}`;
+      const searchTerms = extractSearchTerms(event.name);
+      if (searchTerms.length === 0) {
+        updateImportState(event.id, { status: 'idle', error: 'Could not extract search term from event name' });
+        return;
+      }
+
+      // Step 1: Find performer/production ID via server (search redirect — can't do client-side)
+      let performerId: number | null = null;
+      let directProductionId: number | null = null;
+      let usedTerm = '';
+
+      for (const term of searchTerms) {
+        const res = await fetch(`/api/vividseats/lookup?searchTerm=${encodeURIComponent(term)}`);
+        const data = await res.json();
+        if (data.directProductionId) { directProductionId = data.directProductionId; usedTerm = term; break; }
+        if (data.performerId) { performerId = data.performerId; usedTerm = term; break; }
+      }
+
+      // Step 2: If direct production, fetch its details via proxy
+      if (directProductionId) {
+        const prod = await fetchProduction(directProductionId);
+        if (prod?.id) {
+          updateImportState(event.id, { mappingId: String(prod.id), status: 'idle', error: undefined });
+          return;
+        }
+      }
+
+      if (!performerId) {
+        const vsSearchUrl = `https://www.vividseats.com/search?searchTerm=${encodeURIComponent(usedTerm || searchTerms[0])}`;
         updateImportState(event.id, {
           status: 'idle',
-          error: `Auto-fetch failed: ${reason}. Search manually on VividSeats`,
+          error: `No performer found for "${usedTerm || searchTerms[0]}". Search manually`,
           vividSearchUrl: vsSearchUrl,
+        });
+        return;
+      }
+
+      // Step 3: Fetch all productions for performer via proxy (browser → our proxy → VS API)
+      const productions = await fetchProductions(performerId);
+      if (productions.length === 0) {
+        updateImportState(event.id, {
+          status: 'idle',
+          error: 'Performer found but no upcoming events on Vivid Seats',
+          vividSearchUrl: `https://www.vividseats.com/search?searchTerm=${encodeURIComponent(usedTerm)}`,
+        });
+        return;
+      }
+
+      // Step 4: Match by date + venue (entirely client-side — no server call needed)
+      const eventDate = event.localDate || event.dateTime;
+      const match = matchProduction(productions, eventDate, event.venue);
+
+      if (match) {
+        updateImportState(event.id, { mappingId: String(match.id), status: 'idle', error: undefined });
+      } else {
+        updateImportState(event.id, {
+          status: 'idle',
+          error: `Found ${productions.length} events but none match date ${eventDate.slice(0, 10)}`,
+          vividSearchUrl: `https://www.vividseats.com/search?searchTerm=${encodeURIComponent(usedTerm)}`,
         });
       }
     } catch {
       updateImportState(event.id, {
         status: 'idle',
-        error: 'Auto-fetch failed: Network error. Try searching manually on VividSeats',
+        error: 'Auto-fetch failed: Network error. Try searching manually',
         vividSearchUrl: `https://www.vividseats.com/search?searchTerm=${encodeURIComponent(event.name)}`,
       });
     } finally {

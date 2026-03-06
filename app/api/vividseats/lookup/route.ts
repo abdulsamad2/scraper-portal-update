@@ -1,39 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { findVividSeatsMappingId } from '@/lib/vividseats';
+import { findPerformerId } from '@/lib/vividseats';
 
+/**
+ * Server-side performer/production ID lookup via VS search redirect.
+ * This is the only part that MUST be server-side (HTML redirect + CORS).
+ * The client handles production fetching and date/venue matching.
+ */
 export async function GET(req: NextRequest) {
   try {
-    const sp = req.nextUrl.searchParams;
-    const eventName = sp.get('eventName');
-    const eventDate = sp.get('eventDate');
-    const venueName = sp.get('venueName');
-
-    if (!eventName || !eventDate) {
-      return NextResponse.json(
-        { error: 'eventName and eventDate are required' },
-        { status: 400 }
-      );
+    const searchTerm = req.nextUrl.searchParams.get('searchTerm');
+    if (!searchTerm) {
+      return NextResponse.json({ error: 'searchTerm required' }, { status: 400 });
     }
 
-    const { result, failReason, searchTermUsed } = await findVividSeatsMappingId(
-      eventName,
-      eventDate,
-      venueName || ''
-    );
-
-    if (result) {
-      return NextResponse.json({
-        success: true,
-        productionId: result.productionId,
-        productionName: result.productionName,
-        venueName: result.venueName,
-      });
-    }
+    const { performerId, directProductionId } = await findPerformerId(searchTerm);
 
     return NextResponse.json({
-      success: false,
-      message: failReason || 'No matching Vivid Seats event found',
-      searchTermUsed: searchTermUsed || '',
+      performerId,
+      directProductionId,
     });
   } catch (error) {
     console.error('Vivid Seats lookup error:', error);

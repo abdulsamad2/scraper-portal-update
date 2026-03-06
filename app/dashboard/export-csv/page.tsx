@@ -215,7 +215,7 @@ const ExportCsvPage: React.FC = () => {
 
       const recordCount = response.headers.get('X-Record-Count');
       const generationTime = response.headers.get('X-Generation-Time');
-      const excludedCount = response.headers.get('X-Excluded-Count');
+      // X-Excluded-Count available if needed: response.headers.get('X-Excluded-Count')
 
       // Stream response as blob for download
       const blob = await response.blob();

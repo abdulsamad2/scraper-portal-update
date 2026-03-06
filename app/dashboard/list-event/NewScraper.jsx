@@ -1,10 +1,11 @@
 "use client";
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { createEvent, updateEvent } from "@/actions/eventActions";
 import { EventFormProvider, useEventForm } from "@/components/providers/EventFormProvider";
 import { EventFormFields } from "@/components/ui/FormFields";
 import { EventFormMode, FormStatusMessages } from "@/components/ui/FormModes";
 import { useNotifications } from "@/components/providers/NotificationProvider";
+import { Loader2, Wand2 } from "lucide-react";
 
 // Explicit mode variants instead of boolean isEdit prop
 const CreateEventForm = ({ onCancel, onSuccess }) => {
@@ -36,6 +37,7 @@ const EditEventForm = ({ onCancel, onSuccess, initialData }) => {
 const EventFormContent = ({ mode, onCancel, onSuccess, initialData }) => {
   const form = useEventForm();
   const notifications = useNotifications();
+  const [fetchingVividId, setFetchingVividId] = useState(false);
 
   // Helper function to extract Event ID from URL
   const extractEventIdFromUrl = (url) => {
@@ -210,6 +212,136 @@ const EventFormContent = ({ mode, onCancel, onSuccess, initialData }) => {
   const handleCheckboxChange = (e) => {
     const { name, checked } = e.target;
     form.actions.updateField(name, checked);
+  };
+
+  /* ---- Vivid Seats mapping ID fetch ---- */
+  const handleFetchVividId = async () => {
+    const eventName = form.data.Event_Name.value;
+    const eventDate = form.data.Event_DateTime.value;
+    const venueName = form.data.Venue.value;
+
+    if (!eventName) {
+      form.actions.setError('Enter an Event Name before fetching Vivid ID');
+      return;
+    }
+
+    setFetchingVividId(true);
+    form.actions.setError('');
+
+    try {
+      // Extract search terms from event name
+      const extractSearchTerms = (name) => {
+        const terms = [];
+        const atMatch = name.match(/(.+?)\s+at\s+(.+)/i);
+        if (atMatch) { terms.push(atMatch[2].trim()); terms.push(atMatch[1].trim()); }
+        const vsMatch = name.match(/(.+?)\s+vs\.?\s+(.+)/i);
+        if (vsMatch) { terms.push(vsMatch[1].trim()); terms.push(vsMatch[2].trim()); }
+        if (terms.length === 0) {
+          const parts = name.split(/[|–—]/);
+          const primary = parts[0]?.trim().replace(/\(.*?\)/g, '').replace(/\s*tickets?\s*$/i, '').trim();
+          if (primary) terms.push(primary);
+          const full = name.replace(/\(.*?\)/g, '').replace(/\s*tickets?\s*$/i, '').trim();
+          if (full && !terms.includes(full)) terms.push(full);
+        }
+        return [...new Set(terms)].filter(Boolean);
+      };
+
+      const searchTerms = extractSearchTerms(eventName);
+      if (searchTerms.length === 0) {
+        form.actions.setError('Could not extract search term from event name');
+        return;
+      }
+
+      // Step 1: Find performer/production via server (search redirect)
+      let performerId = null;
+      let directProductionId = null;
+      for (const term of searchTerms) {
+        const res = await fetch(`/api/vividseats/lookup?searchTerm=${encodeURIComponent(term)}`);
+        const data = await res.json();
+        if (data.directProductionId) { directProductionId = data.directProductionId; break; }
+        if (data.performerId) { performerId = data.performerId; break; }
+      }
+
+      // Step 2: Direct production — fetch details and set
+      if (directProductionId) {
+        const res = await fetch(`/api/vividseats/proxy?path=productions/${directProductionId}`);
+        if (res.ok) {
+          const prod = await res.json();
+          if (prod?.id) {
+            form.actions.updateField('mapping_id', String(prod.id));
+            return;
+          }
+        }
+      }
+
+      if (!performerId) {
+        form.actions.setError(`No Vivid Seats performer found for "${searchTerms[0]}"`);
+        return;
+      }
+
+      // Step 3: Fetch all productions for performer via proxy
+      const prodRes = await fetch(`/api/vividseats/proxy?path=productions&performerId=${performerId}`);
+      if (!prodRes.ok) {
+        form.actions.setError('Failed to fetch productions from Vivid Seats');
+        return;
+      }
+      const prodData = await prodRes.json();
+      const productions = prodData.items || prodData || [];
+
+      if (productions.length === 0) {
+        form.actions.setError('Performer found but no upcoming events on Vivid Seats');
+        return;
+      }
+
+      // Step 4: Match by date + venue (client-side)
+      const targetDate = (eventDate || '').slice(0, 10);
+      const norm = (s) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+      let match = null;
+      if (targetDate) {
+        const dateMatches = productions.filter((p) => {
+          if (p.localDate?.slice(0, 10) === targetDate) return true;
+          if (p.utcDate) {
+            try { if (new Date(p.utcDate).toISOString().slice(0, 10) === targetDate) return true; } catch { /* skip */ }
+          }
+          return false;
+        });
+
+        if (dateMatches.length === 1) {
+          match = dateMatches[0];
+        } else if (dateMatches.length > 1 && venueName) {
+          match = dateMatches.find((p) =>
+            norm(p.venue?.name || '').includes(norm(venueName)) ||
+            norm(venueName).includes(norm(p.venue?.name || ''))
+          ) || dateMatches[0];
+        } else if (dateMatches.length > 1) {
+          match = dateMatches[0];
+        }
+
+        // Close date fallback
+        if (!match && eventDate) {
+          const targetTime = new Date(eventDate).getTime();
+          match = productions.find((p) => {
+            const pDate = new Date(p.utcDate || p.localDate);
+            return Math.abs(pDate.getTime() - targetTime) < 36 * 60 * 60 * 1000;
+          });
+        }
+      }
+
+      if (match) {
+        form.actions.updateField('mapping_id', String(match.id));
+      } else {
+        form.actions.setError(
+          targetDate
+            ? `Found ${productions.length} events but none match date ${targetDate}`
+            : `Found ${productions.length} events — enter Event Date to auto-match`
+        );
+      }
+    } catch (err) {
+      form.actions.setError('Vivid ID fetch failed: Network error');
+    } finally {
+      setFetchingVividId(false);
+    }
   };
 
   const handleSubmit = async (e) => {
@@ -394,16 +526,28 @@ const EventFormContent = ({ mode, onCancel, onSuccess, initialData }) => {
               disabled={form.meta.isSubmitting}
             />
 
-            {/* Event Mapping ID Field */}
-            <EventFormFields.MappingID
-              name="mapping_id"
-              value={form.data.mapping_id.value}
-              status={form.data.mapping_id.status}
-              error={form.data.mapping_id.error}
-              onChange={handleInputChange}
-              onBlur={handleBlur}
-              disabled={form.meta.isSubmitting}
-            />
+            {/* Event Mapping ID Field + Fetch Button */}
+            <div>
+              <EventFormFields.MappingID
+                name="mapping_id"
+                value={form.data.mapping_id.value}
+                status={form.data.mapping_id.status}
+                error={form.data.mapping_id.error}
+                onChange={handleInputChange}
+                onBlur={handleBlur}
+                disabled={form.meta.isSubmitting}
+              />
+              <button
+                type="button"
+                onClick={handleFetchVividId}
+                disabled={form.meta.isSubmitting || fetchingVividId}
+                className="mt-1.5 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Auto-fetch Vivid Seats mapping ID from event name"
+              >
+                {fetchingVividId ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wand2 className="w-3.5 h-3.5" />}
+                {fetchingVividId ? 'Fetching...' : 'Fetch Vivid ID'}
+              </button>
+            </div>
 
             {/* Price Increase Field */}
             <EventFormFields.PriceIncrease
