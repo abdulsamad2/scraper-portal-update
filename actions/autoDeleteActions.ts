@@ -280,7 +280,7 @@ export async function deleteExpiredEvents(stopBeforeHours: number = 2, lowSeatTh
       // Re-fetch active events (some may have just been stopped above)
       const activeEvents = await Event.find({ Skip_Scraping: { $ne: true } })
         .select('_id Event_ID Event_Name mapping_id Venue')
-        .lean();
+        .lean() as Array<{ _id: any; Event_ID: string; Event_Name: string; mapping_id: string; Venue: string }>;
 
       if (activeEvents.length > 0) {
         const mappingIds = activeEvents
