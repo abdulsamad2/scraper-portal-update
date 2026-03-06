@@ -3,7 +3,6 @@
 import React, { useState, useEffect } from 'react';
 import moment from 'moment';
 import { Download, Upload } from 'lucide-react';
-import { generateInventoryCsv } from '../../../actions/csvActions';
 import { deleteStaleInventory } from '../../../actions/seatActions';
 
 // Simple toast notification function
@@ -184,50 +183,81 @@ const ExportCsvPage: React.FC = () => {
     setLoading(true);
     setCsvStatus(prev => ({ ...prev, status: 'Generating...' }));
     const startTime = Date.now();
-    
+
     try {
-      const result = await generateInventoryCsv(settings.eventUpdateFilterMinutes);
+      // Use API route instead of server action to avoid payload size limits
+      // for large CSVs (100+ events). The API route streams the CSV as a file.
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 minute timeout
 
-      if (result.success && result.csv) {
-        // Create and download the CSV file
-        const blob = new Blob([result.csv], { type: 'text/csv' });
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.style.display = 'none';
-        a.href = url;
-        a.download = `inventory-${moment().format('YYYY-MM-DD-HH-mm-ss')}.csv`;
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(url);
-        document.body.removeChild(a);
+      const response = await fetch('/api/generate-csv', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ eventUpdateFilterMinutes: settings.eventUpdateFilterMinutes }),
+        signal: controller.signal,
+      });
 
-        const totalTime = Date.now() - startTime;
-        setCsvStatus(prev => ({
-          ...prev,
-          lastGenerated: moment().toISOString(),
-          status: `Generated successfully! (${result.recordCount || 'Unknown'} records in ${totalTime}ms)`
-        }));
-        showMessage(`CSV generated and downloaded successfully! ${result.recordCount || 'Records'} processed in ${result.generationTime || totalTime}ms`, 'success');
+      clearTimeout(timeoutId);
 
-        // Update performance metrics
-        setPerformanceMetrics((prev: PerformanceMetrics | null) => ({
-          ...prev,
-          lastManualGeneration: {
-            recordCount: result.recordCount,
-            generationTime: result.generationTime,
-            totalTime: totalTime,
-            timestamp: new Date().toISOString()
-          }
-        }));
-      } else {
-        setCsvStatus(prev => ({ ...prev, status: 'Generation failed' }));
-        showMessage(result.message || 'Failed to generate CSV', 'error');
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => null);
+        throw new Error(errorData?.message || `Server error: ${response.status}`);
       }
+
+      const contentType = response.headers.get('Content-Type') || '';
+      if (contentType.includes('application/json')) {
+        // Error response returned as JSON
+        const errorData = await response.json();
+        setCsvStatus(prev => ({ ...prev, status: 'Generation failed' }));
+        showMessage(errorData.message || 'Failed to generate CSV', 'error');
+        return;
+      }
+
+      const recordCount = response.headers.get('X-Record-Count');
+      const generationTime = response.headers.get('X-Generation-Time');
+      const excludedCount = response.headers.get('X-Excluded-Count');
+
+      // Stream response as blob for download
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.style.display = 'none';
+      a.href = url;
+      a.download = `inventory-${moment().format('YYYY-MM-DD-HH-mm-ss')}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+
+      const totalTime = Date.now() - startTime;
+      const records = recordCount ? parseInt(recordCount, 10) : undefined;
+      const genTime = generationTime ? parseInt(generationTime, 10) : undefined;
+      setCsvStatus(prev => ({
+        ...prev,
+        lastGenerated: moment().toISOString(),
+        status: `Generated successfully! (${records || 'Unknown'} records in ${totalTime}ms)`
+      }));
+      showMessage(`CSV generated and downloaded successfully! ${records || 'Records'} processed in ${genTime || totalTime}ms`, 'success');
+
+      // Update performance metrics
+      setPerformanceMetrics((prev: PerformanceMetrics | null) => ({
+        ...prev,
+        lastManualGeneration: {
+          recordCount: records,
+          generationTime: genTime,
+          totalTime: totalTime,
+          timestamp: new Date().toISOString()
+        }
+      }));
     } catch (error) {
       console.error('CSV Generation Error:', error);
       setCsvStatus(prev => ({ ...prev, status: 'Generation failed' }));
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error generating CSV';
-      showMessage(`Error generating CSV: ${errorMessage}`, 'error');
+      if (error instanceof Error && error.name === 'AbortError') {
+        showMessage('CSV generation timed out. The dataset may be too large — try using the Event Update Filter to limit results.', 'error');
+      } else {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error generating CSV';
+        showMessage(`Error generating CSV: ${errorMessage}`, 'error');
+      }
     } finally {
       setLoading(false);
     }

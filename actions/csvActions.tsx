@@ -605,20 +605,10 @@ async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]
     }
 
     // Calculate split configuration based on quantity and split type
-    // If the scraper stored a custom_split on the inventory, prefer that over computed values
-    let finalSplitType: CsvRow['split_type'];
-    let customSplit: string;
-    if (inventory?.custom_split) {
-      finalSplitType = 'CUSTOM';
-      customSplit = inventory.custom_split;
-    } else {
-      const splitConfig = calculateSplitConfiguration(
-        inventory?.quantity || 0,
-        inventory?.splitType
-      );
-      finalSplitType = splitConfig.finalSplitType;
-      customSplit = splitConfig.customSplit;
-    }
+    const { finalSplitType, customSplit } = calculateSplitConfiguration(
+      inventory?.quantity || 0,
+      inventory?.splitType
+    );
 
     // Check if row is SRO and handle public notes accordingly
     const isSRO = row.toUpperCase() === 'SRO';
@@ -651,8 +641,8 @@ async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]
       public_notes: publicNotes,
       tags,
       list_price: Number(adjustedListPrice.toFixed(2)),
-      face_price: Number((inventory?.cost || 0).toFixed(2)),
-      taxed_cost: Number((inventory?.cost || 0).toFixed(2)),
+      face_price: Number((inventory?.face_price || inventory?.cost || 0).toFixed(2)),
+      taxed_cost: Number((inventory?.taxed_cost || inventory?.cost || 0).toFixed(2)),
       cost: Number((inventory?.cost || 0).toFixed(2)),
       hide_seats: inventory?.hideSeatNumbers ? "Y" : "N",
       in_hand: "N", // Always set to "N" as per original code

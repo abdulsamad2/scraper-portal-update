@@ -18,31 +18,51 @@ function escapeRegex(str: string) {
 
 /**
  * Fetch seat range from the /transfers endpoint for a single order.
+ * @param retries - number of retry attempts (with exponential backoff)
  */
 async function fetchSeatRange(
   syncId: number,
   companyId: string,
-  apiToken: string
+  apiToken: string,
+  retries = 0
 ): Promise<{ low_seat: number; high_seat: number } | null> {
-  try {
-    const res = await fetch(`${SYNC_API_BASE}/transfers?order_id=${syncId}`, {
-      headers: { 'X-Company-Id': companyId, 'X-Api-Token': apiToken, 'Accept': 'application/json' },
-      cache: 'no-store',
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    const transfers = data.transfers || data.data || data || [];
-    const transferArr = Array.isArray(transfers) ? transfers : [transfers];
-    const seats: number[] = [];
-    for (const transfer of transferArr) {
-      for (const ticket of (transfer.tickets || [])) {
-        if (ticket.seat != null && typeof ticket.seat === 'number') seats.push(ticket.seat);
+  const MAX_RETRIES = retries;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      if (attempt > 0) {
+        // Exponential backoff: 1s, 2s, 4s
+        await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt - 1)));
       }
+      const res = await fetch(`${SYNC_API_BASE}/transfers?order_id=${syncId}`, {
+        headers: { 'X-Company-Id': companyId, 'X-Api-Token': apiToken, 'Accept': 'application/json' },
+        cache: 'no-store',
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!res.ok) {
+        if (attempt < MAX_RETRIES) continue;
+        return null;
+      }
+      const data = await res.json();
+      const transfers = data.transfers || data.data || data || [];
+      const transferArr = Array.isArray(transfers) ? transfers : [transfers];
+      const seats: number[] = [];
+      for (const transfer of transferArr) {
+        for (const ticket of (transfer.tickets || [])) {
+          if (ticket.seat != null && typeof ticket.seat === 'number') seats.push(ticket.seat);
+        }
+      }
+      if (seats.length === 0) {
+        // No seat data yet — retry if attempts remain (transfer may not be ready)
+        if (attempt < MAX_RETRIES) continue;
+        return null;
+      }
+      return { low_seat: Math.min(...seats), high_seat: Math.max(...seats) };
+    } catch {
+      if (attempt < MAX_RETRIES) continue;
+      return null;
     }
-    if (seats.length === 0) return null;
-    return { low_seat: Math.min(...seats), high_seat: Math.max(...seats) };
-  } catch { return null; }
+  }
+  return null;
 }
 
 async function findEventUrl(o: Record<string, any>): Promise<{ eventId: any; url: string } | null> {
@@ -148,8 +168,9 @@ export async function GET(request: NextRequest) {
                 occurs_at: o.occurs_at ? new Date(o.occurs_at) : null,
                 section: o.section || '',
                 row: o.row || '',
-                low_seat: o.low_seat ?? null,
-                high_seat: o.high_seat ?? null,
+                // Only update seat data if API provides non-null values
+                ...(o.low_seat != null ? { low_seat: o.low_seat } : {}),
+                ...(o.high_seat != null ? { high_seat: o.high_seat } : {}),
                 quantity: o.quantity ?? 0,
                 status: o.status || 'pending',
                 delivery: o.delivery || '',
@@ -163,6 +184,14 @@ export async function GET(request: NextRequest) {
                 pos_invoice_id: o.pos_invoice_id || '',
                 from_csv: o.from_csv ?? false,
                 last_seen_internal_notes: o.last_seen_internal_notes || '',
+                public_notes: o.public_notes || '',
+                reason: o.error_reason || o.reason || '',
+                in_hand_date: o.in_hand_date ? new Date(o.in_hand_date) : null,
+                inventory_tags: o.inventory_tags || '',
+                customer_name: o.customer_name || '',
+                customer_email: o.customer_email || '',
+                customer_phone: o.customer_phone || '',
+                transfer_to_email: o.transfer_to_email || '',
               },
               $setOnInsert: { acknowledged: false },
             },
@@ -179,6 +208,35 @@ export async function GET(request: NextRequest) {
         if (page <= totalPages) {
           await new Promise(r => setTimeout(r, 300));
         }
+      }
+
+      // Backfill seat data for orders missing seats (batch of 50)
+      const RESYNC_SEAT_LIMIT = 50;
+      const missingSeats = await Order.find(
+        { sync_id: { $ne: null }, $or: [{ low_seat: null }, { low_seat: { $exists: false } }] },
+        { sync_id: 1, order_id: 1 }
+      ).sort({ order_date: -1 }).limit(RESYNC_SEAT_LIMIT).lean();
+
+      if (missingSeats.length > 0) {
+        let seatUpdated = 0;
+        // Process in small parallel batches to respect rate limits
+        const BATCH = 5;
+        for (let i = 0; i < missingSeats.length; i += BATCH) {
+          const batch = missingSeats.slice(i, i + BATCH);
+          const results = await Promise.all(
+            batch.map(async (o: any) => {
+              const range = await fetchSeatRange(o.sync_id, companyId, apiToken);
+              if (range) {
+                await Order.updateOne({ _id: o._id }, { $set: { low_seat: range.low_seat, high_seat: range.high_seat } });
+                return 1;
+              }
+              return 0;
+            })
+          );
+          seatUpdated += results.reduce((a, b) => a + b, 0);
+          if (i + BATCH < missingSeats.length) await new Promise(r => setTimeout(r, 200));
+        }
+        console.log(`[resync] seat backfill: ${seatUpdated}/${missingSeats.length} orders updated`);
       }
 
       revalidatePath('/dashboard/orders');
@@ -250,8 +308,10 @@ export async function GET(request: NextRequest) {
         occurs_at: o.occurs_at ? new Date(o.occurs_at) : null,
         section: o.section || '',
         row: o.row || '',
-        low_seat: o.low_seat ?? null,
-        high_seat: o.high_seat ?? null,
+        // Only update seat data if API provides non-null values;
+        // otherwise we'd overwrite seats fetched from /transfers
+        ...(o.low_seat != null ? { low_seat: o.low_seat } : {}),
+        ...(o.high_seat != null ? { high_seat: o.high_seat } : {}),
         quantity: o.quantity ?? 0,
         status: incomingStatus,
         delivery: o.delivery || '',
@@ -351,17 +411,20 @@ export async function GET(request: NextRequest) {
     }
     console.log(`[sync] cross-ref (${unmatchedOrders.length} checked): ${Date.now() - t0}ms`);
 
-    // Fetch seat data from /transfers only for NEW orders
-    if (newOrderIds.length > 0) {
-      const newOrdersForSeats = await Order.find(
-        { order_id: { $in: newOrderIds }, sync_id: { $ne: null } },
-        { sync_id: 1, order_id: 1 }
-      ).lean();
+    // Fetch seat data from /transfers for NEW orders (with retries) + backfill existing orders
+    {
+      // New orders: retry up to 3 times with backoff to ensure we get seat data
+      const newOrdersForSeats = newOrderIds.length > 0
+        ? await Order.find(
+            { order_id: { $in: newOrderIds }, sync_id: { $ne: null } },
+            { sync_id: 1, order_id: 1 }
+          ).lean()
+        : [];
 
       if (newOrdersForSeats.length > 0) {
         const seatResults = await Promise.all(
           newOrdersForSeats.map(async (o: any) => {
-            const range = await fetchSeatRange(o.sync_id, companyId, apiToken);
+            const range = await fetchSeatRange(o.sync_id, companyId, apiToken, 3);
             if (range) {
               await Order.updateOne({ _id: o._id }, { $set: { low_seat: range.low_seat, high_seat: range.high_seat } });
             }
@@ -369,7 +432,32 @@ export async function GET(request: NextRequest) {
           })
         );
         const seatUpdated = seatResults.reduce((a: number, b) => a + b, 0 as number);
-        if (seatUpdated > 0) console.log(`[sync] seat data: ${seatUpdated}/${newOrdersForSeats.length} new orders updated`);
+        console.log(`[sync] new order seats: ${seatUpdated}/${newOrdersForSeats.length} fetched (3 retries each)`);
+      }
+
+      // Existing orders missing seat data: backfill a batch each sync cycle (no retries, keep it fast)
+      const SEAT_BACKFILL_LIMIT = 10;
+      const missingSeatsOrders = await Order.find(
+        {
+          sync_id: { $ne: null },
+          $or: [{ low_seat: null }, { low_seat: { $exists: false } }],
+          ...(newOrderIds.length > 0 ? { order_id: { $nin: newOrderIds } } : {}),
+        },
+        { sync_id: 1, order_id: 1 }
+      ).sort({ order_date: -1 }).limit(SEAT_BACKFILL_LIMIT).lean();
+
+      if (missingSeatsOrders.length > 0) {
+        const backfillResults = await Promise.all(
+          missingSeatsOrders.map(async (o: any) => {
+            const range = await fetchSeatRange(o.sync_id, companyId, apiToken);
+            if (range) {
+              await Order.updateOne({ _id: o._id }, { $set: { low_seat: range.low_seat, high_seat: range.high_seat } });
+            }
+            return range ? 1 : 0;
+          })
+        );
+        const backfilled = backfillResults.reduce((a: number, b) => a + b, 0 as number);
+        if (backfilled > 0) console.log(`[sync] seat backfill: ${backfilled}/${missingSeatsOrders.length} orders updated`);
       }
     }
 
