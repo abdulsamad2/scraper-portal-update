@@ -308,6 +308,7 @@ export default function ImportEventsClient({
   /** Fetch productions from Hermes API via our proxy */
   const fetchProductions = async (performerId: number) => {
     const res = await fetch(`/api/vividseats/proxy?path=productions&performerId=${performerId}`, {
+      cache: 'no-store',
       signal: AbortSignal.timeout(15000),
     });
     if (!res.ok) return [];
@@ -318,6 +319,7 @@ export default function ImportEventsClient({
   /** Fetch single production by ID via proxy */
   const fetchProduction = async (productionId: number) => {
     const res = await fetch(`/api/vividseats/proxy?path=productions/${productionId}`, {
+      cache: 'no-store',
       signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) return null;
@@ -400,7 +402,7 @@ export default function ImportEventsClient({
       let usedTerm = '';
 
       for (const term of searchTerms) {
-        const res = await fetch(`/api/vividseats/lookup?searchTerm=${encodeURIComponent(term)}`);
+        const res = await fetch(`/api/vividseats/lookup?searchTerm=${encodeURIComponent(term)}`, { cache: 'no-store' });
         const data = await res.json();
         if (data.directProductionId) { directProductionId = data.directProductionId; usedTerm = term; break; }
         if (data.performerId) { performerId = data.performerId; usedTerm = term; break; }

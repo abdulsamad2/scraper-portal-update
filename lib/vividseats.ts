@@ -79,6 +79,7 @@ export async function findPerformerId(searchTerm: string): Promise<{ performerId
       const res = await fetch(url, {
         headers: getBrowserHeaders(ua),
         redirect: 'follow',
+        cache: 'no-store',
         signal: AbortSignal.timeout(15000),
       });
 
@@ -126,6 +127,7 @@ async function getProductionById(productionId: number): Promise<any | null> {
         'Referer': 'https://www.vividseats.com/',
         'Origin': 'https://www.vividseats.com',
       },
+      cache: 'no-store',
       signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) return null;
@@ -149,6 +151,7 @@ export async function getProductionsByPerformer(performerId: number): Promise<VS
         'Referer': 'https://www.vividseats.com/',
         'Origin': 'https://www.vividseats.com',
       },
+      cache: 'no-store',
       signal: AbortSignal.timeout(15000),
     });
 

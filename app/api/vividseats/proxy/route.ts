@@ -44,6 +44,7 @@ export async function GET(req: NextRequest) {
         'Referer': 'https://www.vividseats.com/',
         'Origin': 'https://www.vividseats.com',
       },
+      cache: 'no-store',
       signal: AbortSignal.timeout(15000),
     });
 
