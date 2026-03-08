@@ -1,22 +1,21 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import moment from 'moment';
-import { Download, Upload } from 'lucide-react';
+import { Download, Upload, Settings, BarChart3, Clock, Trash2, AlertTriangle, Play, Square, RefreshCw, Eye, Zap, Shield, ChevronDown, CheckCircle2, XCircle, Timer } from 'lucide-react';
 import { deleteStaleInventory } from '../../../actions/seatActions';
 
 // Simple toast notification function
 const showMessage = (text: string, type: 'success' | 'error' | 'info' = 'info') => {
-  // Create a simple toast notification
   const toast = document.createElement('div');
-  toast.className = `fixed top-4 right-4 px-4 py-2 rounded-md text-white z-50 ${
-    type === 'success' ? 'bg-green-500' : 
-    type === 'error' ? 'bg-red-500' : 'bg-blue-500'
+  toast.className = `fixed top-4 right-4 px-5 py-3 rounded-xl text-sm font-medium z-50 shadow-lg border backdrop-blur-sm transition-all ${
+    type === 'success' ? 'bg-green-50 text-green-800 border-green-200' :
+    type === 'error' ? 'bg-red-50 text-red-800 border-red-200' : 'bg-blue-50 text-blue-800 border-blue-200'
   }`;
   toast.textContent = text;
   document.body.appendChild(toast);
   setTimeout(() => {
-    document.body.removeChild(toast);
+    if (toast.parentNode) document.body.removeChild(toast);
   }, 3000);
 };
 
@@ -105,7 +104,9 @@ const ExportCsvPage: React.FC = () => {
     lowSeatThreshold: 10,
     minSeatFilter: 0,
   });
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [schedulerStatus, setSchedulerStatus] = useState<string>('Stopped');
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [csvStatus, setCsvStatus] = useState<CsvStatus>({
     lastUpload: null,
     lastGenerated: null,
@@ -119,6 +120,7 @@ const ExportCsvPage: React.FC = () => {
   const [isCleaningStaleInventory, setIsCleaningStaleInventory] = useState(false);
   const [showClearInventoryDialog, setShowClearInventoryDialog] = useState(false);
   const [showStaleCleanupDialog, setShowStaleCleanupDialog] = useState(false);
+  const [clearInventoryCode, setClearInventoryCode] = useState('');
 
   // Feature flags — UI visibility (true when "enabled", false when "hidden" or "disabled")
   const [featureFlags, setFeatureFlags] = useState({
@@ -162,6 +164,36 @@ const ExportCsvPage: React.FC = () => {
   const [autoDeletePreview, setAutoDeletePreview] = useState<AutoDeletePreview | null>(null);
   const [showAutoDeletePreview, setShowAutoDeletePreview] = useState(false);
   const [isLoadingAutoDelete, setIsLoadingAutoDelete] = useState(false);
+
+  // Live countdown timer for next scheduled run
+  const [countdown, setCountdown] = useState<string>('');
+  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const formatCountdown = useCallback((ms: number): string => {
+    if (ms <= 0) return 'Now';
+    const totalSec = Math.floor(ms / 1000);
+    const h = Math.floor(totalSec / 3600);
+    const m = Math.floor((totalSec % 3600) / 60);
+    const s = totalSec % 60;
+    if (h > 0) return `${h}h ${m}m ${s}s`;
+    if (m > 0) return `${m}m ${s}s`;
+    return `${s}s`;
+  }, []);
+
+  useEffect(() => {
+    if (countdownRef.current) clearInterval(countdownRef.current);
+    if (!settings.isScheduled || !performanceMetrics?.nextRunAt) {
+      setCountdown('');
+      return;
+    }
+    const tick = () => {
+      const diff = moment(performanceMetrics.nextRunAt).diff(moment());
+      setCountdown(diff > 0 ? formatCountdown(diff) : 'Running...');
+    };
+    tick();
+    countdownRef.current = setInterval(tick, 1000);
+    return () => { if (countdownRef.current) clearInterval(countdownRef.current); };
+  }, [settings.isScheduled, performanceMetrics?.nextRunAt, formatCountdown]);
 
   // Load settings from database on component mount
   useEffect(() => {
@@ -307,6 +339,7 @@ const ExportCsvPage: React.FC = () => {
 
   const handleUploadCsv = async () => {
     setLoading(true);
+    const startTime = Date.now();
     showMessage('Uploading CSV...', 'info');
     try {
       // Call the API route that handles both generation and upload server-side
@@ -316,24 +349,25 @@ const ExportCsvPage: React.FC = () => {
       const response = await fetch('/api/export-csv', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          eventUpdateFilterMinutes: settings.eventUpdateFilterMinutes 
+        body: JSON.stringify({
+          eventUpdateFilterMinutes: settings.eventUpdateFilterMinutes
         }),
         signal: controller.signal
       });
-      
+
       clearTimeout(timeoutId);
-      
+      const totalTime = Date.now() - startTime;
+
       const result = await response.json();
-      
+
       if (result.success) {
         showMessage('CSV uploaded to sync service successfully!', 'success');
-        setCsvStatus(prev => ({ 
-          ...prev, 
-          lastUpload: moment().toISOString(), 
-          status: 'Uploaded' 
+        setCsvStatus(prev => ({
+          ...prev,
+          lastUpload: moment().toISOString(),
+          status: 'Uploaded'
         }));
-        
+
         // Update performance metrics with the upload info
         setPerformanceMetrics((prev: PerformanceMetrics | null) => ({
           ...prev,
@@ -343,6 +377,7 @@ const ExportCsvPage: React.FC = () => {
           lastManualGeneration: {
             recordCount: result.recordCount,
             generationTime: result.generationTime,
+            totalTime: totalTime,
             timestamp: new Date().toISOString()
           }
         }));
@@ -458,6 +493,7 @@ const ExportCsvPage: React.FC = () => {
 
   const cancelClearInventory = () => {
     setShowClearInventoryDialog(false);
+    setClearInventoryCode('');
   };
 
   const handleCleanupStaleInventory = () => {
@@ -644,497 +680,562 @@ const ExportCsvPage: React.FC = () => {
   };
 
   return (
-    <div className="p-5">
-      <h2 className="text-2xl font-bold mb-6">Export Inventory CSV</h2>
-
-      <div className="bg-white rounded-lg shadow-md p-6 mb-5">
-        <h3 className="text-lg font-semibold mb-4 border-b pb-2">Configuration Settings</h3>
-        <form onSubmit={handleSaveSettings} className="space-y-4">
-          <div className="flex items-center">
-            <input
-              type="checkbox"
-              id="uploadToSync"
-              checked={settings.uploadToSync}
-              onChange={(e) => setSettings(prev => ({ ...prev, uploadToSync: e.target.checked }))}
-              className="mr-2 h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-            />
-            <label htmlFor="uploadToSync" className="text-sm font-medium text-gray-700">
-              Upload to Sync Service Automatically
-            </label>
+    <div className="space-y-8">
+      {/* Header */}
+      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <h1 className="text-3xl font-bold bg-gradient-to-r from-slate-800 to-slate-600 bg-clip-text text-transparent">
+            Export CSV
+          </h1>
+          <p className="text-slate-600 mt-2">
+            Manage scheduler, sync uploads, and inventory operations.
+          </p>
+        </div>
+        <div className="mt-4 lg:mt-0">
+          <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium ${
+            settings.isScheduled ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-50 text-slate-500 border border-slate-200'
+          }`}>
+            <div className={`w-2 h-2 rounded-full ${settings.isScheduled ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
+            Scheduler {settings.isScheduled ? 'Running' : 'Stopped'}
           </div>
-          <div>
-             <label htmlFor="scheduleRateMinutes" className="block text-sm font-medium text-gray-700 mb-1">
-               Schedule Rate (Minutes)
-             </label>
-             <input
-               type="number"
-               id="scheduleRateMinutes"
-               value={settings.scheduleRateMinutes}
-               onChange={(e) => setSettings(prev => ({ ...prev, scheduleRateMinutes: parseInt(e.target.value) || 60 }))}
-               min="1"
-               max="1440"
-               placeholder="60"
-               className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-             />
-             <p className="text-xs text-gray-500 mt-1">Enter interval in minutes (1-1440)</p>
-           </div>
-           <div>
-             <label htmlFor="eventUpdateFilterMinutes" className="block text-sm font-medium text-gray-700 mb-1">
-               Event Update Filter (Minutes)
-             </label>
-             <input
-               type="number"
-               id="eventUpdateFilterMinutes"
-               value={settings.eventUpdateFilterMinutes}
-               onChange={(e) => setSettings(prev => ({ ...prev, eventUpdateFilterMinutes: parseInt(e.target.value) || 0 }))}
-               min="0"
-               max="10080"
-               placeholder="0"
-               className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-             />
-             <p className="text-xs text-gray-500 mt-1">Filter events updated within last X minutes (0 = no filter, max 7 days)</p>
-           </div>
-
-           {/* Min Seat Filter for CSV */}
-           {featureFlags.minSeatFilter && <div>
-             <label htmlFor="minSeatFilter" className="block text-sm font-medium text-gray-700 mb-1">
-               NLA Protection &mdash; Minimum Seats Per Listing
-             </label>
-             <input
-               type="number"
-               id="minSeatFilter"
-               value={settings.minSeatFilter}
-               onChange={(e) => setSettings(prev => ({ ...prev, minSeatFilter: Math.max(0, parseInt(e.target.value) || 0) }))}
-               min="0"
-               max="100"
-               placeholder="0"
-               className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-             />
-             <p className="text-xs text-gray-500 mt-1">
-               Skip listings with &le; <strong>{settings.minSeatFilter || 'X'}</strong> seats to avoid NLA. Set to 0 to disable.
-             </p>
-           </div>}
-
-           {/* Low Seat Auto-Stop */}
-           {featureFlags.lowSeatAutoStop && <div className="border border-amber-200 bg-amber-50 rounded-lg p-4 space-y-3">
-             <div className="flex items-center justify-between">
-               <div>
-                 <h4 className="text-sm font-semibold text-gray-800">Low Seat Auto-Stop</h4>
-                 <p className="text-xs text-gray-500 mt-0.5">
-                   Automatically stop events and clear their inventory when the total seat count is at or below the threshold.
-                   Runs before every CSV generation.
-                 </p>
-               </div>
-               <button
-                 type="button"
-                 onClick={() => setSettings(prev => ({ ...prev, lowSeatAutoStop: !prev.lowSeatAutoStop }))}
-                 className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-amber-500 ${
-                   settings.lowSeatAutoStop ? 'bg-amber-500' : 'bg-gray-300'
-                 }`}
-               >
-                 <span
-                   className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                     settings.lowSeatAutoStop ? 'translate-x-6' : 'translate-x-1'
-                   }`}
-                 />
-               </button>
-             </div>
-             {settings.lowSeatAutoStop && (
-               <div>
-                 <label htmlFor="lowSeatThreshold" className="block text-sm font-medium text-gray-700 mb-1">
-                   Seat Threshold
-                 </label>
-                 <input
-                   type="number"
-                   id="lowSeatThreshold"
-                   value={settings.lowSeatThreshold}
-                   onChange={(e) => setSettings(prev => ({ ...prev, lowSeatThreshold: Math.max(1, parseInt(e.target.value) || 10) }))}
-                   min="1"
-                   max="1000"
-                   className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-amber-500 focus:border-amber-500"
-                 />
-                 <p className="text-xs text-gray-500 mt-1">
-                   Events with this many seats or fewer will be stopped and their inventory cleared (default: 10)
-                 </p>
-               </div>
-             )}
-           </div>}
-
-           <div className="flex items-center space-x-4">
-             <div className="flex items-center">
-               <span className="text-sm font-medium text-gray-700 mr-2">Scheduler Status:</span>
-               <span className={`text-sm font-semibold ${
-                 schedulerStatus === 'Running' ? 'text-green-600' : 'text-red-600'
-               }`}>
-                 {schedulerStatus}
-               </span>
-             </div>
-             {!settings.isScheduled ? (
-               <button
-                 type="button"
-                 onClick={handleStartScheduler}
-                 className="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-md transition-colors"
-               >
-                 Start Scheduler
-               </button>
-             ) : (
-               <button
-                 type="button"
-                 onClick={handleStopScheduler}
-                 className="bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-md transition-colors"
-               >
-                 Stop Scheduler
-               </button>
-             )}
-           </div>
-          <button
-            type="submit"
-            className="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-md transition-colors"
-          >
-            Save Settings
-          </button>
-        </form>
+        </div>
       </div>
 
-      {/* Performance Metrics Section */}
-      {performanceMetrics && (
-        <div className="bg-white rounded-lg shadow-md p-6 mb-5">
-          <h3 className="text-lg font-semibold mb-4 border-b pb-2">Performance Metrics</h3>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="bg-gray-50 p-3 rounded">
-              <div className="text-sm text-gray-600">Total Scheduled Runs</div>
-              <div className="text-lg font-semibold text-gray-900">{performanceMetrics.totalRuns || 0}</div>
-            </div>
-            <div className="bg-gray-50 p-3 rounded">
-              <div className="text-sm text-gray-600">Last CSV Generated</div>
-              <div className="text-sm font-medium text-gray-900">
-                {performanceMetrics.lastCsvGenerated || 'None'}
+      {/* Stats Overview */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        {/* Countdown Timer Card */}
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 hover:shadow-md transition-shadow duration-200">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-slate-500 mb-1">Next Run In</p>
+              <div className={`text-3xl font-bold font-mono tabular-nums ${settings.isScheduled ? 'text-slate-800' : 'text-slate-300'}`}>
+                {!settings.isScheduled ? 'Off' : countdown === 'Running...' ? 'Now' : countdown || 'Loading...'}
+              </div>
+              <div className="flex items-center mt-2 text-sm">
+                {settings.isScheduled && performanceMetrics?.nextRunAt ? (
+                  <>
+                    <Clock className="w-4 h-4 text-purple-500 mr-1" />
+                    <span className="text-slate-500">at {moment(performanceMetrics.nextRunAt).format('HH:mm:ss')}</span>
+                  </>
+                ) : settings.isScheduled ? (
+                  <span className="text-slate-400">Waiting for schedule...</span>
+                ) : (
+                  <span className="text-slate-400">Scheduler stopped</span>
+                )}
               </div>
             </div>
-            {performanceMetrics.lastRunAt && (
-              <div className="bg-gray-50 p-3 rounded">
-                <div className="text-sm text-gray-600">Last Run</div>
-                <div className="text-sm font-medium text-gray-900">
-                  {moment(performanceMetrics.lastRunAt).format('YYYY-MM-DD HH:mm:ss')}
-                </div>
-              </div>
-            )}
-            {performanceMetrics.nextRunAt && settings.isScheduled && (
-              <div className="bg-gray-50 p-3 rounded">
-                <div className="text-sm text-gray-600">Next Run</div>
-                <div className="text-sm font-medium text-gray-900">
-                  {moment(performanceMetrics.nextRunAt).format('YYYY-MM-DD HH:mm:ss')}
-                </div>
-              </div>
-            )}
-            
-            {/* Upload Status Section */}
-            {performanceMetrics.lastUploadAt && (
-              <div className="bg-blue-50 p-3 rounded col-span-2">
-                <div className="text-sm text-blue-600 mb-1">Sync Upload Status</div>
-                <div className="text-xs text-blue-800">
-                  Last Upload: {moment(performanceMetrics.lastUploadAt).format('YYYY-MM-DD HH:mm:ss')}
-                  <br />
-                  Status: <span className={`ml-1 px-2 py-1 rounded text-xs ${
-                    performanceMetrics.lastUploadStatus === 'success' ? 'bg-green-100 text-green-800' :
-                    performanceMetrics.lastUploadStatus === 'cleared' ? 'bg-yellow-100 text-yellow-800' :
-                    'bg-red-100 text-red-800'
-                  }`}>
-                    {performanceMetrics.lastUploadStatus}
-                  </span>
-                  {performanceMetrics.lastUploadId && (
-                    <><br />Upload ID: {performanceMetrics.lastUploadId}</>
-                  )}
-                  {performanceMetrics.lastUploadError && (
-                    <><br />Error: <span className="text-red-600">{performanceMetrics.lastUploadError}</span></>
-                  )}
-                  {performanceMetrics.lastClearAt && (
-                    <><br />Last Inventory Clear: {moment(performanceMetrics.lastClearAt).format('YYYY-MM-DD HH:mm:ss')}</>
-                  )}
-                </div>
-              </div>
-            )}
-            
-            {performanceMetrics.lastManualGeneration && (
-              <div className="bg-blue-50 p-3 rounded col-span-2">
-                <div className="text-sm text-blue-600 mb-1">Last Manual Generation</div>
-                <div className="text-xs text-blue-800">
-                  {performanceMetrics.lastManualGeneration.recordCount} records in {performanceMetrics.lastManualGeneration.generationTime}ms
-                  <br />
-                  Total time: {performanceMetrics.lastManualGeneration.totalTime}ms
-                  <br />
-                  {moment(performanceMetrics.lastManualGeneration.timestamp).format('YYYY-MM-DD HH:mm:ss')}
-                </div>
-              </div>
-            )}
+            <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${
+              settings.isScheduled ? 'bg-gradient-to-br from-purple-500 to-purple-600' : 'bg-gradient-to-br from-slate-400 to-slate-500'
+            }`}>
+              <Timer className="w-6 h-6 text-white" />
+            </div>
           </div>
+        </div>
+
+        {/* Total Runs Card */}
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 hover:shadow-md transition-shadow duration-200">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-slate-500 mb-1">Total Runs</p>
+              <div className="text-3xl font-bold text-slate-800 tabular-nums">
+                {performanceMetrics?.totalRuns || 0}
+              </div>
+              <div className="flex items-center mt-2 text-sm">
+                <BarChart3 className="w-4 h-4 text-indigo-500 mr-1" />
+                <span className="text-slate-500">Scheduled runs</span>
+              </div>
+            </div>
+            <div className="w-12 h-12 bg-gradient-to-br from-indigo-500 to-indigo-600 rounded-xl flex items-center justify-center">
+              <BarChart3 className="w-6 h-6 text-white" />
+            </div>
+          </div>
+        </div>
+
+        {/* Sync Upload Card */}
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 hover:shadow-md transition-shadow duration-200">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-slate-500 mb-1">Sync Upload</p>
+              {performanceMetrics?.lastUploadAt ? (
+                <>
+                  <div className={`text-3xl font-bold tabular-nums ${
+                    performanceMetrics.lastUploadStatus === 'success' ? 'text-emerald-600' : 'text-red-600'
+                  }`}>
+                    {performanceMetrics.lastUploadStatus === 'success' ? 'Sent' : 'Failed'}
+                  </div>
+                  <div className="flex items-center mt-2 text-sm">
+                    {performanceMetrics.lastUploadStatus === 'success' ? (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-500 mr-1" />
+                    ) : (
+                      <XCircle className="w-4 h-4 text-red-500 mr-1" />
+                    )}
+                    <span className="text-slate-500">{moment(performanceMetrics.lastUploadAt).fromNow()}</span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className={`text-3xl font-bold ${settings.uploadToSync ? 'text-blue-600' : 'text-slate-300'}`}>
+                    {settings.uploadToSync ? 'On' : 'Off'}
+                  </div>
+                  <div className="flex items-center mt-2 text-sm">
+                    {settings.uploadToSync ? (
+                      <>
+                        <CheckCircle2 className="w-4 h-4 text-blue-500 mr-1" />
+                        <span className="text-blue-600 font-medium">Auto-upload enabled</span>
+                      </>
+                    ) : (
+                      <span className="text-slate-400">Upload disabled</span>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+            <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${
+              performanceMetrics?.lastUploadStatus === 'success'
+                ? 'bg-gradient-to-br from-emerald-500 to-emerald-600'
+                : performanceMetrics?.lastUploadError
+                  ? 'bg-gradient-to-br from-red-500 to-red-600'
+                  : settings.uploadToSync
+                    ? 'bg-gradient-to-br from-blue-500 to-blue-600'
+                    : 'bg-gradient-to-br from-slate-400 to-slate-500'
+            }`}>
+              <Upload className="w-6 h-6 text-white" />
+            </div>
+          </div>
+        </div>
+
+        {/* Last Run Card */}
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 hover:shadow-md transition-shadow duration-200">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-slate-500 mb-1">Last Run</p>
+              {performanceMetrics?.lastManualGeneration ? (
+                <>
+                  <div className="text-3xl font-bold text-slate-800 tabular-nums">
+                    {performanceMetrics.lastManualGeneration.recordCount}
+                  </div>
+                  <div className="flex items-center mt-2 text-sm">
+                    <Download className="w-4 h-4 text-blue-500 mr-1" />
+                    <span className="text-slate-500">records &middot; {(performanceMetrics.lastManualGeneration.generationTime / 1000).toFixed(1)}s &middot; {moment(performanceMetrics.lastManualGeneration.timestamp).fromNow()}</span>
+                  </div>
+                </>
+              ) : performanceMetrics?.lastRunAt ? (
+                <>
+                  <div className="text-3xl font-bold text-slate-800 tabular-nums">
+                    {moment(performanceMetrics.lastRunAt).format('HH:mm')}
+                  </div>
+                  <div className="flex items-center mt-2 text-sm">
+                    <Clock className="w-4 h-4 text-blue-500 mr-1" />
+                    <span className="text-slate-500">{moment(performanceMetrics.lastRunAt).fromNow()}</span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="text-3xl font-bold text-slate-300">None</div>
+                  <div className="flex items-center mt-2 text-sm">
+                    <span className="text-slate-400">No CSV generated yet</span>
+                  </div>
+                </>
+              )}
+            </div>
+            <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${
+              performanceMetrics?.lastRunAt
+                ? 'bg-gradient-to-br from-blue-500 to-blue-600'
+                : 'bg-gradient-to-br from-slate-400 to-slate-500'
+            }`}>
+              <Download className="w-6 h-6 text-white" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Last run info bar */}
+      {performanceMetrics?.lastRunAt && (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-500 -mt-4">
+          <span>Last run: <span className="text-slate-700 font-medium">{moment(performanceMetrics.lastRunAt).format('MMM D, HH:mm')}</span></span>
+          {performanceMetrics.lastCsvGenerated && <span>CSV: <span className="text-slate-700 font-medium">{performanceMetrics.lastCsvGenerated}</span></span>}
+          {performanceMetrics.lastManualGeneration && (
+            <span>Manual: <span className="text-slate-700 font-medium">{performanceMetrics.lastManualGeneration.recordCount} records in {performanceMetrics.lastManualGeneration.generationTime}ms</span></span>
+          )}
         </div>
       )}
 
-      {/* Auto-Stop Events Section */}
-      {featureFlags.autoDelete && <div className="bg-white rounded-lg shadow-md p-6 mb-5">
-        <h3 className="text-lg font-semibold mb-4 border-b pb-2">Auto-Stop Events</h3>
-        <div className="space-y-4">
-          <div className="bg-yellow-50 p-4 rounded-lg">
-            <p className="text-yellow-800 text-sm">
-              <strong>Auto-Stop:</strong> Automatically stops scraping and clears inventory a configurable number of hours BEFORE the event takes place. Events are kept in the database. Stopped event records auto-clear from the dashboard after 24 hours.
-              Example: An event at 7pm today with &quot;Stop Before&quot; set to 2 hours will be stopped at 5pm today.
-            </p>
-          </div>
+      {/* Two-column layout for main content */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Stop Before Event (Hours)
-              </label>
-              <input
-                type="number"
-                value={autoDeleteSettings.stopBeforeHours}
-                onChange={(e) => setAutoDeleteSettings((prev: AutoDeleteSettings) => ({
-                  ...prev,
-                  stopBeforeHours: parseInt(e.target.value) || 2
-                }))}
-                min="0"
-                max="168"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-              />
-              <p className="text-xs text-gray-500 mt-1">Hours before event time to stop scraping and clear inventory (0 = at event time, 2 = 2 hours before)</p>
+        {/* LEFT COLUMN */}
+        <div className="space-y-8">
+
+          {/* Configuration Settings */}
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden hover:shadow-md transition-shadow duration-200">
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center gap-3">
+              <div className="w-8 h-8 bg-gradient-to-br from-slate-600 to-slate-700 rounded-lg flex items-center justify-center">
+                <Settings className="w-4 h-4 text-white" />
+              </div>
+              <h3 className="text-lg font-semibold text-slate-800">Configuration</h3>
             </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Check Interval (Minutes)
-              </label>
-              <input
-                type="number"
-                value={autoDeleteSettings.scheduleIntervalMinutes}
-                onChange={(e) => setAutoDeleteSettings((prev: AutoDeleteSettings) => ({
-                  ...prev,
-                  scheduleIntervalMinutes: parseInt(e.target.value) || 15
-                }))}
-                min="1"
-                max="1440"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-              />
-              <p className="text-xs text-gray-500 mt-1">How often to check for events to stop (default: 15 minutes)</p>
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-4">
-              <span className="text-sm font-medium text-gray-700">Auto-Stop Status:</span>
-              <span className={`text-sm font-semibold ${
-                autoDeleteSettings.schedulerStatus === 'Running' ? 'text-green-600' : 'text-red-600'
-              }`}>
-                {autoDeleteSettings.schedulerStatus}
-              </span>
-            </div>
-
-            <div className="flex space-x-2">
-              <button
-                onClick={() => handleAutoDeleteSettingsUpdate({
-                  stopBeforeHours: autoDeleteSettings.stopBeforeHours,
-                  scheduleIntervalMinutes: autoDeleteSettings.scheduleIntervalMinutes
-                })}
-                disabled={isLoadingAutoDelete}
-                className="bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded-md transition-colors disabled:bg-gray-400"
-              >
-                Update Settings
-              </button>
-
-              {!autoDeleteSettings.isEnabled ? (
+            <form onSubmit={handleSaveSettings} className="p-5 space-y-4">
+              {/* Upload Toggle */}
+              <div className="flex items-center justify-between">
+                <div>
+                  <label htmlFor="uploadToSync" className="text-sm font-medium text-slate-700">Upload to Sync</label>
+                  <p className="text-[11px] text-slate-400">Auto-upload CSV to sync service</p>
+                </div>
                 <button
-                  onClick={() => handleAutoDeleteToggle(true)}
-                  disabled={isLoadingAutoDelete}
-                  className="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-md transition-colors disabled:bg-gray-400"
+                  type="button"
+                  onClick={() => setSettings(prev => ({ ...prev, uploadToSync: !prev.uploadToSync }))}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-400 ${
+                    settings.uploadToSync ? 'bg-indigo-500' : 'bg-slate-300'
+                  }`}
                 >
-                  {isLoadingAutoDelete ? 'Starting...' : 'Start Auto-Stop'}
+                  <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform shadow-sm ${
+                    settings.uploadToSync ? 'translate-x-6' : 'translate-x-1'
+                  }`} />
                 </button>
-              ) : (
-                <button
-                  onClick={() => handleAutoDeleteToggle(false)}
-                  disabled={isLoadingAutoDelete}
-                  className="bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-md transition-colors disabled:bg-gray-400"
-                >
-                  {isLoadingAutoDelete ? 'Stopping...' : 'Stop Auto-Stop'}
-                </button>
-              )}
-            </div>
-          </div>
+              </div>
 
-          <div className="flex space-x-2">
-            <button
-              onClick={handleAutoDeletePreview}
-              disabled={isLoadingAutoDelete}
-              className="bg-blue-100 hover:bg-blue-200 text-blue-800 font-medium py-2 px-4 rounded-md transition-colors disabled:bg-gray-100"
-            >
-              Preview Events to Stop
-            </button>
-
-            <button
-              onClick={handleAutoDeleteRunNow}
-              disabled={isLoadingAutoDelete || !autoDeleteSettings.isEnabled}
-              className="bg-orange-500 hover:bg-orange-600 text-white font-medium py-2 px-4 rounded-md transition-colors disabled:bg-gray-400"
-            >
-              Run Now
-            </button>
-          </div>
-
-          {/* Auto-Stop Statistics */}
-          {autoDeleteSettings.lastRunAt && (
-            <div className="bg-gray-50 p-4 rounded-lg">
-              <h4 className="text-sm font-semibold mb-2">Auto-Stop Statistics</h4>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <div className="text-gray-600">Total Runs</div>
-                  <div className="font-medium">{autoDeleteSettings.totalRuns}</div>
+                  <label htmlFor="scheduleRateMinutes" className="block text-xs font-medium text-slate-600 mb-1">Schedule (min)</label>
+                  <input type="number" id="scheduleRateMinutes" value={settings.scheduleRateMinutes}
+                    onChange={(e) => setSettings(prev => ({ ...prev, scheduleRateMinutes: parseInt(e.target.value) || 60 }))}
+                    min="1" max="1440"
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent" />
                 </div>
                 <div>
-                  <div className="text-gray-600">Events Stopped</div>
-                  <div className="font-medium">{autoDeleteSettings.totalEventsDeleted}</div>
-                </div>
-                <div>
-                  <div className="text-gray-600">Last Run</div>
-                  <div className="font-medium">
-                    {moment(autoDeleteSettings.lastRunAt).format('MM/DD HH:mm')}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-gray-600">Next Run</div>
-                  <div className="font-medium">
-                    {autoDeleteSettings.nextRunAt
-                      ? moment(autoDeleteSettings.nextRunAt).format('MM/DD HH:mm')
-                      : 'Not scheduled'
-                    }
-                  </div>
+                  <label htmlFor="eventUpdateFilterMinutes" className="block text-xs font-medium text-slate-600 mb-1">Update Filter (min)</label>
+                  <input type="number" id="eventUpdateFilterMinutes" value={settings.eventUpdateFilterMinutes}
+                    onChange={(e) => setSettings(prev => ({ ...prev, eventUpdateFilterMinutes: parseInt(e.target.value) || 0 }))}
+                    min="0" max="10080"
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent" />
                 </div>
               </div>
 
-              {autoDeleteSettings.lastRunStats && (
-                <div className="mt-3 pt-3 border-t">
-                  <div className="text-xs text-gray-600">
-                    Last run: Checked {autoDeleteSettings.lastRunStats.eventsChecked} events,
-                    stopped {autoDeleteSettings.lastRunStats.eventsStopped || 0} events, cleared inventory for {autoDeleteSettings.lastRunStats.eventsDeleted} events
-                    {autoDeleteSettings.lastRunStats.errors && autoDeleteSettings.lastRunStats.errors.length > 0 && (
-                      <span className="text-red-600 ml-2">
-                        ({autoDeleteSettings.lastRunStats.errors.length} errors)
-                      </span>
-                    )}
-                  </div>
+              {/* NLA Protection */}
+              {featureFlags.minSeatFilter && (
+                <div className="p-3 bg-indigo-50/50 border border-indigo-100 rounded-lg">
+                  <label htmlFor="minSeatFilter" className="flex items-center gap-1.5 text-xs font-semibold text-indigo-700 mb-1.5">
+                    <Shield className="w-3.5 h-3.5" /> NLA Protection
+                  </label>
+                  <input type="number" id="minSeatFilter" value={settings.minSeatFilter}
+                    onChange={(e) => setSettings(prev => ({ ...prev, minSeatFilter: Math.max(0, parseInt(e.target.value) || 0) }))}
+                    min="0" max="100"
+                    className="w-full px-3 py-2 border border-indigo-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent" />
+                  <p className="text-[11px] text-indigo-500/70 mt-1">Skip listings with &le; {settings.minSeatFilter || 'X'} seats. 0 = off.</p>
                 </div>
               )}
-            </div>
-          )}
-        </div>
-      </div>}
 
-      {/* Clear Inventory Section */}
-      <div className="bg-white rounded-lg shadow-md p-6 mb-5">
-        <h3 className="text-lg font-semibold mb-4 border-b pb-2">Inventory Management</h3>
-        <div className="space-y-4">
-          <div>
-            <p className="text-gray-600 mb-3">
-              Clear all inventory from Sync service. This will upload an empty CSV to remove all existing inventory.
-            </p>
-            <button
-              onClick={handleClearInventory}
-              disabled={isClearingInventory}
-              className="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600 disabled:bg-gray-400 disabled:cursor-not-allowed"
-            >
-              {isClearingInventory ? 'Clearing...' : 'Clear All Inventory'}
-            </button>
+              {/* Low Seat Auto-Stop */}
+              {featureFlags.lowSeatAutoStop && (
+                <div className="p-3 bg-amber-50/50 border border-amber-100 rounded-lg space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <Zap className="w-3.5 h-3.5 text-amber-500" />
+                      <span className="text-xs font-semibold text-slate-700">Low Seat Auto-Stop</span>
+                    </div>
+                    <button type="button" onClick={() => setSettings(prev => ({ ...prev, lowSeatAutoStop: !prev.lowSeatAutoStop }))}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-amber-400 ${
+                        settings.lowSeatAutoStop ? 'bg-amber-500' : 'bg-slate-300'
+                      }`}>
+                      <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform shadow-sm ${
+                        settings.lowSeatAutoStop ? 'translate-x-6' : 'translate-x-1'
+                      }`} />
+                    </button>
+                  </div>
+                  {settings.lowSeatAutoStop && (
+                    <div>
+                      <label htmlFor="lowSeatThreshold" className="block text-xs font-medium text-slate-600 mb-1">Threshold</label>
+                      <input type="number" id="lowSeatThreshold" value={settings.lowSeatThreshold}
+                        onChange={(e) => setSettings(prev => ({ ...prev, lowSeatThreshold: Math.max(1, parseInt(e.target.value) || 10) }))}
+                        min="1" max="1000"
+                        className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent" />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Scheduler Controls */}
+              <div className="flex items-center justify-between pt-2">
+                <div className="flex items-center gap-2">
+                  {!settings.isScheduled ? (
+                    <button type="button" onClick={handleStartScheduler}
+                      className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium py-2 px-4 rounded-lg transition-colors">
+                      <Play className="w-4 h-4" /> Start Scheduler
+                    </button>
+                  ) : (
+                    <button type="button" onClick={handleStopScheduler}
+                      className="flex items-center gap-1.5 bg-red-500 hover:bg-red-600 text-white text-sm font-medium py-2 px-4 rounded-lg transition-colors">
+                      <Square className="w-4 h-4" /> Stop Scheduler
+                    </button>
+                  )}
+                </div>
+                <button type="submit"
+                  className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium py-2 px-4 rounded-lg transition-colors">
+                  Save Settings
+                </button>
+              </div>
+            </form>
           </div>
-          {clearStatus && (
-            <div className={`p-3 rounded ${
-              clearStatus.includes('✅') ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800'
-            }`}>
-              {clearStatus}
+
+          {/* CSV Actions */}
+          {(featureFlags.csvDownload || featureFlags.csvManualExport) && (
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden hover:shadow-md transition-shadow duration-200">
+              <div className="px-6 py-4 border-b border-slate-100 flex items-center gap-3">
+                <div className="w-8 h-8 bg-gradient-to-br from-indigo-500 to-indigo-600 rounded-lg flex items-center justify-center">
+                  <Download className="w-4 h-4 text-white" />
+                </div>
+                <h3 className="text-lg font-semibold text-slate-800">CSV Actions</h3>
+              </div>
+              <div className="p-6 space-y-3">
+                {featureFlags.csvDownload && (
+                  <button onClick={handleGenerateCsv} disabled={loading}
+                    className="w-full bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-700 hover:to-indigo-800 disabled:from-slate-300 disabled:to-slate-300 text-white font-medium py-2.5 px-4 rounded-xl transition-all flex items-center justify-center gap-2 shadow-sm">
+                    <Download className="w-4 h-4" />
+                    {loading ? 'Generating...' : 'Generate & Download CSV'}
+                  </button>
+                )}
+                {featureFlags.csvManualExport && settings.uploadToSync && (
+                  <button onClick={handleUploadCsv} disabled={loading}
+                    className="w-full bg-gradient-to-r from-slate-600 to-slate-700 hover:from-slate-700 hover:to-slate-800 disabled:from-slate-300 disabled:to-slate-300 text-white font-medium py-2.5 px-4 rounded-xl transition-all flex items-center justify-center gap-2 shadow-sm">
+                    <Upload className="w-4 h-4" />
+                    {loading ? 'Uploading...' : 'Upload CSV to Sync'}
+                  </button>
+                )}
+
+                {/* Last generation info — shows start time & total time */}
+                {performanceMetrics?.lastManualGeneration && (
+                  <div className="flex items-center gap-2 px-4 py-3 bg-emerald-50 border border-emerald-100 rounded-xl text-xs text-emerald-700">
+                    <CheckCircle2 className="w-4 h-4 shrink-0" />
+                    <div>
+                      <span className="font-medium">{performanceMetrics.lastManualGeneration.recordCount} records</span>
+                      <span className="text-emerald-500 mx-1">&middot;</span>
+                      <span>Generated in {(performanceMetrics.lastManualGeneration.generationTime / 1000).toFixed(1)}s</span>
+                      {performanceMetrics.lastManualGeneration.totalTime && performanceMetrics.lastManualGeneration.totalTime > performanceMetrics.lastManualGeneration.generationTime && (
+                        <>
+                          <span className="text-emerald-500 mx-1">&middot;</span>
+                          <span>Total to sync: {(performanceMetrics.lastManualGeneration.totalTime / 1000).toFixed(1)}s</span>
+                        </>
+                      )}
+                      <span className="text-emerald-500 mx-1">&middot;</span>
+                      <span>Started {moment(performanceMetrics.lastManualGeneration.timestamp).format('MMM D, HH:mm:ss')}</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Upload status */}
+                {performanceMetrics?.lastUploadAt && (
+                  <div className={`flex items-center gap-2 px-4 py-3 rounded-xl text-xs border ${
+                    performanceMetrics.lastUploadStatus === 'success' ? 'bg-emerald-50 border-emerald-100 text-emerald-700' :
+                    'bg-red-50 border-red-100 text-red-700'
+                  }`}>
+                    {performanceMetrics.lastUploadStatus === 'success' ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <XCircle className="w-4 h-4 shrink-0" />}
+                    <div>
+                      <span className="font-medium">Upload {performanceMetrics.lastUploadStatus}</span>
+                      <span className="opacity-60 mx-1">&middot;</span>
+                      <span>{moment(performanceMetrics.lastUploadAt).format('MMM D, HH:mm:ss')} ({moment(performanceMetrics.lastUploadAt).fromNow()})</span>
+                      {performanceMetrics.lastUploadId && <span className="text-slate-400 ml-1">&middot; ID: {performanceMetrics.lastUploadId}</span>}
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           )}
-          
-          <div className="border-t pt-4">
-            <p className="text-gray-600 mb-3">
-              Clean up stale inventory from the database. This will remove consecutive groups for inactive events (Skip_Scraping = true) and orphaned inventory where events no longer exist.
-            </p>
-            <button
-              onClick={handleCleanupStaleInventory}
-              disabled={isCleaningStaleInventory}
-              className="bg-orange-500 text-white px-4 py-2 rounded hover:bg-orange-600 disabled:bg-gray-400 disabled:cursor-not-allowed"
-            >
-              {isCleaningStaleInventory ? 'Cleaning...' : 'Clean Up Stale Inventory'}
-            </button>
+        </div>
+
+        {/* RIGHT COLUMN */}
+        <div className="space-y-8">
+
+          {/* Auto-Stop Events */}
+          {featureFlags.autoDelete && (
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden hover:shadow-md transition-shadow duration-200">
+              <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 bg-gradient-to-br from-orange-500 to-orange-600 rounded-lg flex items-center justify-center">
+                    <Clock className="w-4 h-4 text-white" />
+                  </div>
+                  <h3 className="text-lg font-semibold text-slate-800">Auto-Stop Events</h3>
+                </div>
+                <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full ${
+                  autoDeleteSettings.schedulerStatus === 'Running' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'
+                }`}>{autoDeleteSettings.schedulerStatus}</span>
+              </div>
+              <div className="p-5 space-y-4">
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  Stops scraping and clears inventory before events take place. Events stay in the database.
+                </p>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 mb-1">Stop Before (hours)</label>
+                    <input type="number" value={autoDeleteSettings.stopBeforeHours}
+                      onChange={(e) => setAutoDeleteSettings((prev: AutoDeleteSettings) => ({ ...prev, stopBeforeHours: parseInt(e.target.value) || 2 }))}
+                      min="0" max="168"
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 mb-1">Interval (min)</label>
+                    <input type="number" value={autoDeleteSettings.scheduleIntervalMinutes}
+                      onChange={(e) => setAutoDeleteSettings((prev: AutoDeleteSettings) => ({ ...prev, scheduleIntervalMinutes: parseInt(e.target.value) || 15 }))}
+                      min="1" max="1440"
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent" />
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <button onClick={() => handleAutoDeleteSettingsUpdate({ stopBeforeHours: autoDeleteSettings.stopBeforeHours, scheduleIntervalMinutes: autoDeleteSettings.scheduleIntervalMinutes })}
+                    disabled={isLoadingAutoDelete}
+                    className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium py-2 px-4 rounded-lg transition-colors disabled:bg-slate-300">
+                    <RefreshCw className="w-4 h-4" /> Save
+                  </button>
+                  {!autoDeleteSettings.isEnabled ? (
+                    <button onClick={() => handleAutoDeleteToggle(true)} disabled={isLoadingAutoDelete}
+                      className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium py-2 px-4 rounded-lg transition-colors disabled:bg-slate-300">
+                      <Play className="w-4 h-4" /> Start
+                    </button>
+                  ) : (
+                    <button onClick={() => handleAutoDeleteToggle(false)} disabled={isLoadingAutoDelete}
+                      className="flex items-center gap-1.5 bg-red-500 hover:bg-red-600 text-white text-sm font-medium py-2 px-4 rounded-lg transition-colors disabled:bg-slate-300">
+                      <Square className="w-4 h-4" /> Stop
+                    </button>
+                  )}
+                  <button onClick={handleAutoDeletePreview} disabled={isLoadingAutoDelete}
+                    className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 text-sm font-medium py-2 px-4 rounded-lg transition-colors">
+                    <Eye className="w-4 h-4" /> Preview
+                  </button>
+                  <button onClick={handleAutoDeleteRunNow} disabled={isLoadingAutoDelete || !autoDeleteSettings.isEnabled}
+                    className="flex items-center gap-1.5 bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium py-2 px-4 rounded-lg transition-colors disabled:bg-slate-300">
+                    <Zap className="w-4 h-4" /> Run Now
+                  </button>
+                </div>
+
+                {autoDeleteSettings.lastRunAt && (
+                  <div className="grid grid-cols-4 gap-2 bg-slate-50 p-3 rounded-lg">
+                    <div className="text-center">
+                      <div className="text-sm font-bold text-slate-700">{autoDeleteSettings.totalRuns}</div>
+                      <div className="text-[10px] text-slate-400">Runs</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-sm font-bold text-slate-700">{autoDeleteSettings.totalEventsDeleted}</div>
+                      <div className="text-[10px] text-slate-400">Stopped</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-[11px] font-semibold text-slate-600">{moment(autoDeleteSettings.lastRunAt).format('MM/DD HH:mm')}</div>
+                      <div className="text-[10px] text-slate-400">Last</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-[11px] font-semibold text-slate-600">{autoDeleteSettings.nextRunAt ? moment(autoDeleteSettings.nextRunAt).format('MM/DD HH:mm') : '—'}</div>
+                      <div className="text-[10px] text-slate-400">Next</div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Inventory Cleanup */}
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden hover:shadow-md transition-shadow duration-200">
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center gap-3">
+              <div className="w-8 h-8 bg-gradient-to-br from-amber-500 to-amber-600 rounded-lg flex items-center justify-center">
+                <RefreshCw className="w-4 h-4 text-white" />
+              </div>
+              <h3 className="text-lg font-semibold text-slate-800">Inventory Cleanup</h3>
+            </div>
+            <div className="p-5 space-y-3">
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                Remove stale inventory for inactive events and orphaned records.
+              </p>
+              <button onClick={handleCleanupStaleInventory} disabled={isCleaningStaleInventory}
+                className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium py-2 px-4 rounded-lg transition-colors disabled:bg-slate-300 disabled:cursor-not-allowed">
+                <Trash2 className="w-4 h-4" />
+                {isCleaningStaleInventory ? 'Cleaning...' : 'Clean Up Stale Inventory'}
+              </button>
+              {staleCleanupStatus && (
+                <div className={`p-3 rounded-lg text-xs whitespace-pre-line border ${
+                  staleCleanupStatus.includes('✅') ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'bg-red-50 text-red-800 border-red-200'
+                }`}>{staleCleanupStatus}</div>
+              )}
+            </div>
           </div>
-          {staleCleanupStatus && (
-            <div className={`p-3 rounded whitespace-pre-line ${
-              staleCleanupStatus.includes('✅') ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800'
-            }`}>
-              {staleCleanupStatus}
+
+          {/* Danger Zone */}
+          <details className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden group hover:shadow-md transition-shadow duration-200">
+            <summary className="px-6 py-4 cursor-pointer select-none flex items-center gap-3 border-b border-slate-100 hover:bg-red-50/30 transition-colors">
+              <div className="w-8 h-8 bg-gradient-to-br from-red-500 to-red-600 rounded-lg flex items-center justify-center">
+                <AlertTriangle className="w-4 h-4 text-white" />
+              </div>
+              <h3 className="text-lg font-semibold text-slate-800 group-hover:text-red-600 transition-colors">Danger Zone</h3>
+              <ChevronDown className="w-4 h-4 text-slate-400 transition-transform group-open:rotate-180 ml-auto" />
+            </summary>
+            <div className="p-5">
+              <div className="border border-red-200 bg-red-50/30 rounded-lg p-4">
+                <h4 className="text-sm font-semibold text-red-800 mb-1">Clear All Inventory</h4>
+                <p className="text-[11px] text-red-600/70 mb-3">
+                  Uploads an empty CSV to remove <strong>ALL</strong> inventory from Sync. Requires security code.
+                </p>
+                <button onClick={handleClearInventory} disabled={isClearingInventory}
+                  className="flex items-center gap-1.5 bg-red-600 hover:bg-red-700 text-white text-sm font-medium py-2 px-4 rounded-lg transition-colors disabled:bg-slate-300 disabled:cursor-not-allowed">
+                  <Trash2 className="w-4 h-4" />
+                  {isClearingInventory ? 'Clearing...' : 'Clear All Inventory...'}
+                </button>
+                {clearStatus && (
+                  <div className={`mt-3 p-3 rounded-lg text-xs border ${
+                    clearStatus.includes('✅') ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'bg-red-50 text-red-800 border-red-200'
+                  }`}>{clearStatus}</div>
+                )}
+              </div>
             </div>
-          )}
-        </div>
-      </div>
+          </details>
 
-      {(featureFlags.csvDownload || featureFlags.csvManualExport) && <div className="bg-white rounded-lg shadow-md p-6 mb-5">
-        <h3 className="text-lg font-semibold mb-4 border-b pb-2">CSV Generation and Download</h3>
-        <div className="space-y-3">
-          <button
-            onClick={handleGenerateCsv}
-            disabled={loading}
-            className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-medium py-3 px-4 rounded-md transition-colors flex items-center justify-center gap-2"
-          >
-            <Download className="w-4 h-4" />
-            {loading ? 'Generating...' : 'Generate and Download CSV'}
-          </button>
-          {settings.uploadToSync && (
-            <button
-              onClick={handleUploadCsv}
-              disabled={loading}
-              className="w-full bg-gray-600 hover:bg-gray-700 disabled:bg-gray-400 text-white font-medium py-3 px-4 rounded-md transition-colors flex items-center justify-center gap-2"
-            >
-              <Upload className="w-4 h-4" />
-              {loading ? 'Uploading...' : 'Upload Latest CSV to Sync Service'}
-            </button>
-          )}
-        </div>
-      </div>}
-
-      <div className="bg-white rounded-lg shadow-md p-6">
-        <h3 className="text-lg font-semibold mb-4 border-b pb-2">CSV Status</h3>
-        <div className="space-y-2 text-sm text-gray-700">
-          <div>Last Generated: {csvStatus.lastGenerated ? moment(csvStatus.lastGenerated).format('YYYY-MM-DD HH:mm:ss') : 'N/A'}</div>
-          <div>Last Uploaded: {csvStatus.lastUpload ? moment(csvStatus.lastUpload).format('YYYY-MM-DD HH:mm:ss') : 'N/A'}</div>
-          <div>Current Status: {csvStatus.status}</div>
         </div>
       </div>
 
       {/* Clear All Inventory Confirmation Dialog */}
       {showClearInventoryDialog && (
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50 flex items-center justify-center">
-          <div className="relative bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm overflow-y-auto h-full w-full z-50 flex items-center justify-center" onClick={cancelClearInventory}>
+          <div className="relative bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 border border-slate-200" onClick={e => e.stopPropagation()}>
             <div className="p-6">
-              <div className="flex items-center justify-center w-12 h-12 mx-auto bg-red-100 rounded-full mb-4">
-                <svg className="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
-                </svg>
+              <div className="flex items-center justify-center w-14 h-14 mx-auto bg-red-100 rounded-2xl mb-5">
+                <AlertTriangle className="w-7 h-7 text-red-600" />
               </div>
               <div className="text-center">
-                <h3 className="text-lg font-medium text-gray-900 mb-2">
+                <h3 className="text-lg font-bold text-slate-800 mb-2">
                   Clear All Inventory?
                 </h3>
-                <p className="text-sm text-gray-500 mb-6">
-                  Are you sure you want to clear all inventory from Sync?<br/><br/>
-                  <span className="text-red-600 font-medium">This action cannot be undone.</span>
+                <p className="text-sm text-slate-500 mb-2">
+                  Are you sure you want to clear all inventory from Sync?
                 </p>
-                <div className="flex justify-center space-x-3">
+                <p className="text-sm text-red-600 font-medium mb-5">
+                  This action cannot be undone.
+                </p>
+                <div className="mb-5">
+                  <label className="block text-sm font-medium text-slate-700 mb-2">
+                    Enter security code to confirm
+                  </label>
+                  <input
+                    type="text"
+                    value={clearInventoryCode}
+                    onChange={(e) => setClearInventoryCode(e.target.value)}
+                    placeholder="Enter 4-digit code"
+                    className="w-full px-4 py-3 border border-slate-200 rounded-xl text-center text-lg tracking-[0.3em] font-mono focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-transparent transition-shadow"
+                    maxLength={4}
+                    autoFocus
+                  />
+                </div>
+                <div className="flex justify-center gap-3">
                   <button
                     onClick={cancelClearInventory}
-                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                    className="px-5 py-2.5 text-sm font-medium text-slate-700 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-400 transition-colors"
                   >
                     Cancel
                   </button>
                   <button
-                    onClick={confirmClearInventory}
-                    className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+                    onClick={() => { setClearInventoryCode(''); confirmClearInventory(); }}
+                    disabled={clearInventoryCode !== '7291'}
+                    className={`px-5 py-2.5 text-sm font-medium text-white rounded-xl focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition-all ${
+                      clearInventoryCode === '7291'
+                        ? 'bg-red-600 hover:bg-red-700 shadow-md'
+                        : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                    }`}
                   >
                     Clear All Inventory
                   </button>
@@ -1147,35 +1248,31 @@ const ExportCsvPage: React.FC = () => {
 
       {/* Clear Stale Inventory Confirmation Dialog */}
       {showStaleCleanupDialog && (
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50 flex items-center justify-center">
-          <div className="relative bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm overflow-y-auto h-full w-full z-50 flex items-center justify-center" onClick={cancelStaleCleanup}>
+          <div className="relative bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 border border-slate-200" onClick={e => e.stopPropagation()}>
             <div className="p-6">
-              <div className="flex items-center justify-center w-12 h-12 mx-auto bg-yellow-100 rounded-full mb-4">
-                <svg className="w-6 h-6 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                </svg>
+              <div className="flex items-center justify-center w-14 h-14 mx-auto bg-amber-100 rounded-2xl mb-5">
+                <Trash2 className="w-7 h-7 text-amber-600" />
               </div>
               <div className="text-center">
-                <h3 className="text-lg font-medium text-gray-900 mb-2">
-                  Clear Stale Inventory?
+                <h3 className="text-lg font-bold text-slate-800 mb-2">
+                  Clean Up Stale Inventory?
                 </h3>
-                <p className="text-sm text-gray-500 mb-6">
-                  Are you sure you want to cleanup stale inventory?<br/><br/>
-                  This will delete consecutive groups for inactive events and orphaned inventory.<br/><br/>
-                  <span className="text-yellow-600 font-medium">This action cannot be undone.</span>
+                <p className="text-sm text-slate-500 mb-6 leading-relaxed">
+                  This will remove consecutive groups for inactive events and orphaned inventory where events no longer exist.
                 </p>
-                <div className="flex justify-center space-x-3">
+                <div className="flex justify-center gap-3">
                   <button
                     onClick={cancelStaleCleanup}
-                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                    className="px-5 py-2.5 text-sm font-medium text-slate-700 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-400 transition-colors"
                   >
                     Cancel
                   </button>
                   <button
                     onClick={confirmStaleCleanup}
-                    className="px-4 py-2 text-sm font-medium text-white bg-yellow-600 rounded-md hover:bg-yellow-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500"
+                    className="px-5 py-2.5 text-sm font-medium text-white bg-amber-500 hover:bg-amber-600 rounded-xl shadow-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-amber-500 transition-all"
                   >
-                    Clear Stale Inventory
+                    Clean Up
                   </button>
                 </div>
               </div>
@@ -1186,87 +1283,89 @@ const ExportCsvPage: React.FC = () => {
 
       {/* Auto-Stop Preview Dialog */}
       {showAutoDeletePreview && autoDeletePreview && (
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50 flex items-center justify-center">
-          <div className="relative bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto">
-            <div className="p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-medium text-gray-900">
-                  Auto-Stop Preview
-                </h3>
-                <button
-                  onClick={() => setShowAutoDeletePreview(false)}
-                  className="text-gray-400 hover:text-gray-600"
-                >
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm overflow-y-auto h-full w-full z-50 flex items-center justify-center" onClick={() => setShowAutoDeletePreview(false)}>
+          <div className="relative bg-white rounded-2xl shadow-2xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto border border-slate-200" onClick={e => e.stopPropagation()}>
+            <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between sticky top-0 rounded-t-2xl">
+              <div className="flex items-center gap-2">
+                <Eye className="w-4 h-4 text-slate-500" />
+                <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wide">Auto-Stop Preview</h3>
               </div>
-              
-              <div className="mb-4">
-                <p className="text-sm text-gray-600">
-                  Stop before event: <strong>{autoDeletePreview.stopBeforeHours} hours</strong>
+              <button
+                onClick={() => setShowAutoDeletePreview(false)}
+                className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
+                aria-label="Close preview"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="p-6">
+              <div className="p-4 bg-slate-50 rounded-xl mb-5">
+                <p className="text-sm text-slate-600 leading-relaxed">
+                  Stop before event: <strong className="text-slate-800">{autoDeletePreview.stopBeforeHours} hours</strong>
                   <br />
-                  <span className="text-gray-500">Each event is checked against its venue&apos;s local timezone (auto-detected from venue/city/state).</span>
+                  <span className="text-slate-500">Each event is checked against its venue&apos;s local timezone (auto-detected from venue/city/state).</span>
                   <br />
-                  <span className="text-gray-500">Total events checked: <strong>{autoDeletePreview.totalEvents || '—'}</strong></span>
+                  <span className="text-slate-500">Total events checked: <strong className="text-slate-700">{autoDeletePreview.totalEvents || '—'}</strong></span>
                   {(autoDeletePreview.skippedCount ?? 0) > 0 && (
                     <>
                       <br />
-                      <span className="text-orange-600">⚠ {autoDeletePreview.skippedCount} events skipped — timezone could not be detected from venue</span>
+                      <span className="text-amber-600 font-medium">{autoDeletePreview.skippedCount} events skipped — timezone could not be detected from venue</span>
                     </>
                   )}
                 </p>
               </div>
 
               {autoDeletePreview.count === 0 ? (
-                <div className="text-center py-8">
-                  <div className="text-green-600 text-lg font-medium mb-2">
-                    ✅ No events to stop
+                <div className="text-center py-10">
+                  <div className="w-14 h-14 mx-auto bg-green-100 rounded-2xl flex items-center justify-center mb-4">
+                    <svg className="w-7 h-7 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" /></svg>
                   </div>
-                  <p className="text-gray-500">
-                    No events fall within the stop window. All events are still far enough from their event time.
+                  <div className="text-lg font-bold text-slate-800 mb-1">No events to stop</div>
+                  <p className="text-sm text-slate-500">
+                    All events are still far enough from their event time.
                   </p>
                 </div>
               ) : (
                 <div>
                   <div className="mb-4">
-                    <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-red-100 text-red-800">
+                    <span className="inline-flex items-center px-3 py-1.5 rounded-xl text-sm font-semibold bg-red-100 text-red-800 border border-red-200">
                       {autoDeletePreview.count} events will be stopped &amp; inventory cleared
                     </span>
                   </div>
-                  
-                  <div className="max-h-64 overflow-y-auto border rounded-lg">
-                    <table className="min-w-full divide-y divide-gray-200">
-                      <thead className="bg-gray-50">
+
+                  <div className="max-h-64 overflow-y-auto border border-slate-200 rounded-xl">
+                    <table className="min-w-full divide-y divide-slate-200">
+                      <thead className="bg-slate-50 sticky top-0">
                         <tr>
-                          <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Event ID</th>
-                          <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Event Name</th>
-                          <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Event Time</th>
-                          <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Venue</th>
-                          <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">TZ</th>
-                          <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Local Now</th>
-                          <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Scraping</th>
+                          <th className="px-4 py-2.5 text-left text-xs font-bold text-slate-500 uppercase tracking-wide">Event ID</th>
+                          <th className="px-4 py-2.5 text-left text-xs font-bold text-slate-500 uppercase tracking-wide">Event Name</th>
+                          <th className="px-4 py-2.5 text-left text-xs font-bold text-slate-500 uppercase tracking-wide">Event Time</th>
+                          <th className="px-4 py-2.5 text-left text-xs font-bold text-slate-500 uppercase tracking-wide">Venue</th>
+                          <th className="px-4 py-2.5 text-left text-xs font-bold text-slate-500 uppercase tracking-wide">TZ</th>
+                          <th className="px-4 py-2.5 text-left text-xs font-bold text-slate-500 uppercase tracking-wide">Local Now</th>
+                          <th className="px-4 py-2.5 text-left text-xs font-bold text-slate-500 uppercase tracking-wide">Scraping</th>
                         </tr>
                       </thead>
-                      <tbody className="bg-white divide-y divide-gray-200">
+                      <tbody className="bg-white divide-y divide-slate-100">
                         {autoDeletePreview.events.map((event: EventPreview, index: number) => (
-                          <tr key={index} className="hover:bg-gray-50">
-                            <td className="px-4 py-2 text-sm font-medium text-gray-900">{event.id}</td>
-                            <td className="px-4 py-2 text-sm text-gray-900 max-w-[200px] truncate" title={event.name}>{event.name}</td>
-                            <td className="px-4 py-2 text-sm text-gray-500 whitespace-nowrap">
+                          <tr key={index} className="hover:bg-slate-50 transition-colors">
+                            <td className="px-4 py-2.5 text-sm font-medium text-slate-800">{event.id}</td>
+                            <td className="px-4 py-2.5 text-sm text-slate-700 max-w-[200px] truncate" title={event.name}>{event.name}</td>
+                            <td className="px-4 py-2.5 text-sm text-slate-500 whitespace-nowrap">
                               {moment(event.dateTime).format('YYYY-MM-DD HH:mm')}
                             </td>
-                            <td className="px-4 py-2 text-sm text-gray-500 max-w-[150px] truncate" title={event.venue}>{event.venue || '—'}</td>
-                            <td className="px-4 py-2 text-sm">
-                              <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${
-                                event.detectedTimezone === 'N/A' ? 'bg-orange-100 text-orange-700' : 'bg-blue-100 text-blue-700'
+                            <td className="px-4 py-2.5 text-sm text-slate-500 max-w-[150px] truncate" title={event.venue}>{event.venue || '—'}</td>
+                            <td className="px-4 py-2.5 text-sm">
+                              <span className={`inline-flex px-2 py-0.5 rounded-lg text-xs font-semibold ${
+                                event.detectedTimezone === 'N/A' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'
                               }`}>
                                 {event.detectedTimezone || 'N/A'}
                               </span>
                             </td>
-                            <td className="px-4 py-2 text-sm">
-                              <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${
+                            <td className="px-4 py-2.5 text-sm">
+                              <span className={`inline-flex px-2 py-0.5 rounded-lg text-xs font-semibold ${
                                 event.isStopped ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'
                               }`}>
                                 {event.isStopped ? 'Stopped' : 'Active'}
@@ -1278,25 +1377,25 @@ const ExportCsvPage: React.FC = () => {
                     </table>
                   </div>
 
-                  <div className="mt-4 p-3 bg-yellow-50 rounded-lg">
-                    <p className="text-yellow-800 text-sm">
+                  <div className="mt-4 p-4 bg-amber-50 border border-amber-200 rounded-xl">
+                    <p className="text-amber-800 text-sm leading-relaxed">
                       <strong>Note:</strong> These events will have scraping stopped and their seat inventory cleared. Events themselves are kept in the database. Stopped event records auto-clear from the dashboard after 24 hours.
                     </p>
                   </div>
 
                   {(autoDeletePreview.skippedEvents?.length ?? 0) > 0 && (
-                    <div className="mt-4 p-3 bg-orange-50 rounded-lg">
-                      <p className="text-orange-800 text-sm font-medium mb-2">
-                        ⚠ Events skipped (timezone not detected from venue):
+                    <div className="mt-4 p-4 bg-amber-50 border border-amber-200 rounded-xl">
+                      <p className="text-amber-800 text-sm font-semibold mb-2">
+                        Events skipped (timezone not detected from venue):
                       </p>
-                      <div className="max-h-32 overflow-y-auto text-sm text-orange-700">
+                      <div className="max-h-32 overflow-y-auto text-sm text-amber-700">
                         {autoDeletePreview.skippedEvents!.map((e, i) => (
-                          <div key={i} className="py-0.5">
+                          <div key={i} className="py-1">
                             {e.id} — {e.name} — Venue: &quot;{e.venue || '(empty)'}&quot;
                           </div>
                         ))}
                       </div>
-                      <p className="text-orange-600 text-xs mt-1">
+                      <p className="text-amber-600 text-xs mt-2">
                         These events were NOT checked because their venue text does not contain a recognizable state, city, or venue name.
                       </p>
                     </div>
@@ -1304,10 +1403,10 @@ const ExportCsvPage: React.FC = () => {
                 </div>
               )}
 
-              <div className="flex justify-end space-x-3 mt-6">
+              <div className="flex justify-end mt-6">
                 <button
                   onClick={() => setShowAutoDeletePreview(false)}
-                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+                  className="px-5 py-2.5 text-sm font-medium text-slate-700 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors"
                 >
                   Close
                 </button>
