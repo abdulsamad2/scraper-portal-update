@@ -32,32 +32,57 @@ function safeCompare(a: string, b: string): boolean {
 /**
  * Validate credentials against server-side environment variables.
  * Credentials are NEVER exposed to the client.
+ * Returns the role ('superadmin' | 'admin') or null if invalid.
  */
-export function validateCredentials(username: string, password: string): boolean {
+export function validateCredentials(username: string, password: string): 'superadmin' | 'admin' | null {
   const validUsername = process.env.AUTH_USERNAME;
   const validPassword = process.env.AUTH_PASSWORD;
+  const superAdminPassword = process.env.SUPER_ADMIN_PASSWORD;
 
   if (!validUsername || !validPassword) {
     console.error('AUTH_USERNAME or AUTH_PASSWORD env vars are not set');
-    return false;
+    return null;
   }
 
   const usernameMatch = safeCompare(username, validUsername);
-  const passwordMatch = safeCompare(password, validPassword);
-  return usernameMatch && passwordMatch;
+  if (!usernameMatch) return null;
+
+  // Check superadmin password first
+  if (superAdminPassword && safeCompare(password, superAdminPassword)) {
+    return 'superadmin';
+  }
+
+  // Check regular admin password
+  if (safeCompare(password, validPassword)) {
+    return 'admin';
+  }
+
+  return null;
 }
 
 /**
- * Create a signed JWT token.
+ * Create a signed JWT token with role embedded.
  */
-export async function createSessionToken(username: string): Promise<string> {
-  const token = await new SignJWT({ username } as JWTPayload)
+export async function createSessionToken(username: string, role: 'superadmin' | 'admin' = 'admin'): Promise<string> {
+  const token = await new SignJWT({ username, role } as JWTPayload)
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuedAt()
     .setExpirationTime('24h')
     .sign(getSecret());
 
   return token;
+}
+
+/**
+ * Extract role from a NextRequest's session cookie.
+ * Returns 'superadmin', 'admin', or null if not authenticated.
+ */
+export async function getSessionRole(request: NextRequest): Promise<'superadmin' | 'admin' | null> {
+  const token = request.cookies.get(COOKIE_NAME)?.value;
+  if (!token) return null;
+  const payload = await verifySessionToken(token);
+  if (!payload) return null;
+  return (payload.role as string) === 'superadmin' ? 'superadmin' : 'admin';
 }
 
 /**

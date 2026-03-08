@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   LayoutDashboard,
   Calendar,
@@ -15,13 +15,64 @@ import {
   X,
   SignalHigh,
   Filter,
-  Search
+  Search,
+  Shield
 } from 'lucide-react';
+
+interface FeatureFlags {
+  events: string;
+  inventory: string;
+  exclusionRules: string;
+  importEvents: string;
+  addEvent: string;
+  orders: string;
+  exportCsv: string;
+  proxies: string;
+}
+
+const DEFAULT_FLAGS: FeatureFlags = {
+  events: 'enabled', inventory: 'enabled', exclusionRules: 'enabled', importEvents: 'enabled',
+  addEvent: 'enabled', orders: 'enabled', exportCsv: 'enabled', proxies: 'disabled',
+};
+
+/** Normalize legacy booleans from DB */
+function normalizeFlag(value: unknown): string {
+  if (value === true || value === 'enabled') return 'enabled';
+  if (value === 'hidden') return 'hidden';
+  if (value === false || value === 'disabled') return 'disabled';
+  return 'enabled';
+}
 
 const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
   const pathname = usePathname();
   const router = useRouter();
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [flags, setFlags] = useState<FeatureFlags>(DEFAULT_FLAGS);
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/feature-flags')
+      .then(res => res.json())
+      .then(data => {
+        if (data.success && data.flags) {
+          const merged = { ...DEFAULT_FLAGS };
+          for (const key of Object.keys(DEFAULT_FLAGS) as (keyof FeatureFlags)[]) {
+            if (data.flags[key] !== undefined) {
+              merged[key] = normalizeFlag(data.flags[key]);
+            }
+          }
+          setFlags(merged);
+        }
+      })
+      .catch(() => {});
+
+    fetch('/api/auth/me')
+      .then(res => res.json())
+      .then(data => {
+        if (data.role === 'superadmin') setIsSuperAdmin(true);
+      })
+      .catch(() => {});
+  }, []);
 
   const handleLogout = async () => {
     try {
@@ -33,65 +84,66 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
     router.refresh();
   };
 
-  const navItems = [
+  const allNavItems = [
     {
       path: '/dashboard',
       label: 'Dashboard',
       icon: <LayoutDashboard className="w-5 h-5" />,
-      isActive: true,
+      flagKey: null, // always visible
     },
     {
       path: '/dashboard/events',
       label: 'Events',
       icon: <Calendar className="w-5 h-5" />,
-      isActive: true,
+      flagKey: 'events' as keyof FeatureFlags,
     },
     {
       path: '/dashboard/inventory',
       label: 'Inventory',
       icon: <Package className="w-5 h-5" />,
-      isActive: true,
+      flagKey: 'inventory' as keyof FeatureFlags,
     },
     {
       path: '/dashboard/exclusions',
       label: 'Exclusion Rules',
       icon: <Filter className="w-5 h-5" />,
-      isActive: true,
+      flagKey: 'exclusionRules' as keyof FeatureFlags,
     },
     {
       path: '/dashboard/import-events',
       label: 'Import Events',
       icon: <Search className="w-5 h-5" />,
-      isActive: true,
+      flagKey: 'importEvents' as keyof FeatureFlags,
     },
     {
       path: '/dashboard/list-event',
       label: 'Add Event',
       icon: <Plus className="w-5 h-5" />,
-      isActive: true,
+      flagKey: 'addEvent' as keyof FeatureFlags,
     },
     {
       path: '/dashboard/orders',
       label: 'Orders',
       icon: <ShoppingCart className="w-5 h-5" />,
-      isActive: true,
+      flagKey: 'orders' as keyof FeatureFlags,
     },
     {
       path: '/dashboard/export-csv',
       label: 'Export CSV',
       icon: <Download className="w-5 h-5" />,
-      isActive: true,
+      flagKey: 'exportCsv' as keyof FeatureFlags,
     },
   ];
 
-  const comingSoonItems = [
-     {
+  const navItems = allNavItems.filter(item => !item.flagKey || flags[item.flagKey] === 'enabled');
+
+  const comingSoonItems = flags.proxies === 'enabled' ? [] : [
+    {
       label: 'Proxies',
       icon: <SignalHigh className="w-5 h-5" />,
       description: 'Manage Proxies'
     },
   ];
-  
 
   return (
     <div className="flex h-screen bg-gradient-to-br from-slate-50 to-slate-100">
@@ -138,20 +190,35 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
             })}
           </nav>
 
-          <div className="mt-5 pt-4 border-t border-slate-100">
-            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-2 mb-2">Coming Soon</p>
-            {comingSoonItems.map((item, index) => (
-              <div key={index} className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-slate-300 cursor-not-allowed">
-                <span className="shrink-0">{item.icon}</span>
-                <span className="font-medium text-sm truncate flex-1">{item.label}</span>
-                <span className="text-[10px] font-semibold bg-amber-50 text-amber-500 border border-amber-200 px-2 py-0.5 rounded-full">Soon</span>
-              </div>
-            ))}
-          </div>
+          {comingSoonItems.length > 0 && (
+            <div className="mt-5 pt-4 border-t border-slate-100">
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-2 mb-2">Coming Soon</p>
+              {comingSoonItems.map((item, index) => (
+                <div key={index} className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-slate-300 cursor-not-allowed">
+                  <span className="shrink-0">{item.icon}</span>
+                  <span className="font-medium text-sm truncate flex-1">{item.label}</span>
+                  <span className="text-[10px] font-semibold bg-amber-50 text-amber-500 border border-amber-200 px-2 py-0.5 rounded-full">Soon</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Footer */}
         <div className="px-3 py-4 border-t border-slate-100 shrink-0">
+          {isSuperAdmin && (
+            <Link
+              href="/dashboard/admin"
+              className={`flex items-center gap-3 px-3 py-2.5 rounded-xl w-full transition-colors mb-1 ${
+                pathname === '/dashboard/admin'
+                  ? 'bg-gradient-to-r from-red-600 to-rose-600 text-white shadow-md'
+                  : 'text-slate-400 hover:text-red-600 hover:bg-red-50'
+              }`}
+            >
+              <Shield className="w-5 h-5 shrink-0" />
+              <span className="font-medium text-sm">Admin</span>
+            </Link>
+          )}
           <button
             onClick={handleLogout}
             className="flex items-center gap-3 px-3 py-2.5 rounded-xl w-full text-slate-500 hover:text-red-600 hover:bg-red-50 transition-colors"

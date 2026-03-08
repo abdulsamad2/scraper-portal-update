@@ -120,6 +120,33 @@ const ExportCsvPage: React.FC = () => {
   const [showClearInventoryDialog, setShowClearInventoryDialog] = useState(false);
   const [showStaleCleanupDialog, setShowStaleCleanupDialog] = useState(false);
 
+  // Feature flags — UI visibility (true when "enabled", false when "hidden" or "disabled")
+  const [featureFlags, setFeatureFlags] = useState({
+    csvScheduler: true, csvManualExport: true, csvDownload: true,
+    minSeatFilter: true, lowSeatAutoStop: true, autoDelete: true,
+  });
+
+  useEffect(() => {
+    fetch('/api/feature-flags')
+      .then(res => res.json())
+      .then(data => {
+        if (data.success && data.flags) {
+          setFeatureFlags(prev => {
+            const merged = { ...prev };
+            for (const key of Object.keys(prev) as (keyof typeof prev)[]) {
+              const val = data.flags[key];
+              if (val !== undefined) {
+                // "enabled" or legacy true → visible; everything else → hidden
+                merged[key] = (val === true || val === 'enabled');
+              }
+            }
+            return merged;
+          });
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   // Auto-delete state
   const [autoDeleteSettings, setAutoDeleteSettings] = useState<AutoDeleteSettings>({
     isEnabled: false,
@@ -669,7 +696,7 @@ const ExportCsvPage: React.FC = () => {
            </div>
 
            {/* Min Seat Filter for CSV */}
-           <div>
+           {featureFlags.minSeatFilter && <div>
              <label htmlFor="minSeatFilter" className="block text-sm font-medium text-gray-700 mb-1">
                NLA Protection &mdash; Minimum Seats Per Listing
              </label>
@@ -686,10 +713,10 @@ const ExportCsvPage: React.FC = () => {
              <p className="text-xs text-gray-500 mt-1">
                Skip listings with &le; <strong>{settings.minSeatFilter || 'X'}</strong> seats to avoid NLA. Set to 0 to disable.
              </p>
-           </div>
+           </div>}
 
            {/* Low Seat Auto-Stop */}
-           <div className="border border-amber-200 bg-amber-50 rounded-lg p-4 space-y-3">
+           {featureFlags.lowSeatAutoStop && <div className="border border-amber-200 bg-amber-50 rounded-lg p-4 space-y-3">
              <div className="flex items-center justify-between">
                <div>
                  <h4 className="text-sm font-semibold text-gray-800">Low Seat Auto-Stop</h4>
@@ -731,7 +758,7 @@ const ExportCsvPage: React.FC = () => {
                  </p>
                </div>
              )}
-           </div>
+           </div>}
 
            <div className="flex items-center space-x-4">
              <div className="flex items-center">
@@ -845,7 +872,7 @@ const ExportCsvPage: React.FC = () => {
       )}
 
       {/* Auto-Stop Events Section */}
-      <div className="bg-white rounded-lg shadow-md p-6 mb-5">
+      {featureFlags.autoDelete && <div className="bg-white rounded-lg shadow-md p-6 mb-5">
         <h3 className="text-lg font-semibold mb-4 border-b pb-2">Auto-Stop Events</h3>
         <div className="space-y-4">
           <div className="bg-yellow-50 p-4 rounded-lg">
@@ -999,7 +1026,7 @@ const ExportCsvPage: React.FC = () => {
             </div>
           )}
         </div>
-      </div>
+      </div>}
 
       {/* Clear Inventory Section */}
       <div className="bg-white rounded-lg shadow-md p-6 mb-5">
@@ -1047,7 +1074,7 @@ const ExportCsvPage: React.FC = () => {
         </div>
       </div>
 
-      <div className="bg-white rounded-lg shadow-md p-6 mb-5">
+      {(featureFlags.csvDownload || featureFlags.csvManualExport) && <div className="bg-white rounded-lg shadow-md p-6 mb-5">
         <h3 className="text-lg font-semibold mb-4 border-b pb-2">CSV Generation and Download</h3>
         <div className="space-y-3">
           <button
@@ -1069,7 +1096,7 @@ const ExportCsvPage: React.FC = () => {
             </button>
           )}
         </div>
-      </div>
+      </div>}
 
       <div className="bg-white rounded-lg shadow-md p-6">
         <h3 className="text-lg font-semibold mb-4 border-b pb-2">CSV Status</h3>

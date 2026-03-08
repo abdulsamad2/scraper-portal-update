@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { generateInventoryCsv, uploadCsvToSyncService } from '../../../actions/csvActions';
+import { requireFeatureFlag } from '@/lib/featureFlags';
 
 // Set maxDuration for this API route to handle large CSV operations
 export const maxDuration = 300; // 5 minutes
 
 export async function POST(req: NextRequest) {
+  const blocked = await requireFeatureFlag('csvManualExport');
+  if (blocked) return blocked;
+
   try {
     const body = await req.json();
     const { eventUpdateFilterMinutes = 0 } = body;

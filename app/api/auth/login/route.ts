@@ -53,9 +53,9 @@ export async function POST(request: Request) {
     }
 
     // Validate on the server — credentials never leave the server
-    const isValid = validateCredentials(username, password);
+    const role = validateCredentials(username, password);
 
-    if (!isValid) {
+    if (!role) {
       return NextResponse.json(
         { error: 'Invalid username or password' },
         { status: 401 }
@@ -65,8 +65,8 @@ export async function POST(request: Request) {
     // Successful login — reset rate limit for this IP
     loginAttempts.delete(ip);
 
-    // Create signed JWT
-    const token = await createSessionToken(username);
+    // Create signed JWT with role
+    const token = await createSessionToken(username, role);
 
     // Set HttpOnly cookie (not accessible from client JS)
     const response = NextResponse.json({ success: true });

@@ -1,10 +1,14 @@
 import { NextRequest } from 'next/server';
 import { generateInventoryCsvStream } from '../../../actions/csvActions';
+import { requireFeatureFlag } from '@/lib/featureFlags';
 
 // Allow up to 5 minutes for large CSV generation
 export const maxDuration = 300;
 
 export async function POST(req: NextRequest) {
+  const blocked = await requireFeatureFlag('csvDownload');
+  if (blocked) return blocked;
+
   try {
     const body = await req.json();
     const { eventUpdateFilterMinutes = 0 } = body;

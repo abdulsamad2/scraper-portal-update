@@ -8,6 +8,7 @@ import { getSchedulerSettings, updateSchedulerSettings } from '@/actions/csvActi
 import { generateInventoryCsv, uploadCsvToSyncService } from '@/actions/csvActions';
 import { createErrorLog } from '@/actions/errorLogActions';
 import { NextRequest, NextResponse } from 'next/server';
+import { requireFeatureFlag } from '@/lib/featureFlags';
 
 // Scheduler metrics for monitoring
 interface SchedulerMetrics {
@@ -326,6 +327,9 @@ export async function GET(request: Request) {
 }
 
 export async function POST(req: NextRequest) {
+  const blocked = await requireFeatureFlag('csvScheduler');
+  if (blocked) return blocked;
+
   const body = await req.json();
   const { action } = body;
 

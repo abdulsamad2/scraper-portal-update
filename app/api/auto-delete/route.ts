@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { 
-  getAutoDeleteSettings, 
-  updateAutoDeleteSettings, 
-  runAutoDelete, 
-  getAutoDeletePreview 
+import {
+  getAutoDeleteSettings,
+  updateAutoDeleteSettings,
+  runAutoDelete,
+  getAutoDeletePreview
 } from '@/actions/csvActions';
 import { createErrorLog } from '@/actions/errorLogActions';
+import { requireFeatureFlag } from '@/lib/featureFlags';
 
 // ═══════════════════════════════════════════════════════════════════
 // Use globalThis to persist state across module re-evaluations.
@@ -161,6 +162,9 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
+  const blocked = await requireFeatureFlag('autoDelete');
+  if (blocked) return blocked;
+
   try {
     const body = await request.json();
     const { action } = body;
