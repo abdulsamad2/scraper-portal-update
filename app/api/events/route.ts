@@ -45,6 +45,7 @@ export async function GET(request: Request) {
       Event_Name: 1,
       Event_DateTime: 1,
       Venue: 1,
+      URL: 1,
       Available_Seats: 1,
       Skip_Scraping: 1,
       Last_Updated: 1

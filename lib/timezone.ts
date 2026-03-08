@@ -1,20 +1,32 @@
 /**
  * Timezone Utilities for Event Location-Based Time Handling
- * 
- * Uses the `city-timezones` open-source library (7,300+ cities worldwide)
- * for automatic timezone detection from venue text.
- * 
- * The auto-delete system needs to know the CURRENT time at the event's location
- * to decide if it's close enough to event time to stop/delete.
- * 
- * Event_DateTime is stored as the local event time (e.g., 7pm) treated as UTC in MongoDB.
- * So we need to get the current time in the event's timezone, then compare it as-if-UTC.
- * 
- * TIMEZONE IS AUTO-DETECTED from the Venue field — no manual input needed.
+ *
+ * Resolution pipeline (fastest → slowest):
+ *   1. In-memory cache (process-level Map)
+ *   2. MongoDB VenueTimezone collection (persistent across restarts)
+ *   3. Static maps (venue names, city-timezones library, state codes, fragments)
+ *   4. Geocoding: Nominatim (OpenStreetMap) → TimeAPI.io coordinate → timezone
+ *   5. Longitude-based estimation (last resort if coordinate API is down)
+ *
+ * Once resolved, results are persisted to MongoDB — each unique venue is only
+ * ever geocoded once. Random re-verification (2% chance if > 30 days old)
+ * keeps data fresh without excessive API calls.
+ *
+ * Rate limiting: max 1 geocode request per 1.1 seconds (Nominatim policy).
  */
 
 import cityTimezones from 'city-timezones';
 import { getAccurateNow } from './timeSync';
+
+// Lazy-import to avoid circular dependency issues at module level
+let _VenueTimezone: any = null;
+async function getVenueTimezoneModel() {
+  if (!_VenueTimezone) {
+    const mod = await import('../models/venueTimezoneModel.js');
+    _VenueTimezone = mod.VenueTimezone;
+  }
+  return _VenueTimezone;
+}
 
 export const US_TIMEZONES = [
   { value: 'America/New_York', label: 'Eastern Time (ET)', abbr: 'ET' },
@@ -29,8 +41,6 @@ export type USTimezone = typeof US_TIMEZONES[number]['value'];
 
 // ══════════════════════════════════════════════════════════════════════════════
 // TIMEZONE NAME NORMALIZATION
-// The library returns city-specific IANA names (e.g., America/Detroit).
-// We normalize to standard US timezone names for consistency.
 // ══════════════════════════════════════════════════════════════════════════════
 
 const TIMEZONE_NORMALIZE_MAP: Record<string, string> = {
@@ -95,7 +105,6 @@ function normalizeTimezone(tz: string): string {
 
 // ══════════════════════════════════════════════════════════════════════════════
 // CITY-TIMEZONES LIBRARY INDEX
-// Build a normalized, accent-stripped, population-sorted lookup from 7,300+ cities
 // ══════════════════════════════════════════════════════════════════════════════
 
 interface CityEntry {
@@ -106,12 +115,10 @@ interface CityEntry {
   timezone: string;
 }
 
-/** Strip accents and lowercase for matching */
 function normalizeText(s: string): string {
   return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
 }
 
-/** Pre-built city lookup index: normalized name → sorted city entries (US first, CA second, then all others by population) */
 const CITY_INDEX = buildCityIndex();
 
 function buildCityIndex(): Map<string, CityEntry[]> {
@@ -126,19 +133,16 @@ function buildCityIndex(): Map<string, CityEntry[]> {
       timezone: c.timezone,
     };
 
-    // Index by normalized full city name
     const fullName = normalizeText(c.city);
     if (!index.has(fullName)) index.set(fullName, []);
     index.get(fullName)!.push(entry);
 
-    // Also index by the main part before comma/period (e.g., "Washington, D.C." → "washington")
     const mainPart = normalizeText(c.city.split(/[,.]/)[0]);
     if (mainPart !== fullName && mainPart.length > 2) {
       if (!index.has(mainPart)) index.set(mainPart, []);
       index.get(mainPart)!.push(entry);
     }
 
-    // Also index by ascii name if available and different
     if (c.city_ascii) {
       const asciiName = normalizeText(c.city_ascii);
       if (asciiName !== fullName && asciiName.length > 2) {
@@ -148,7 +152,6 @@ function buildCityIndex(): Map<string, CityEntry[]> {
     }
   }
 
-  // Sort each entry list: US first, CA second, then by population descending
   for (const [, entries] of index) {
     entries.sort((a, b) => {
       const countryRank = (iso: string) => iso === 'US' ? 0 : iso === 'CA' ? 1 : 2;
@@ -161,7 +164,6 @@ function buildCityIndex(): Map<string, CityEntry[]> {
   return index;
 }
 
-/** Look up a city name in the library index, returns normalized timezone or null */
 function lookupCityTimezone(cityName: string): string | null {
   const normalized = normalizeText(cityName);
   const entries = CITY_INDEX.get(normalized);
@@ -172,7 +174,7 @@ function lookupCityTimezone(cityName: string): string | null {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// STATE / PROVINCE ABBREVIATION MAP (library doesn't support 2-letter codes)
+// STATE / PROVINCE ABBREVIATION MAP
 // ══════════════════════════════════════════════════════════════════════════════
 
 const STATE_TIMEZONE_MAP: Record<string, string> = {
@@ -251,8 +253,7 @@ const STATE_TIMEZONE_MAP: Record<string, string> = {
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
-// VENUE NAME MAP (specific venue names → timezone)
-// The library has cities, but can't map "Madison Square Garden" → timezone.
+// VENUE NAME MAP (known venues — acts as a fast first-hit cache)
 // ══════════════════════════════════════════════════════════════════════════════
 
 const VENUE_NAME_TIMEZONE_MAP: Record<string, string> = {
@@ -266,24 +267,26 @@ const VENUE_NAME_TIMEZONE_MAP: Record<string, string> = {
   'capital one arena': 'America/New_York', 'nationals park': 'America/New_York', 'fedex field': 'America/New_York',
   'state farm arena': 'America/New_York', 'mercedes benz stadium': 'America/New_York', 'truist park': 'America/New_York',
   'hard rock stadium': 'America/New_York', 'kaseya center': 'America/New_York', 'amerant bank arena': 'America/New_York',
-  'amalie arena': 'America/New_York', 'raymond james stadium': 'America/New_York',
-  'amway center': 'America/New_York', 'camping world stadium': 'America/New_York',
+  'amalie arena': 'America/New_York', 'benchmark international arena': 'America/New_York', 'raymond james stadium': 'America/New_York',
+  'amway center': 'America/New_York', 'camping world stadium': 'America/New_York', 'hard rock live': 'America/New_York',
   'ppg paints arena': 'America/New_York', 'acrisure stadium': 'America/New_York', 'pnc park': 'America/New_York',
   'rocket mortgage fieldhouse': 'America/New_York', 'progressive field': 'America/New_York',
   'little caesars arena': 'America/New_York', 'ford field': 'America/New_York', 'comerica park': 'America/New_York',
   'gainbridge fieldhouse': 'America/New_York', 'lucas oil stadium': 'America/New_York',
   'spectrum center': 'America/New_York', 'bank of america stadium': 'America/New_York',
+  'colonial life arena': 'America/New_York', 'cfg bank arena': 'America/New_York', 'boardwalk hall': 'America/New_York',
   'mohegan sun arena': 'America/New_York', 'ubs arena at belmont park': 'America/New_York',
 
   // Central
-  'united center': 'America/Chicago', 'wrigley field': 'America/Chicago', 'soldier field': 'America/Chicago', 'guaranteed rate field': 'America/Chicago',
+  'united center': 'America/Chicago', 'wintrust arena': 'America/Chicago', 'wrigley field': 'America/Chicago', 'soldier field': 'America/Chicago', 'guaranteed rate field': 'America/Chicago',
   'at&t stadium': 'America/Chicago', 'globe life field': 'America/Chicago', 'american airlines center': 'America/Chicago',
   'minute maid park': 'America/Chicago', 'toyota center': 'America/Chicago', 'nrg stadium': 'America/Chicago',
+  'legacy arena at the bjcc': 'America/Chicago', 'legacy arena': 'America/Chicago', 'bjcc': 'America/Chicago',
   'bridgestone arena': 'America/Chicago', 'nissan stadium': 'America/Chicago', 'geodis park': 'America/Chicago',
   'caesars superdome': 'America/Chicago', 'smoothie king center': 'America/Chicago',
   'fiserv forum': 'America/Chicago', 'american family field': 'America/Chicago', 'lambeau field': 'America/Chicago',
   'target center': 'America/Chicago', 'us bank stadium': 'America/Chicago', 'target field': 'America/Chicago',
-  'busch stadium': 'America/Chicago', 'enterprise center': 'America/Chicago',
+  'busch stadium': 'America/Chicago', 'enterprise center': 'America/Chicago', 'chaifetz arena': 'America/Chicago',
   'arrowhead stadium': 'America/Chicago', 'kauffman stadium': 'America/Chicago', 't-mobile center': 'America/Chicago',
   'paycom center': 'America/Chicago', 'frost bank center': 'America/Chicago', 'alamodome': 'America/Chicago',
   'moody center': 'America/Chicago', 'q2 stadium': 'America/Chicago',
@@ -323,6 +326,7 @@ const VENUE_NAME_TIMEZONE_MAP: Record<string, string> = {
   'kia forum': 'America/Los_Angeles',
   'greek theatre': 'America/Los_Angeles', 'hollywood bowl': 'America/Los_Angeles',
   'the wiltern': 'America/Los_Angeles', 'rose bowl': 'America/Los_Angeles',
+  'the three clubs': 'America/Los_Angeles', 'three clubs': 'America/Los_Angeles',
 
   // Canadian venues
   'centre bell': 'America/New_York', 'bell centre': 'America/New_York',
@@ -343,55 +347,58 @@ const VENUE_NAME_TIMEZONE_MAP: Record<string, string> = {
 
 // ══════════════════════════════════════════════════════════════════════════════
 // FRAGMENT / KEYWORD MAP
-// Some venue fields contain only partial location words (e.g., "Carolina",
-// "Columbia", "Jersey"). These won't match in the city-timezones library.
 // ══════════════════════════════════════════════════════════════════════════════
 
 const FRAGMENT_TIMEZONE_MAP: Record<string, string> = {
-  'carolina': 'America/New_York',      // North/South Carolina → ET
-  'columbia': 'America/New_York',      // District of Columbia → ET
-  'jersey': 'America/New_York',        // New Jersey → ET
-  'york': 'America/New_York',          // New York / York, PA → ET
-  'hampshire': 'America/New_York',     // New Hampshire → ET
-  'england': 'America/New_York',       // New England → ET
-  'virginia': 'America/New_York',      // Virginia / West Virginia → ET
-  'dakota': 'America/Chicago',         // North/South Dakota → CT
-  'mexico': 'America/Denver',          // New Mexico → MT
+  'carolina': 'America/New_York',
+  'columbia': 'America/New_York',
+  'jersey': 'America/New_York',
+  'york': 'America/New_York',
+  'hampshire': 'America/New_York',
+  'england': 'America/New_York',
+  'virginia': 'America/New_York',
+  'dakota': 'America/Chicago',
+  'mexico': 'America/Denver',
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
-// MAIN DETECTION FUNCTION
+// IN-MEMORY CACHE + RATE LIMITER
 // ══════════════════════════════════════════════════════════════════════════════
 
-// Cache for live API results: venue → IANA timezone (or 'NONE' if API returned nothing)
-const _liveApiCache = new Map<string, string>();
+// Process-level cache: venue (lowercase) → timezone | 'NONE'
+const _memoryCache = new Map<string, string>();
+
+// Rate limiter for Nominatim (max 1 req per 1.1s)
+let _lastGeocodedAt = 0;
+async function rateLimitedDelay(): Promise<void> {
+  const elapsed = Date.now() - _lastGeocodedAt;
+  if (elapsed < 1100) {
+    await new Promise(r => setTimeout(r, 1100 - elapsed));
+  }
+  _lastGeocodedAt = Date.now();
+}
+
+// Re-verification config
+const REVERIFY_AFTER_DAYS = 30;
+const REVERIFY_CHANCE = 0.02; // 2% chance per lookup
+
+// ══════════════════════════════════════════════════════════════════════════════
+// STATIC DETECTION (synchronous — no DB, no API)
+// ══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Auto-detect timezone from venue text (synchronous — static data only).
- * 
- * Detection order:
- *   1. Known venue names (MSG, TD Garden, etc.)
- *   2. City lookup via city-timezones library (7,300+ cities, population-sorted)
- *   3. Individual words from venue tried as city names
- *   4. Multi-word combinations (e.g., "San Francisco", "New York")
- *   5. State/province abbreviations and full names
- *   6. Fragment keywords (carolina, columbia, jersey, etc.)
- * 
- * Returns null if no timezone can be determined — callers must handle this.
+ * Auto-detect timezone from venue text using only static/in-memory data.
+ * Fast, synchronous. Returns null if no match found.
  */
 export function detectTimezoneFromVenue(venue: string): string | null {
-  if (!venue || venue.trim().length === 0) {
-    return null;
-  }
+  if (!venue || venue.trim().length === 0) return null;
 
-  // Check live API cache first
   const cacheKey = venue.trim().toLowerCase();
-  const cached = _liveApiCache.get(cacheKey);
+  const cached = _memoryCache.get(cacheKey);
   if (cached) return cached === 'NONE' ? null : cached;
 
   const venueNorm = normalizeText(venue);
 
-  // Helper: short terms (<=3 chars) require word boundaries to avoid false matches
   const matchesTerm = (text: string, term: string): boolean => {
     if (term.length <= 3) {
       const regex = new RegExp(`\\b${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
@@ -400,14 +407,12 @@ export function detectTimezoneFromVenue(venue: string): string | null {
     return text.includes(term);
   };
 
-  // ── Step 1: Check known venue names (most specific match) ──
+  // Step 1: Known venue names
   for (const [venueName, tz] of Object.entries(VENUE_NAME_TIMEZONE_MAP)) {
-    if (venueNorm.includes(venueName)) {
-      return tz;
-    }
+    if (venueNorm.includes(venueName)) return tz;
   }
 
-  // ── Step 2: City lookup via library (full text, then segments) ──
+  // Step 2: City lookup via library
   const fullLookup = lookupCityTimezone(venueNorm);
   if (fullLookup) return fullLookup;
 
@@ -417,7 +422,7 @@ export function detectTimezoneFromVenue(venue: string): string | null {
     if (segLookup) return segLookup;
   }
 
-  // ── Step 2b: Try individual words as city names (≥3 chars to avoid noise) ──
+  // Step 2b: Individual words as city names
   const allWords = venueNorm.split(/\s+/).filter(w => w.length >= 3);
   for (const word of allWords) {
     const clean = word.replace(/[^a-z]/g, '');
@@ -427,8 +432,7 @@ export function detectTimezoneFromVenue(venue: string): string | null {
     }
   }
 
-  // ── Step 2c: Try consecutive 2-word and 3-word combinations ──
-  // Catches "San Francisco", "Los Angeles", "New York", "Salt Lake City", etc.
+  // Step 2c: Multi-word combinations
   const rawWords = venueNorm.split(/\s+/);
   for (let i = 0; i < rawWords.length - 1; i++) {
     const twoWord = rawWords[i] + ' ' + rawWords[i + 1];
@@ -442,169 +446,335 @@ export function detectTimezoneFromVenue(venue: string): string | null {
     }
   }
 
-  // ── Step 3: State/province abbreviation and full name check ──
+  // Step 3: State/province codes
   for (const segment of segments) {
     const words = segment.split(/\s+/);
     for (const word of words) {
       const clean = word.replace(/[^a-z]/g, '');
-      if (clean.length === 2 && STATE_TIMEZONE_MAP[clean]) {
-        return STATE_TIMEZONE_MAP[clean];
-      }
+      if (clean.length === 2 && STATE_TIMEZONE_MAP[clean]) return STATE_TIMEZONE_MAP[clean];
     }
     for (const [state, tz] of Object.entries(STATE_TIMEZONE_MAP)) {
-      if (state.length > 2 && segment.includes(state)) {
-        return tz;
-      }
+      if (state.length > 2 && segment.includes(state)) return tz;
     }
   }
 
-  // Full text fallback for state abbreviations
   for (const word of allWords) {
     const clean = word.replace(/[^a-z]/g, '');
-    if (clean.length === 2 && STATE_TIMEZONE_MAP[clean]) {
-      return STATE_TIMEZONE_MAP[clean];
-    }
+    if (clean.length === 2 && STATE_TIMEZONE_MAP[clean]) return STATE_TIMEZONE_MAP[clean];
   }
   for (const [state, tz] of Object.entries(STATE_TIMEZONE_MAP)) {
-    if (state.length > 2 && venueNorm.includes(state)) {
-      return tz;
-    }
+    if (state.length > 2 && venueNorm.includes(state)) return tz;
   }
 
-  // ── Step 4: Fragment/keyword fallback ──
+  // Step 4: Fragment keywords
   for (const [fragment, tz] of Object.entries(FRAGMENT_TIMEZONE_MAP)) {
-    if (matchesTerm(venueNorm, fragment)) {
-      return tz;
-    }
+    if (matchesTerm(venueNorm, fragment)) return tz;
   }
 
-  console.warn(`Timezone auto-detect: Could not determine timezone from venue "${venue}" (static lookup failed)`);
   return null;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// ASYNC DETECTION WITH LIVE API FALLBACK
-// Uses free TimeAPI.io to geocode city/state → timezone when static lookup fails
+// ASYNC DETECTION — Full pipeline with DB cache + geocoding
 // ══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Async version of detectTimezoneFromVenue that falls back to a live API
- * (TimeAPI.io — free, no API key required) when the static lookup can't find a match.
- * 
- * Results are cached so repeated calls for the same venue won't hit the API again.
+ * Full async timezone detection pipeline:
+ *   1. In-memory cache
+ *   2. MongoDB VenueTimezone collection
+ *   3. Static maps (venue names, cities, states, fragments)
+ *   4. Geocoding (Nominatim → TimeAPI.io)
+ *   5. Longitude estimation fallback
+ *
+ * Results are persisted to MongoDB so each venue is only geocoded once ever.
+ * Stale entries (>30 days) have a 2% chance of background re-verification.
  */
 export async function detectTimezoneFromVenueAsync(venue: string): Promise<string | null> {
-  // Try static detection first
-  const staticResult = detectTimezoneFromVenue(venue);
-  if (staticResult) return staticResult;
-
   if (!venue || venue.trim().length === 0) return null;
 
   const cacheKey = venue.trim().toLowerCase();
 
-  // Check cache for prior API result
-  const cached = _liveApiCache.get(cacheKey);
-  if (cached) return cached === 'NONE' ? null : cached;
+  // ── Layer 1: In-memory cache ──
+  const memCached = _memoryCache.get(cacheKey);
+  if (memCached) return memCached === 'NONE' ? null : memCached;
 
-  // Extract potential city/location words from venue text
-  const venueNorm = normalizeText(venue);
-  const searchTerms: string[] = [];
+  // ── Layer 2: MongoDB persistent cache ──
+  try {
+    const VenueTimezone = await getVenueTimezoneModel();
+    const dbEntry = await VenueTimezone.findOne({ venue: cacheKey }).lean();
+    if (dbEntry && dbEntry.timezone) {
+      const tz = dbEntry.timezone as string;
+      _memoryCache.set(cacheKey, tz);
 
-  // Add full venue, each comma/dash segment, and multi-word combos
-  searchTerms.push(venueNorm);
-  const segments = venueNorm.split(/[,|–\-]+/).map(s => s.trim()).filter(Boolean);
-  searchTerms.push(...segments);
+      // Random re-verification of stale entries (non-blocking)
+      const age = Date.now() - new Date(dbEntry.lastVerifiedAt || dbEntry.createdAt).getTime();
+      if (age > REVERIFY_AFTER_DAYS * 24 * 60 * 60 * 1000 && Math.random() < REVERIFY_CHANCE) {
+        reverifyInBackground(venue, cacheKey, tz);
+      }
 
-  const rawWords = venueNorm.split(/\s+/);
-  // Add 2-word and 3-word combinations
-  for (let i = 0; i < rawWords.length - 1; i++) {
-    searchTerms.push(rawWords[i] + ' ' + rawWords[i + 1]);
-    if (i < rawWords.length - 2) {
-      searchTerms.push(rawWords[i] + ' ' + rawWords[i + 1] + ' ' + rawWords[i + 2]);
+      return tz;
     }
-  }
-  // Add individual words ≥ 4 chars
-  searchTerms.push(...rawWords.filter(w => w.replace(/[^a-z]/g, '').length >= 4));
-
-  // Try each search term against the live API
-  for (const term of searchTerms) {
-    const tz = await fetchTimezoneFromLiveAPI(term);
-    if (tz) {
-      const normalized = normalizeTimezone(tz);
-      _liveApiCache.set(cacheKey, normalized);
-      console.log(`Timezone live-API: "${venue}" → ${normalized} (matched on "${term}")`);
-      return normalized;
+    // If DB has this venue marked as unresolvable (no timezone field), skip to static
+    if (dbEntry && !dbEntry.timezone) {
+      _memoryCache.set(cacheKey, 'NONE');
+      return null;
     }
+  } catch {
+    // DB not available — continue with static + geocoding
   }
 
-  // All attempts failed
-  _liveApiCache.set(cacheKey, 'NONE');
-  console.warn(`Timezone auto-detect: Could not determine timezone from venue "${venue}" (static + API both failed)`);
+  // ── Layer 3: Static detection ──
+  const staticResult = detectTimezoneFromVenue(venue);
+  if (staticResult) {
+    _memoryCache.set(cacheKey, staticResult);
+    persistToDb(cacheKey, staticResult, 'static').catch(() => {});
+    return staticResult;
+  }
+
+  // ── Layer 4: Geocoding (rate-limited) ──
+  const searchQueries = [
+    venue.trim(),
+    `${venue.trim()} arena`,
+    `${venue.trim()} venue`,
+  ];
+  const segments = venue.split(/[,|–\-]+/).map(s => s.trim()).filter(Boolean);
+  if (segments.length > 1) searchQueries.push(...segments);
+
+  for (const query of searchQueries) {
+    const result = await geocodeAndResolveTimezone(query);
+    if (result) {
+      const tz = normalizeTimezone(result.timezone);
+      _memoryCache.set(cacheKey, tz);
+      persistToDb(cacheKey, tz, result.source, result.lat, result.lon, query).catch(() => {});
+      console.log(`Timezone geocoded: "${venue}" → ${tz} (via "${query}")`);
+      return tz;
+    }
+  }
+
+  // All failed
+  _memoryCache.set(cacheKey, 'NONE');
+  console.warn(`Timezone auto-detect: Could not determine timezone from venue "${venue}" (all methods failed)`);
   return null;
 }
 
 /**
- * Call TimeAPI.io's free timezone-by-zone endpoint to resolve a location string.
- * Tries to find US IANA timezones by searching city names against known US zones.
- * Falls back to WorldTimeAPI search if needed.
+ * Bulk-resolve timezones for an array of venue names.
+ * Efficient: checks DB in one query, only geocodes truly unknown venues.
+ * Returns a Map<venue, timezone | null>.
  */
-async function fetchTimezoneFromLiveAPI(searchTerm: string): Promise<string | null> {
+export async function resolveVenueTimezonesBulk(venues: string[]): Promise<Map<string, string | null>> {
+  const result = new Map<string, string | null>();
+  const toResolve: string[] = [];
+
+  // Check memory cache first
+  for (const venue of venues) {
+    const key = venue.trim().toLowerCase();
+    const cached = _memoryCache.get(key);
+    if (cached) {
+      result.set(venue, cached === 'NONE' ? null : cached);
+    } else {
+      toResolve.push(venue);
+    }
+  }
+
+  if (toResolve.length === 0) return result;
+
+  // Batch query MongoDB for all unknowns
   try {
-    // Use TimeAPI.io search endpoint (free, no key required)
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 6000);
+    const VenueTimezone = await getVenueTimezoneModel();
+    const keys = toResolve.map(v => v.trim().toLowerCase());
+    const dbEntries = await VenueTimezone.find({ venue: { $in: keys } }).lean() as any[];
+    const dbMap = new Map(dbEntries.map((e: any) => [e.venue, e]));
 
-    const encoded = encodeURIComponent(searchTerm);
-    const res = await fetch(
-      `https://timeapi.io/api/timezone/zone?timeZone=${encoded}`,
-      { signal: controller.signal, cache: 'no-store' }
-    );
-    clearTimeout(timer);
+    const stillUnknown: string[] = [];
 
-    if (res.ok) {
-      const data = await res.json();
-      // If the API recognizes this as a valid IANA timezone, return it
-      if (data?.timeZone && typeof data.timeZone === 'string') {
-        return data.timeZone;
+    for (const venue of toResolve) {
+      const key = venue.trim().toLowerCase();
+      const dbEntry = dbMap.get(key) as any;
+      if (dbEntry?.timezone) {
+        _memoryCache.set(key, dbEntry.timezone);
+        result.set(venue, dbEntry.timezone);
+
+        // Random re-verification
+        const age = Date.now() - new Date(dbEntry.lastVerifiedAt || dbEntry.createdAt).getTime();
+        if (age > REVERIFY_AFTER_DAYS * 24 * 60 * 60 * 1000 && Math.random() < REVERIFY_CHANCE) {
+          reverifyInBackground(venue, key, dbEntry.timezone);
+        }
+      } else {
+        stillUnknown.push(venue);
       }
     }
+
+    // Try static detection for remaining unknowns
+    const needGeocoding: string[] = [];
+    for (const venue of stillUnknown) {
+      const key = venue.trim().toLowerCase();
+      const staticTz = detectTimezoneFromVenue(venue);
+      if (staticTz) {
+        _memoryCache.set(key, staticTz);
+        result.set(venue, staticTz);
+        persistToDb(key, staticTz, 'static').catch(() => {});
+      } else {
+        needGeocoding.push(venue);
+      }
+    }
+
+    // Geocode truly unknown venues (rate-limited, sequential)
+    for (const venue of needGeocoding) {
+      const tz = await detectTimezoneFromVenueAsync(venue);
+      result.set(venue, tz);
+    }
   } catch {
-    // Timeout or network error — silently fail
+    // DB unavailable — fall back to individual resolution
+    for (const venue of toResolve) {
+      if (!result.has(venue)) {
+        const tz = await detectTimezoneFromVenueAsync(venue);
+        result.set(venue, tz);
+      }
+    }
   }
 
-  // Fallback: try WorldTimeAPI search
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 6000);
+  return result;
+}
 
+// ══════════════════════════════════════════════════════════════════════════════
+// GEOCODING: Nominatim → TimeAPI.io coordinate lookup
+// ══════════════════════════════════════════════════════════════════════════════
+
+interface GeocodeResult {
+  timezone: string;
+  source: 'geocoded' | 'coords_fallback';
+  lat: number;
+  lon: number;
+}
+
+async function geocodeAndResolveTimezone(query: string): Promise<GeocodeResult | null> {
+  try {
+    await rateLimitedDelay();
+
+    // Step 1: Geocode with Nominatim
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+
+    const encoded = encodeURIComponent(query);
     const res = await fetch(
-      `http://worldtimeapi.org/api/timezone`,
-      { signal: controller.signal, cache: 'no-store' }
+      `https://nominatim.openstreetmap.org/search?q=${encoded}&format=json&limit=1&countrycodes=us,ca`,
+      {
+        signal: controller.signal,
+        headers: { 'User-Agent': 'EventScraperPortal/1.0' },
+      }
     );
     clearTimeout(timer);
 
-    if (res.ok) {
-      const zones: string[] = await res.json();
-      // Search for a zone that contains the search term
-      const termLower = searchTerm.toLowerCase().replace(/\s+/g, '_');
-      const match = zones.find(z => z.toLowerCase().includes(termLower));
-      if (match) return match;
+    if (!res.ok) return null;
+
+    const results = await res.json();
+    if (!results || results.length === 0) return null;
+
+    const lat = parseFloat(results[0].lat);
+    const lon = parseFloat(results[0].lon);
+    if (isNaN(lat) || isNaN(lon)) return null;
+
+    // Step 2: Coordinates → timezone via TimeAPI.io
+    const tzController = new AbortController();
+    const tzTimer = setTimeout(() => tzController.abort(), 8000);
+
+    const tzRes = await fetch(
+      `https://timeapi.io/api/timezone/coordinate?latitude=${lat}&longitude=${lon}`,
+      { signal: tzController.signal }
+    );
+    clearTimeout(tzTimer);
+
+    if (tzRes.ok) {
+      const tzData = await tzRes.json();
+      if (tzData?.timeZone && typeof tzData.timeZone === 'string') {
+        return { timezone: tzData.timeZone, source: 'geocoded', lat, lon };
+      }
+    }
+
+    // Fallback: estimate from longitude
+    const estimated = estimateUSTimezoneFromCoords(lat, lon);
+    if (estimated) {
+      return { timezone: estimated, source: 'coords_fallback', lat, lon };
     }
   } catch {
-    // Timeout or network error — silently fail
+    // Network error — silently fail
   }
 
   return null;
 }
 
+function estimateUSTimezoneFromCoords(lat: number, lon: number): string | null {
+  if (lat < 24 || lat > 72 || lon < -170 || lon > -50) return null;
+
+  if (lon >= -67.5)  return 'America/New_York';
+  if (lon >= -82.5)  return 'America/New_York';
+  if (lon >= -97.5)  return 'America/Chicago';
+  if (lon >= -112.5) return 'America/Denver';
+  if (lon >= -125)   return 'America/Los_Angeles';
+  if (lon >= -145)   return 'America/Anchorage';
+  return 'Pacific/Honolulu';
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
-// ASYNC shouldStopEvent — uses live API fallback for better coverage
+// DB PERSISTENCE + BACKGROUND RE-VERIFICATION
 // ══════════════════════════════════════════════════════════════════════════════
 
-/**
- * Async version of shouldStopEvent that uses detectTimezoneFromVenueAsync
- * for better timezone detection coverage (live API fallback).
- */
+async function persistToDb(
+  venueKey: string, timezone: string, source: string,
+  lat?: number, lon?: number, geocodeQuery?: string
+): Promise<void> {
+  try {
+    const VenueTimezone = await getVenueTimezoneModel();
+    await VenueTimezone.findOneAndUpdate(
+      { venue: venueKey },
+      {
+        $set: {
+          timezone,
+          source,
+          ...(lat != null && { lat }),
+          ...(lon != null && { lon }),
+          ...(geocodeQuery && { geocodeQuery }),
+          lastVerifiedAt: new Date(),
+        },
+      },
+      { upsert: true }
+    );
+  } catch {
+    // DB write failed — not critical, memory cache still works
+  }
+}
+
+function reverifyInBackground(venue: string, cacheKey: string, currentTz: string): void {
+  // Fire-and-forget: re-geocode and update if different
+  (async () => {
+    try {
+      const searchQueries = [venue.trim(), `${venue.trim()} arena`];
+      for (const query of searchQueries) {
+        const result = await geocodeAndResolveTimezone(query);
+        if (result) {
+          const newTz = normalizeTimezone(result.timezone);
+          if (newTz !== currentTz) {
+            console.log(`Timezone re-verify: "${venue}" changed ${currentTz} → ${newTz}`);
+          }
+          _memoryCache.set(cacheKey, newTz);
+          await persistToDb(cacheKey, newTz, result.source, result.lat, result.lon, query);
+          return;
+        }
+      }
+      // Re-verification didn't find anything new — just update lastVerifiedAt
+      const VenueTimezone = await getVenueTimezoneModel();
+      await VenueTimezone.updateOne({ venue: cacheKey }, { $set: { lastVerifiedAt: new Date() } });
+    } catch {
+      // Background task — silently fail
+    }
+  })();
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// shouldStopEvent (sync + async)
+// ══════════════════════════════════════════════════════════════════════════════
+
 export async function shouldStopEventAsync(
   eventDateTime: Date,
   venue: string,
@@ -624,17 +794,29 @@ export async function shouldStopEventAsync(
   };
 }
 
+export function shouldStopEvent(
+  eventDateTime: Date,
+  venue: string,
+  stopBeforeHours: number
+): { shouldStop: boolean; timezone: string; localNow: Date; cutoff: Date } | null {
+  const timezone = detectTimezoneFromVenue(venue);
+  if (!timezone) return null;
+
+  const nowInEventTz = getCurrentTimeInTimezone(timezone);
+  const cutoffTime = new Date(nowInEventTz.getTime() + stopBeforeHours * 60 * 60 * 1000);
+
+  return {
+    shouldStop: eventDateTime.getTime() <= cutoffTime.getTime(),
+    timezone,
+    localNow: nowInEventTz,
+    cutoff: cutoffTime,
+  };
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // TIME UTILITIES
 // ══════════════════════════════════════════════════════════════════════════════
 
-/**
- * Get the current date/time in a specific timezone, returned as a "fake UTC" Date object.
- * 
- * Since Event_DateTime is stored as-if-UTC (e.g., 7pm event stored as 7pm UTC),
- * we need to get "what time is it NOW at the venue?" and express that as a UTC Date
- * so we can directly compare with Event_DateTime.
- */
 export function getCurrentTimeInTimezone(timezone: string): Date {
   const now = getAccurateNow();
   const formatter = new Intl.DateTimeFormat('en-US', {
@@ -661,38 +843,9 @@ export function getCurrentTimeInTimezone(timezone: string): Date {
   return new Date(Date.UTC(year, month, day, hour, minute, second));
 }
 
-/**
- * Check if an event should be stopped/deleted based on its timezone-aware local time.
- * Auto-detects timezone from venue text.
- * Returns null if timezone cannot be detected — the event should be SKIPPED.
- */
-export function shouldStopEvent(
-  eventDateTime: Date,
-  venue: string,
-  stopBeforeHours: number
-): { shouldStop: boolean; timezone: string; localNow: Date; cutoff: Date } | null {
-  const timezone = detectTimezoneFromVenue(venue);
-  if (!timezone) return null;
-
-  const nowInEventTz = getCurrentTimeInTimezone(timezone);
-  const cutoffTime = new Date(nowInEventTz.getTime() + stopBeforeHours * 60 * 60 * 1000);
-
-  return {
-    shouldStop: eventDateTime.getTime() <= cutoffTime.getTime(),
-    timezone,
-    localNow: nowInEventTz,
-    cutoff: cutoffTime,
-  };
-}
-
-/**
- * Get the timezone abbreviation for display.
- * Returns standard US abbreviation if known, otherwise derives from IANA name.
- */
 export function getTimezoneAbbr(timezone: string): string {
   const tz = US_TIMEZONES.find(t => t.value === timezone);
   if (tz) return tz.abbr;
-  // For international timezones, derive a short abbreviation
   try {
     const now = getAccurateNow();
     const short = new Intl.DateTimeFormat('en-US', { timeZone: timezone, timeZoneName: 'short' })
@@ -704,14 +857,9 @@ export function getTimezoneAbbr(timezone: string): string {
   }
 }
 
-/**
- * Get the timezone label for display.
- * Returns standard US label if known, otherwise a formatted IANA name.
- */
 export function getTimezoneLabel(timezone: string): string {
   const tz = US_TIMEZONES.find(t => t.value === timezone);
   if (tz) return tz.label;
-  // For international timezones, format the IANA name
   try {
     const now = getAccurateNow();
     const long = new Intl.DateTimeFormat('en-US', { timeZone: timezone, timeZoneName: 'long' })
@@ -723,9 +871,6 @@ export function getTimezoneLabel(timezone: string): string {
   }
 }
 
-/**
- * Format a time showing what the current local time is in a timezone
- */
 export function formatCurrentTimeInTimezone(timezone: string): string {
   const now = getAccurateNow();
   return now.toLocaleString('en-US', {

@@ -69,6 +69,12 @@ const schedulerSettingsSchema = new mongoose.Schema({
     max: 1000,
     default: 10
   },
+  minSeatFilter: {
+    type: Number,
+    min: 0,
+    max: 100,
+    default: 0
+  },
   createdAt: {
     type: Date,
     default: Date.now

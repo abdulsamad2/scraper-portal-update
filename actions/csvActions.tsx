@@ -10,7 +10,7 @@ import SyncService from '../lib/syncService';
 import { createErrorLog } from './errorLogActions';
 import { deleteExpiredEvents, getExpiredEventsStats } from './autoDeleteActions';
 import { deleteConsecutiveGroupsByEventIds } from './seatActions';
-import { detectTimezoneFromVenueAsync, getCurrentTimeInTimezone } from '../lib/timezone';
+import { detectTimezoneFromVenueAsync, resolveVenueTimezonesBulk, getCurrentTimeInTimezone } from '../lib/timezone';
 import { PipelineStage } from 'mongoose';
 
 interface CsvRow {
@@ -505,8 +505,17 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
 
       // Apply exclusion rules
       const exclStart = Date.now();
-      const filteredRecords = await applyExclusionRules(records);
+      let filteredRecords = await applyExclusionRules(records);
       console.log(`[CSV] Exclusion rules applied in ${Date.now() - exclStart}ms`);
+
+      // Apply min seat filter — exclude listings with quantity <= minSeatFilter
+      const schedulerSettings = await SchedulerSettings.findOne({}).lean() as any;
+      const minSeatFilter = schedulerSettings?.minSeatFilter ?? 0;
+      if (minSeatFilter > 0) {
+        const beforeMinSeat = filteredRecords.length;
+        filteredRecords = filteredRecords.filter(r => r.quantity > minSeatFilter);
+        console.log(`[CSV] Min seat filter (<= ${minSeatFilter}): removed ${beforeMinSeat - filteredRecords.length} listings`);
+      }
 
       if (filteredRecords.length === 0) {
         return { success: false, message: 'No inventory data found after applying exclusion rules. All records were filtered out.' };
@@ -640,14 +649,15 @@ function calculateSplitConfiguration(quantity: number, splitType?: string): {
 
 // Helper function to process batches
 async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]> {
-  // Resolve timezones for all unique venues in this batch (async, with API fallback)
+  // Resolve timezones for all unique venues in this batch (bulk, with DB cache + geocoding fallback)
   const uniqueVenues = [...new Set(batch.map(d => d.venue_name).filter(Boolean))] as string[];
-  await Promise.all(uniqueVenues.map(async (venue) => {
-    if (!_venueTzCache.has(venue)) {
-      const tz = await detectTimezoneFromVenueAsync(venue);
+  const unresolvedVenues = uniqueVenues.filter(v => !_venueTzCache.has(v));
+  if (unresolvedVenues.length > 0) {
+    const resolved = await resolveVenueTimezonesBulk(unresolvedVenues);
+    for (const [venue, tz] of resolved) {
       _venueTzCache.set(venue, tz);
     }
-  }));
+  }
 
   return batch.map(doc => {
     const inventory = doc.inventory;
@@ -815,6 +825,10 @@ export async function* generateInventoryCsvStream(
     console.log(`[CSV-Stream] Pre-export: stopped ${lowSeatResult.stopped} low-seat event(s)`);
   }
 
+  // Load min seat filter setting
+  const schedulerSettings = await SchedulerSettings.findOne({}).lean() as any;
+  const minSeatFilter = schedulerSettings?.minSeatFilter ?? 0;
+
   try {
     const activeEventQuery: Record<string, any> = { Skip_Scraping: false };
     if (eventUpdateFilterMinutes > 0) {
@@ -922,7 +936,11 @@ export async function* generateInventoryCsvStream(
         if (enrichedDocs.length > 0) {
           const processedBatch = await processBatch(enrichedDocs);
           const beforeExclusion = processedBatch.length;
-          const filtered = await applyExclusionRules(processedBatch);
+          let filtered = await applyExclusionRules(processedBatch);
+          // Apply min seat filter
+          if (minSeatFilter > 0) {
+            filtered = filtered.filter(r => r.quantity > minSeatFilter);
+          }
           totalExcluded += beforeExclusion - filtered.length;
 
           if (filtered.length > 0) {

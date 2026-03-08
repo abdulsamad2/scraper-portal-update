@@ -27,6 +27,7 @@ interface ExportSettings {
   eventUpdateFilterMinutes: number;
   lowSeatAutoStop: boolean;
   lowSeatThreshold: number;
+  minSeatFilter: number;
 }
 
 interface CsvStatus {
@@ -102,6 +103,7 @@ const ExportCsvPage: React.FC = () => {
     eventUpdateFilterMinutes: 0,
     lowSeatAutoStop: false,
     lowSeatThreshold: 10,
+    minSeatFilter: 0,
   });
   const [schedulerStatus, setSchedulerStatus] = useState<string>('Stopped');
   const [csvStatus, setCsvStatus] = useState<CsvStatus>({
@@ -149,6 +151,7 @@ const ExportCsvPage: React.FC = () => {
             eventUpdateFilterMinutes: dbSettings.eventUpdateFilterMinutes || 0,
             lowSeatAutoStop: dbSettings.lowSeatAutoStop ?? false,
             lowSeatThreshold: dbSettings.lowSeatThreshold ?? 10,
+            minSeatFilter: dbSettings.minSeatFilter ?? 0,
           });
           setSchedulerStatus(dbSettings.isRunning ? 'Running' : 'Stopped');
           setPerformanceMetrics({
@@ -598,6 +601,7 @@ const ExportCsvPage: React.FC = () => {
           eventUpdateFilterMinutes: settings.eventUpdateFilterMinutes,
           lowSeatAutoStop: settings.lowSeatAutoStop,
           lowSeatThreshold: settings.lowSeatThreshold,
+          minSeatFilter: settings.minSeatFilter,
         })
       });
       
@@ -662,6 +666,26 @@ const ExportCsvPage: React.FC = () => {
                className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
              />
              <p className="text-xs text-gray-500 mt-1">Filter events updated within last X minutes (0 = no filter, max 7 days)</p>
+           </div>
+
+           {/* Min Seat Filter for CSV */}
+           <div>
+             <label htmlFor="minSeatFilter" className="block text-sm font-medium text-gray-700 mb-1">
+               NLA Protection &mdash; Minimum Seats Per Listing
+             </label>
+             <input
+               type="number"
+               id="minSeatFilter"
+               value={settings.minSeatFilter}
+               onChange={(e) => setSettings(prev => ({ ...prev, minSeatFilter: Math.max(0, parseInt(e.target.value) || 0) }))}
+               min="0"
+               max="100"
+               placeholder="0"
+               className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+             />
+             <p className="text-xs text-gray-500 mt-1">
+               Skip listings with &le; <strong>{settings.minSeatFilter || 'X'}</strong> seats to avoid NLA. Set to 0 to disable.
+             </p>
            </div>
 
            {/* Low Seat Auto-Stop */}
