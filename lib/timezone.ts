@@ -19,6 +19,7 @@ import cityTimezones from 'city-timezones';
 import { getAccurateNow } from './timeSync';
 
 // Lazy-import to avoid circular dependency issues at module level
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 let _VenueTimezone: any = null;
 async function getVenueTimezoneModel() {
   if (!_VenueTimezone) {
@@ -501,13 +502,13 @@ export async function detectTimezoneFromVenueAsync(venue: string): Promise<strin
   // ── Layer 2: MongoDB persistent cache ──
   try {
     const VenueTimezone = await getVenueTimezoneModel();
-    const dbEntry = await VenueTimezone.findOne({ venue: cacheKey }).lean();
+    const dbEntry = await VenueTimezone.findOne({ venue: cacheKey }).lean() as VenueTimezoneDoc | null;
     if (dbEntry && dbEntry.timezone) {
-      const tz = dbEntry.timezone as string;
+      const tz = dbEntry.timezone;
       _memoryCache.set(cacheKey, tz);
 
       // Random re-verification of stale entries (non-blocking)
-      const age = Date.now() - new Date(dbEntry.lastVerifiedAt || dbEntry.createdAt).getTime();
+      const age = Date.now() - new Date(dbEntry.lastVerifiedAt || dbEntry.createdAt || Date.now()).getTime();
       if (age > REVERIFY_AFTER_DAYS * 24 * 60 * 60 * 1000 && Math.random() < REVERIFY_CHANCE) {
         reverifyInBackground(venue, cacheKey, tz);
       }
@@ -583,20 +584,20 @@ export async function resolveVenueTimezonesBulk(venues: string[]): Promise<Map<s
   try {
     const VenueTimezone = await getVenueTimezoneModel();
     const keys = toResolve.map(v => v.trim().toLowerCase());
-    const dbEntries = await VenueTimezone.find({ venue: { $in: keys } }).lean() as any[];
-    const dbMap = new Map(dbEntries.map((e: any) => [e.venue, e]));
+    const dbEntries = await VenueTimezone.find({ venue: { $in: keys } }).lean() as VenueTimezoneDoc[];
+    const dbMap = new Map(dbEntries.map((e) => [e.venue, e]));
 
     const stillUnknown: string[] = [];
 
     for (const venue of toResolve) {
       const key = venue.trim().toLowerCase();
-      const dbEntry = dbMap.get(key) as any;
+      const dbEntry = dbMap.get(key);
       if (dbEntry?.timezone) {
         _memoryCache.set(key, dbEntry.timezone);
         result.set(venue, dbEntry.timezone);
 
         // Random re-verification
-        const age = Date.now() - new Date(dbEntry.lastVerifiedAt || dbEntry.createdAt).getTime();
+        const age = Date.now() - new Date(dbEntry.lastVerifiedAt || dbEntry.createdAt || Date.now()).getTime();
         if (age > REVERIFY_AFTER_DAYS * 24 * 60 * 60 * 1000 && Math.random() < REVERIFY_CHANCE) {
           reverifyInBackground(venue, key, dbEntry.timezone);
         }
@@ -640,6 +641,17 @@ export async function resolveVenueTimezonesBulk(venues: string[]): Promise<Map<s
 // ══════════════════════════════════════════════════════════════════════════════
 // GEOCODING: Nominatim → TimeAPI.io coordinate lookup
 // ══════════════════════════════════════════════════════════════════════════════
+
+interface VenueTimezoneDoc {
+  venue: string;
+  timezone: string;
+  source?: string;
+  lat?: number;
+  lon?: number;
+  geocodeQuery?: string;
+  lastVerifiedAt?: Date;
+  createdAt?: Date;
+}
 
 interface GeocodeResult {
   timezone: string;
