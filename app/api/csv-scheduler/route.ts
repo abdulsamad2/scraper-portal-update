@@ -258,6 +258,7 @@ interface SchedulerResponse {
     lowSeatAutoStop: boolean;
     lowSeatThreshold: number;
     minSeatFilter: number;
+    minSeatFilterMode: 'row' | 'section';
   };
   metrics?: {
     totalRuns: number;
@@ -299,9 +300,10 @@ export async function GET(request: Request) {
         lowSeatAutoStop: settings.lowSeatAutoStop ?? false,
         lowSeatThreshold: settings.lowSeatThreshold ?? 10,
         minSeatFilter: settings.minSeatFilter ?? 0,
+        minSeatFilterMode: settings.minSeatFilterMode ?? 'section',
       }
     };
-    
+
     if (includeMetrics) {
        const uptime = schedulerMetrics.startTime ? Date.now() - schedulerMetrics.startTime : 0;
        response.metrics = {
@@ -425,6 +427,7 @@ export async function POST(req: NextRequest) {
         lowSeatAutoStop?: boolean;
         lowSeatThreshold?: number;
         minSeatFilter?: number;
+        minSeatFilterMode?: 'row' | 'section';
       } = {};
       if (intervalMinutes !== undefined) updates.scheduleRateMinutes = intervalMinutes;
       if (uploadToSync !== undefined) updates.uploadToSync = uploadToSync;
@@ -432,6 +435,7 @@ export async function POST(req: NextRequest) {
       if (typeof body.lowSeatAutoStop === 'boolean') updates.lowSeatAutoStop = body.lowSeatAutoStop;
       if (typeof body.lowSeatThreshold === 'number') updates.lowSeatThreshold = Math.min(Math.max(body.lowSeatThreshold, 1), 1000);
       if (typeof body.minSeatFilter === 'number') updates.minSeatFilter = Math.min(Math.max(body.minSeatFilter, 0), 100);
+      if (body.minSeatFilterMode === 'row' || body.minSeatFilterMode === 'section') updates.minSeatFilterMode = body.minSeatFilterMode;
 
       await updateSchedulerSettings(updates);
 

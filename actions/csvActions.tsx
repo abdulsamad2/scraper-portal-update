@@ -508,13 +508,28 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
       let filteredRecords = await applyExclusionRules(records);
       console.log(`[CSV] Exclusion rules applied in ${Date.now() - exclStart}ms`);
 
-      // Apply min seat filter — exclude listings with quantity <= minSeatFilter
+      // Apply min seat filter (row-based or section-based depending on mode)
       const schedulerSettings = await SchedulerSettings.findOne({}).lean() as any;
       const minSeatFilter = schedulerSettings?.minSeatFilter ?? 0;
+      const minSeatFilterMode = schedulerSettings?.minSeatFilterMode ?? 'section';
       if (minSeatFilter > 0) {
         const beforeMinSeat = filteredRecords.length;
-        filteredRecords = filteredRecords.filter(r => r.quantity > minSeatFilter);
-        console.log(`[CSV] Min seat filter (<= ${minSeatFilter}): removed ${beforeMinSeat - filteredRecords.length} listings`);
+        if (minSeatFilterMode === 'section') {
+          // Section-based: sum all seats per event+section, exclude entire section if total <= threshold
+          const sectionTotals = new Map<string, number>();
+          for (const r of filteredRecords) {
+            const key = `${r.event_id}|${r.section}`;
+            sectionTotals.set(key, (sectionTotals.get(key) ?? 0) + r.quantity);
+          }
+          filteredRecords = filteredRecords.filter(r => {
+            const key = `${r.event_id}|${r.section}`;
+            return (sectionTotals.get(key) ?? 0) > minSeatFilter;
+          });
+        } else {
+          // Row-based: exclude individual listings where quantity <= threshold
+          filteredRecords = filteredRecords.filter(r => r.quantity > minSeatFilter);
+        }
+        console.log(`[CSV] Min seat filter [${minSeatFilterMode}] (<= ${minSeatFilter}): removed ${beforeMinSeat - filteredRecords.length} listings`);
       }
 
       if (filteredRecords.length === 0) {
@@ -828,6 +843,7 @@ export async function* generateInventoryCsvStream(
   // Load min seat filter setting
   const schedulerSettings = await SchedulerSettings.findOne({}).lean() as any;
   const minSeatFilter = schedulerSettings?.minSeatFilter ?? 0;
+  const minSeatFilterMode = schedulerSettings?.minSeatFilterMode ?? 'section';
 
   try {
     const activeEventQuery: Record<string, any> = { Skip_Scraping: false };
@@ -937,9 +953,21 @@ export async function* generateInventoryCsvStream(
           const processedBatch = await processBatch(enrichedDocs);
           const beforeExclusion = processedBatch.length;
           let filtered = await applyExclusionRules(processedBatch);
-          // Apply min seat filter
+          // Apply min seat filter (row-based or section-based)
           if (minSeatFilter > 0) {
-            filtered = filtered.filter(r => r.quantity > minSeatFilter);
+            if (minSeatFilterMode === 'section') {
+              const sectionTotals = new Map<string, number>();
+              for (const r of filtered) {
+                const key = `${r.event_id}|${r.section}`;
+                sectionTotals.set(key, (sectionTotals.get(key) ?? 0) + r.quantity);
+              }
+              filtered = filtered.filter(r => {
+                const key = `${r.event_id}|${r.section}`;
+                return (sectionTotals.get(key) ?? 0) > minSeatFilter;
+              });
+            } else {
+              filtered = filtered.filter(r => r.quantity > minSeatFilter);
+            }
           }
           totalExcluded += beforeExclusion - filtered.length;
 
