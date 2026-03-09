@@ -102,7 +102,7 @@ interface LastDeletedEvent {
 
 interface AutoDeleteInfo {
   isEnabled: boolean;
-  stopBeforeHours: number;
+  stopBeforeMinutes: number;
   scheduleIntervalMinutes: number;
   lastRunAt: string | null;
   totalEventsDeleted: number;
@@ -126,7 +126,7 @@ export default function DashboardPage() {
 
   const [autoDeleteInfo, setAutoDeleteInfo] = useState<AutoDeleteInfo>({
     isEnabled: false,
-    stopBeforeHours: 2,
+    stopBeforeMinutes: 120,
     scheduleIntervalMinutes: 15,
     lastRunAt: null,
     totalEventsDeleted: 0,
@@ -229,7 +229,7 @@ export default function DashboardPage() {
         const previewData = preview as { events?: AutoDeleteEvent[]; count?: number; totalEvents?: number; skippedCount?: number };
         setAutoDeleteInfo({
           isEnabled: settings?.isEnabled || false,
-          stopBeforeHours: settings?.stopBeforeHours || 2,
+          stopBeforeMinutes: settings?.stopBeforeMinutes || 120,
           scheduleIntervalMinutes: settings?.scheduleIntervalMinutes || 15,
           lastRunAt: settings?.lastRunAt || null,
           totalEventsDeleted: settings?.totalEventsDeleted || 0,
@@ -341,9 +341,9 @@ export default function DashboardPage() {
   };
 
   // Format relative time until auto-stop
-  const getTimeUntilDelete = (eventDateTime: string, stopBeforeHours: number) => {
+  const getTimeUntilDelete = (eventDateTime: string, stopBeforeMinutes: number) => {
     const eventTime = new Date(eventDateTime).getTime();
-    const deleteTime = eventTime - (stopBeforeHours * 60 * 60 * 1000);
+    const deleteTime = eventTime - (stopBeforeMinutes * 60 * 1000);
     const now = Date.now();
     const diff = deleteTime - now;
     
@@ -1056,7 +1056,7 @@ export default function DashboardPage() {
                 <h3 className="text-lg font-semibold text-slate-800">Upcoming Auto-Stop</h3>
                 <p className="text-sm text-slate-500">
                   Events that will be stopped{' '}
-                  <span className="font-medium text-orange-600">{autoDeleteInfo.stopBeforeHours}h</span>{' '}
+                  <span className="font-medium text-orange-600">{autoDeleteInfo.stopBeforeMinutes}min</span>{' '}
                   before event time (inventory cleared, event kept in DB)
                 </p>
               </div>
@@ -1130,7 +1130,7 @@ export default function DashboardPage() {
               </div>
               <p className="text-green-700 font-medium mb-1">All Clear!</p>
               <p className="text-slate-400 text-sm">
-                No events are within the {autoDeleteInfo.stopBeforeHours}-hour stop window right now.
+                No events are within the {autoDeleteInfo.stopBeforeMinutes}-minute stop window right now.
                 Checking every {autoDeleteInfo.scheduleIntervalMinutes} minutes.
               </p>
             </div>
@@ -1144,7 +1144,7 @@ export default function DashboardPage() {
                     {autoDeleteInfo.count} event{autoDeleteInfo.count !== 1 ? 's' : ''} will be stopped on the next run
                   </p>
                   <p className="text-xs text-amber-600 mt-0.5">
-                    These events are within {autoDeleteInfo.stopBeforeHours} hours of their event time. Scraping will be stopped and inventory cleared.
+                    These events are within {autoDeleteInfo.stopBeforeMinutes} minutes of their event time. Scraping will be stopped and inventory cleared.
                   </p>
                 </div>
               </div>
@@ -1194,7 +1194,7 @@ export default function DashboardPage() {
                         {event.isStopped ? 'Stopped' : 'Active'}
                       </span>
                       <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-700">
-                        {getTimeUntilDelete(event.dateTime, autoDeleteInfo.stopBeforeHours)}
+                        {getTimeUntilDelete(event.dateTime, autoDeleteInfo.stopBeforeMinutes)}
                       </span>
                     </div>
                   </div>

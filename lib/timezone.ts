@@ -790,13 +790,13 @@ function reverifyInBackground(venue: string, cacheKey: string, currentTz: string
 export async function shouldStopEventAsync(
   eventDateTime: Date,
   venue: string,
-  stopBeforeHours: number
+  stopBeforeMinutes: number
 ): Promise<{ shouldStop: boolean; timezone: string; localNow: Date; cutoff: Date } | null> {
   const timezone = await detectTimezoneFromVenueAsync(venue);
   if (!timezone) return null;
 
   const nowInEventTz = getCurrentTimeInTimezone(timezone);
-  const cutoffTime = new Date(nowInEventTz.getTime() + stopBeforeHours * 60 * 60 * 1000);
+  const cutoffTime = new Date(nowInEventTz.getTime() + stopBeforeMinutes * 60 * 1000);
 
   return {
     shouldStop: eventDateTime.getTime() <= cutoffTime.getTime(),
@@ -809,13 +809,13 @@ export async function shouldStopEventAsync(
 export function shouldStopEvent(
   eventDateTime: Date,
   venue: string,
-  stopBeforeHours: number
+  stopBeforeMinutes: number
 ): { shouldStop: boolean; timezone: string; localNow: Date; cutoff: Date } | null {
   const timezone = detectTimezoneFromVenue(venue);
   if (!timezone) return null;
 
   const nowInEventTz = getCurrentTimeInTimezone(timezone);
-  const cutoffTime = new Date(nowInEventTz.getTime() + stopBeforeHours * 60 * 60 * 1000);
+  const cutoffTime = new Date(nowInEventTz.getTime() + stopBeforeMinutes * 60 * 1000);
 
   return {
     shouldStop: eventDateTime.getTime() <= cutoffTime.getTime(),

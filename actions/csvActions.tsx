@@ -1258,7 +1258,7 @@ export async function getAutoDeleteSettings() {
     if (!settings) {
       const created = await AutoDeleteSettings.create({
         isEnabled: false,
-        stopBeforeHours: 2,
+        stopBeforeMinutes: 120,
         scheduleIntervalMinutes: 15
       });
       return JSON.parse(JSON.stringify(created));
@@ -1272,7 +1272,7 @@ export async function getAutoDeleteSettings() {
 
 export async function updateAutoDeleteSettings(updates: {
   isEnabled?: boolean;
-  stopBeforeHours?: number;
+  stopBeforeMinutes?: number;
   scheduleIntervalMinutes?: number;
   lastRunAt?: Date;
   nextRunAt?: Date;
@@ -1311,7 +1311,7 @@ export async function runAutoDelete() {
       };
     }
 
-    const stats = await deleteExpiredEvents(settings.stopBeforeHours, settings.lowSeatThreshold ?? 20);
+    const stats = await deleteExpiredEvents(settings.stopBeforeMinutes ?? 120, settings.lowSeatThreshold ?? 20);
     
     // Update settings with run statistics
     const intervalMinutes = settings.scheduleIntervalMinutes || 15;
@@ -1346,15 +1346,15 @@ export async function runAutoDelete() {
   }
 }
 
-export async function getAutoDeletePreview(stopBeforeHours?: number) {
+export async function getAutoDeletePreview(stopBeforeMinutes?: number) {
   try {
     const settings = await getAutoDeleteSettings();
-    const hours = stopBeforeHours ?? settings.stopBeforeHours;
-    const preview = await getExpiredEventsStats(hours);
-    
+    const minutes = stopBeforeMinutes ?? settings.stopBeforeMinutes ?? 120;
+    const preview = await getExpiredEventsStats(minutes);
+
     return {
       ...preview,
-      stopBeforeHours: hours
+      stopBeforeMinutes: minutes
     };
   } catch (error) {
     console.error('Error getting auto-delete preview:', error);

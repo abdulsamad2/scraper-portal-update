@@ -142,7 +142,7 @@ export async function GET() {
       success: true,
       settings: {
         isEnabled: settings.isEnabled,
-        stopBeforeHours: settings.stopBeforeHours,
+        stopBeforeMinutes: settings.stopBeforeMinutes,
         scheduleIntervalMinutes: settings.scheduleIntervalMinutes,
         lastRunAt: settings.lastRunAt,
         nextRunAt: settings.nextRunAt,
@@ -175,8 +175,8 @@ export async function POST(request: NextRequest) {
     }
 
     // Validate and sanitize numeric inputs
-    const stopBeforeHours = typeof body.stopBeforeHours === 'number'
-      ? Math.min(Math.max(body.stopBeforeHours, 0), 168) : undefined;
+    const stopBeforeMinutes = typeof body.stopBeforeMinutes === 'number'
+      ? Math.min(Math.max(body.stopBeforeMinutes, 0), 10080) : undefined;
     const scheduleIntervalMinutes = typeof body.scheduleIntervalMinutes === 'number'
       ? Math.min(Math.max(body.scheduleIntervalMinutes, 1), 1440) : undefined;
 
@@ -184,7 +184,7 @@ export async function POST(request: NextRequest) {
       case 'start':
         await updateAutoDeleteSettings({
           isEnabled: true,
-          stopBeforeHours: stopBeforeHours || 2,
+          stopBeforeMinutes: stopBeforeMinutes || 120,
           scheduleIntervalMinutes: scheduleIntervalMinutes || 15
         });
         await startAutoDeleteScheduler();
@@ -210,17 +210,17 @@ export async function POST(request: NextRequest) {
         return NextResponse.json(result);
 
       case 'preview':
-        const preview = await getAutoDeletePreview(stopBeforeHours);
+        const preview = await getAutoDeletePreview(stopBeforeMinutes);
         return NextResponse.json(preview);
 
       case 'update-settings': {
         // Whitelist allowed fields to prevent mass assignment
         const allowedUpdates: {
-          stopBeforeHours?: number;
+          stopBeforeMinutes?: number;
           scheduleIntervalMinutes?: number;
         } = {};
-        if (typeof body.stopBeforeHours === 'number' && body.stopBeforeHours >= 0 && body.stopBeforeHours <= 168) {
-          allowedUpdates.stopBeforeHours = body.stopBeforeHours;
+        if (typeof body.stopBeforeMinutes === 'number' && body.stopBeforeMinutes >= 0 && body.stopBeforeMinutes <= 10080) {
+          allowedUpdates.stopBeforeMinutes = body.stopBeforeMinutes;
         }
         if (typeof body.scheduleIntervalMinutes === 'number' && body.scheduleIntervalMinutes >= 1 && body.scheduleIntervalMinutes <= 1440) {
           allowedUpdates.scheduleIntervalMinutes = body.scheduleIntervalMinutes;

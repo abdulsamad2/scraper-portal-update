@@ -12,11 +12,11 @@
  *   1. Reads the Venue field (e.g., "Hard Rock Stadium", "Miami", "Dallas TX")
  *   2. Auto-detects the timezone from venue/city/state
  *   3. Gets the CURRENT local time in that timezone
- *   4. Compares: if (local_now + stopBeforeHours) >= event_time → stop & clear inventory
+ *   4. Compares: if (local_now + stopBeforeMinutes) >= event_time → stop & clear inventory
  *
- * Example: Event in Miami at 7pm, stopBeforeHours=2
+ * Example: Event in Miami at 7pm, stopBeforeMinutes=120
  *   - Current time in Miami (Eastern): 5:00pm
- *   - Cutoff = 5pm + 2h = 7pm
+ *   - Cutoff = 5pm + 120min = 7pm
  *   - Event(7pm) <= Cutoff(7pm) → STOP & CLEAR INVENTORY
  */
 
@@ -76,10 +76,10 @@ export interface AutoDeleteStats {
  * Stops scraping and clears inventory based on timezone-aware time comparison.
  * Events are kept in the database. Each event's timezone is auto-detected from its Venue field.
  *
- * @param stopBeforeHours - Hours before event time to stop (e.g., 2 = stop 2h before event)
+ * @param stopBeforeMinutes - Minutes before event time to stop (e.g., 120 = stop 2h before event)
  * @returns Promise<AutoDeleteStats>
  */
-export async function deleteExpiredEvents(stopBeforeHours: number = 2, lowSeatThreshold: number = 20): Promise<AutoDeleteStats> {
+export async function deleteExpiredEvents(stopBeforeMinutes: number = 120, lowSeatThreshold: number = 20): Promise<AutoDeleteStats> {
   await dbConnect();
   
   // Sync clock with external time API before checking events
@@ -117,7 +117,7 @@ export async function deleteExpiredEvents(stopBeforeHours: number = 2, lowSeatTh
     for (const event of allEvents) {
       const venue = event.Venue || '';
       // Use async version for live API fallback covering all US cities
-      const result = await shouldStopEventAsync(event.Event_DateTime, venue, stopBeforeHours);
+      const result = await shouldStopEventAsync(event.Event_DateTime, venue, stopBeforeMinutes);
       
       if (!result) {
         // Timezone could not be detected from venue — skip this event
@@ -237,7 +237,7 @@ export async function deleteExpiredEvents(stopBeforeHours: number = 2, lowSeatTh
     // Log successful stop & inventory clear with timezone details (including PKT)
     await createErrorLog({
       errorType: 'AUTO_DELETE_SUCCESS',
-      errorMessage: `Auto-stopped ${eventIds.length} events and cleared inventory (${stopBeforeHours}h before event time, timezone-aware)`,
+      errorMessage: `Auto-stopped ${eventIds.length} events and cleared inventory (${stopBeforeMinutes}min before event time, timezone-aware)`,
       stackTrace: '',
       metadata: { 
         deletedEvents: eventsToDelete.map(e => {
@@ -253,7 +253,7 @@ export async function deleteExpiredEvents(stopBeforeHours: number = 2, lowSeatTh
             pktTimeAtDeletion: formatAsPKT(nowAccurate),
           };
         }),
-        stopBeforeHours,
+        stopBeforeMinutes,
         clockOffset: getTimeSyncStatus().offsetSeconds,
       }
     });
@@ -267,7 +267,7 @@ export async function deleteExpiredEvents(stopBeforeHours: number = 2, lowSeatTh
       errorType: 'AUTO_DELETE_ERROR',
       errorMessage: errorMsg,
       stackTrace: (error as Error).stack || '',
-      metadata: { stopBeforeHours }
+      metadata: { stopBeforeMinutes }
     });
   }
 
@@ -380,10 +380,10 @@ export async function deleteExpiredEvents(stopBeforeHours: number = 2, lowSeatTh
  * Gets statistics about active events that would be stopped on the next run (dry run / preview).
  * Uses timezone-aware comparison per event.
  *
- * @param stopBeforeHours - Hours before event time to stop
+ * @param stopBeforeMinutes - Minutes before event time to stop
  * @returns Preview data with timezone info per event
  */
-export async function getExpiredEventsStats(stopBeforeHours: number = 2) {
+export async function getExpiredEventsStats(stopBeforeMinutes: number = 120) {
   await dbConnect();
   
   // Sync clock for accurate preview
@@ -402,7 +402,7 @@ export async function getExpiredEventsStats(stopBeforeHours: number = 2) {
       const venue = event.Venue || '';
       // Use async version for live API fallback covering all US cities
       const tz = await detectTimezoneFromVenueAsync(venue);
-      const result = tz ? await shouldStopEventAsync(event.Event_DateTime, venue, stopBeforeHours) : null;
+      const result = tz ? await shouldStopEventAsync(event.Event_DateTime, venue, stopBeforeMinutes) : null;
       
       if (!result || !tz) {
         // Timezone undetectable — show in preview as skipped
@@ -447,7 +447,7 @@ export async function getExpiredEventsStats(stopBeforeHours: number = 2) {
       count: eventsToDelete.length,
       totalEvents: allEvents.length,
       skippedCount: eventsSkipped.length,
-      stopBeforeHours,
+      stopBeforeMinutes,
       events: eventsToDelete,
       safeEvents: eventsSafe,
       skippedEvents: eventsSkipped,

@@ -38,7 +38,7 @@ interface CsvStatus {
 
 interface AutoDeleteSettings {
   isEnabled: boolean;
-  stopBeforeHours: number;
+  stopBeforeMinutes: number;
   scheduleIntervalMinutes: number;
   lastRunAt: string | null;
   nextRunAt: string | null;
@@ -64,7 +64,7 @@ interface AutoDeletePreview {
   skippedCount?: number;
   events: EventPreview[];
   skippedEvents?: EventPreview[];
-  stopBeforeHours: number;
+  stopBeforeMinutes: number;
 }
 
 interface LastRunStats {
@@ -154,7 +154,7 @@ const ExportCsvPage: React.FC = () => {
   // Auto-delete state
   const [autoDeleteSettings, setAutoDeleteSettings] = useState<AutoDeleteSettings>({
     isEnabled: false,
-    stopBeforeHours: 2,
+    stopBeforeMinutes: 120,
     scheduleIntervalMinutes: 15,
     lastRunAt: null,
     nextRunAt: null,
@@ -547,7 +547,7 @@ const ExportCsvPage: React.FC = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           action: enabled ? 'start' : 'stop',
-          stopBeforeHours: autoDeleteSettings.stopBeforeHours,
+          stopBeforeMinutes: autoDeleteSettings.stopBeforeMinutes,
           scheduleIntervalMinutes: autoDeleteSettings.scheduleIntervalMinutes
         })
       });
@@ -606,7 +606,7 @@ const ExportCsvPage: React.FC = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           action: 'preview',
-          stopBeforeHours: autoDeleteSettings.stopBeforeHours
+          stopBeforeMinutes: autoDeleteSettings.stopBeforeMinutes
         })
       });
 
@@ -1086,10 +1086,10 @@ const ExportCsvPage: React.FC = () => {
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-medium text-slate-600 mb-1">Stop Before (hours)</label>
-                    <input type="number" value={autoDeleteSettings.stopBeforeHours}
-                      onChange={(e) => setAutoDeleteSettings((prev: AutoDeleteSettings) => ({ ...prev, stopBeforeHours: parseInt(e.target.value) || 2 }))}
-                      min="0" max="168"
+                    <label className="block text-xs font-medium text-slate-600 mb-1">Stop Before (min)</label>
+                    <input type="number" value={autoDeleteSettings.stopBeforeMinutes}
+                      onChange={(e) => setAutoDeleteSettings((prev: AutoDeleteSettings) => ({ ...prev, stopBeforeMinutes: parseInt(e.target.value) || 120 }))}
+                      min="0" max="10080"
                       className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent" />
                   </div>
                   <div>
@@ -1102,7 +1102,7 @@ const ExportCsvPage: React.FC = () => {
                 </div>
 
                 <div className="flex flex-wrap gap-2">
-                  <button onClick={() => handleAutoDeleteSettingsUpdate({ stopBeforeHours: autoDeleteSettings.stopBeforeHours, scheduleIntervalMinutes: autoDeleteSettings.scheduleIntervalMinutes })}
+                  <button onClick={() => handleAutoDeleteSettingsUpdate({ stopBeforeMinutes: autoDeleteSettings.stopBeforeMinutes, scheduleIntervalMinutes: autoDeleteSettings.scheduleIntervalMinutes })}
                     disabled={isLoadingAutoDelete}
                     className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium py-2 px-4 rounded-lg transition-colors disabled:bg-slate-300">
                     <RefreshCw className="w-4 h-4" /> Save
@@ -1323,7 +1323,7 @@ const ExportCsvPage: React.FC = () => {
             <div className="p-6">
               <div className="p-4 bg-slate-50 rounded-xl mb-5">
                 <p className="text-sm text-slate-600 leading-relaxed">
-                  Stop before event: <strong className="text-slate-800">{autoDeletePreview.stopBeforeHours} hours</strong>
+                  Stop before event: <strong className="text-slate-800">{autoDeletePreview.stopBeforeMinutes} minutes</strong>
                   <br />
                   <span className="text-slate-500">Each event is checked against its venue&apos;s local timezone (auto-detected from venue/city/state).</span>
                   <br />
