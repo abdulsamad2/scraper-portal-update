@@ -69,12 +69,22 @@ interface ListedInfo {
   scrapingActive: boolean;
 }
 
+interface VSProd {
+  id: number;
+  localDate?: string;
+  utcDate?: string;
+  name?: string;
+  webPath?: string;
+  venue?: { name?: string; city?: string; state?: string };
+}
+
 interface ImportState {
   mappingId: string;
   percentage: number;
   status: 'idle' | 'importing' | 'success' | 'error';
   error?: string;
   vividSearchUrl?: string;
+  ambiguousProductions?: VSProd[];
 }
 
 interface Props {
@@ -336,14 +346,14 @@ export default function ImportEventsClient({
     } catch { return null; }
   };
 
-  interface VSProd { id: number; localDate?: string; utcDate?: string; venue?: { name?: string } }
+  interface MatchResult { match: VSProd | null; candidates: VSProd[] }
 
-  /** Match productions by date and venue (runs entirely in the browser) */
-  const matchProduction = (productions: VSProd[], eventDate: string, venueName: string): VSProd | null => {
+  /** Match productions by date, venue, and time (runs entirely in the browser) */
+  const matchProduction = (productions: VSProd[], eventDate: string, venueName: string, localTime?: string): MatchResult => {
     const targetDate = eventDate.slice(0, 10);
     const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
 
-    // Exact date match
+    // Step 1: Exact date match
     const dateMatches = productions.filter((p) => {
       if (p.localDate?.slice(0, 10) === targetDate) return true;
       if (p.utcDate) {
@@ -352,21 +362,46 @@ export default function ImportEventsClient({
       return false;
     });
 
-    if (dateMatches.length === 1) return dateMatches[0];
+    if (dateMatches.length === 1) return { match: dateMatches[0], candidates: [] };
+
     if (dateMatches.length > 1) {
-      const venueMatch = dateMatches.find((p) =>
+      // Step 2: Narrow by venue
+      const venueMatches = dateMatches.filter((p) =>
         norm(p.venue?.name || '').includes(norm(venueName)) ||
         norm(venueName).includes(norm(p.venue?.name || ''))
       );
-      return venueMatch || dateMatches[0];
+      if (venueMatches.length === 1) return { match: venueMatches[0], candidates: [] };
+
+      // Step 3: Narrow by time (if VS localDate includes time component, e.g. "2024-03-15T19:30:00")
+      const pool = venueMatches.length > 1 ? venueMatches : dateMatches;
+      if (localTime) {
+        const targetHour = localTime.slice(0, 2);
+        const targetMin  = localTime.slice(3, 5);
+        const timeMatches = pool.filter((p) => {
+          const prodDate = p.localDate || '';
+          if (prodDate.length <= 10) return false;
+          return prodDate.slice(11, 13) === targetHour && prodDate.slice(14, 16) === targetMin;
+        });
+        if (timeMatches.length === 1) return { match: timeMatches[0], candidates: [] };
+        const hourMatches = pool.filter((p) => {
+          const prodDate = p.localDate || '';
+          return prodDate.length > 10 && prodDate.slice(11, 13) === targetHour;
+        });
+        if (hourMatches.length === 1) return { match: hourMatches[0], candidates: [] };
+      }
+
+      // Still ambiguous — surface candidates for user to choose
+      return { match: null, candidates: pool };
     }
 
-    // Close date match (within 36h for timezone differences)
+    // Close date match (within 36h for timezone differences) — only when exactly 1 close match
     const targetTime = new Date(eventDate).getTime();
-    return productions.find((p) => {
+    const closeMatches = productions.filter((p) => {
       const pDate = new Date(p.utcDate || p.localDate || '');
       return Math.abs(pDate.getTime() - targetTime) < 36 * 60 * 60 * 1000;
-    }) || null;
+    });
+    if (closeMatches.length === 1) return { match: closeMatches[0], candidates: [] };
+    return { match: null, candidates: closeMatches.length > 1 ? closeMatches : [] };
   };
 
   const handleFetchVividId = async (event: TMEvent) => {
@@ -438,12 +473,20 @@ export default function ImportEventsClient({
         return;
       }
 
-      // Step 4: Match by date + venue (entirely client-side — no server call needed)
+      // Step 4: Match by date + venue + time (entirely client-side — no server call needed)
       const eventDate = event.localDate || event.dateTime;
-      const match = matchProduction(productions, eventDate, event.venue);
+      const { match, candidates } = matchProduction(productions, eventDate, event.venue, event.localTime);
 
       if (match) {
-        updateImportState(event.id, { mappingId: String(match.id), status: 'idle', error: undefined });
+        updateImportState(event.id, { mappingId: String(match.id), status: 'idle', error: undefined, ambiguousProductions: undefined });
+      } else if (candidates.length > 0) {
+        // Multiple possible matches — let the user choose
+        updateImportState(event.id, {
+          status: 'idle',
+          error: undefined,
+          ambiguousProductions: candidates,
+          vividSearchUrl: `https://www.vividseats.com/search?searchTerm=${encodeURIComponent(usedTerm)}`,
+        });
       } else {
         updateImportState(event.id, {
           status: 'idle',
@@ -500,7 +543,7 @@ export default function ImportEventsClient({
         URL: finalUrl, Event_ID: urlEventId, Event_Name: event.name,
         Event_DateTime: eventDateTime, Venue: event.venue, Zone: 'none',
         Available_Seats: 0, Skip_Scraping: true, inHandDate: inHandDt.toISOString(),
-        mapping_id: mappingId, priceIncreasePercentage: imports[event.id]?.percentage ?? 25,
+        mapping_id: mappingId, priceIncreasePercentage: imports[event.id]?.percentage ?? 30,
         standardMarkupAdjustment: 0, resaleMarkupAdjustment: 0,
       };
       const result = await createEvent(eventData as Parameters<typeof createEvent>[0]);
@@ -517,7 +560,7 @@ export default function ImportEventsClient({
   /* ---- Event Card ---- */
   const renderEventCard = (event: TMEvent, index: number) => {
     const listed = listedEvents[event.id];
-    const impState = imports[event.id] || { mappingId: '', percentage: 25, status: 'idle' };
+    const impState = imports[event.id] || { mappingId: '', percentage: 30, status: 'idle' };
     const isImported = impState.status === 'success';
     const isImporting = impState.status === 'importing';
     const isListed = !!listed;
@@ -749,8 +792,8 @@ export default function ImportEventsClient({
                         type="number"
                         min={0}
                         max={999}
-                        placeholder="25"
-                        value={impState.percentage ?? 25}
+                        placeholder="30"
+                        value={impState.percentage ?? 30}
                         onChange={e => updateImportState(event.id, { percentage: Number(e.target.value) || 0, status: 'idle', error: undefined })}
                         disabled={isImporting}
                         className="w-full px-3 py-2 pr-8 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent disabled:bg-slate-50 transition-all"
@@ -764,6 +807,58 @@ export default function ImportEventsClient({
                     {isImporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Import className="w-3.5 h-3.5" />}
                     {isImporting ? 'Importing...' : 'Import Event'}
                   </button>
+                  {/* Ambiguous: multiple VS events on same date — let user pick */}
+                  {impState.ambiguousProductions && impState.ambiguousProductions.length > 0 && (
+                    <div className="border border-amber-200 rounded-lg bg-amber-50 p-2.5 space-y-1.5">
+                      <p className="text-[11px] font-semibold text-amber-700 flex items-center gap-1">
+                        <AlertTriangle className="w-3 h-3 shrink-0" />
+                        {impState.ambiguousProductions.length} events found on same date — select one:
+                      </p>
+                      <div className="space-y-1">
+                        {impState.ambiguousProductions.map((prod) => {
+                          const rawDate = prod.localDate || prod.utcDate || '';
+                          const dateStr = rawDate.length > 10
+                            ? rawDate.slice(0, 16).replace('T', ' ')
+                            : rawDate.slice(0, 10);
+                          const venueLine = [prod.venue?.name, prod.venue?.city, prod.venue?.state].filter(Boolean).join(', ');
+                          const vsUrl = prod.webPath
+                            ? `https://www.vividseats.com${prod.webPath}`
+                            : `https://www.vividseats.com/search?productionId=${prod.id}`;
+                          return (
+                            <div key={prod.id} className="flex items-center gap-2 bg-white border border-amber-100 rounded-md px-2.5 py-2">
+                              <div className="flex-1 min-w-0">
+                                {venueLine && <p className="text-xs font-semibold text-slate-700 truncate">{venueLine}</p>}
+                                {prod.name && <p className="text-[10px] text-slate-500 truncate">{prod.name}</p>}
+                                <p className="text-[10px] text-slate-400 font-mono">{dateStr} · ID {prod.id}</p>
+                              </div>
+                              <a href={vsUrl} target="_blank" rel="noopener noreferrer"
+                                className="p-1 text-blue-400 hover:text-blue-600 shrink-0" title="Open on Vivid Seats">
+                                <ExternalLink className="w-3 h-3" />
+                              </a>
+                              <button
+                                onClick={() => updateImportState(event.id, {
+                                  mappingId: String(prod.id),
+                                  status: 'idle',
+                                  error: undefined,
+                                  ambiguousProductions: undefined,
+                                })}
+                                className="text-[11px] font-semibold px-2.5 py-1 bg-purple-600 text-white rounded-md hover:bg-purple-700 transition-colors shrink-0"
+                              >
+                                Select
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      {impState.vividSearchUrl && (
+                        <a href={impState.vividSearchUrl} target="_blank" rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-[10px] text-slate-400 hover:text-slate-600 underline underline-offset-2">
+                          <ExternalLink className="w-2.5 h-2.5" /> Search manually on Vivid Seats
+                        </a>
+                      )}
+                    </div>
+                  )}
+
                   {impState.status === 'error' && impState.error && (
                     <div className="text-xs text-red-600 space-y-1">
                       <p className="flex items-start gap-1"><X className="w-3 h-3 shrink-0 mt-0.5" /> {impState.error.replace(/\. Search manually on VividSeats$/, '')}</p>
