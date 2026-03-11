@@ -48,7 +48,12 @@ export async function GET(request: Request) {
       URL: 1,
       Available_Seats: 1,
       Skip_Scraping: 1,
-      Last_Updated: 1
+      Last_Updated: 1,
+      priceIncreasePercentage: 1,
+      standardMarkupAdjustment: 1,
+      resaleMarkupAdjustment: 1,
+      includeStandardSeats: 1,
+      includeResaleSeats: 1,
     })
     .sort({ Event_DateTime: -1 })
     .skip(skip)

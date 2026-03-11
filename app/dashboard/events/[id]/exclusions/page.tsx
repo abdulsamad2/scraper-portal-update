@@ -1,5 +1,6 @@
 import React from 'react';
 import Link from 'next/link';
+import { ChevronLeft } from 'lucide-react';
 import { getEventById } from '@/actions/eventActions';
 import ExclusionManagementPage from '../../../../../components/ExclusionManagementPage';
 
@@ -32,29 +33,29 @@ export default async function EventExclusionPage({ params }: ExclusionPageProps)
 
   if (!event || event.error) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
-        <div className="max-w-6xl mx-auto p-8">
-          <div className="text-center py-12">
-            <h1 className="text-2xl font-bold text-slate-800 mb-4">Event Not Found</h1>
-            <p className="text-slate-600 mb-6">
-              The event you&apos;re looking for doesn&apos;t exist or has been removed.
-            </p>
-            <Link 
-              href="/dashboard/events"
-              className="inline-flex items-center space-x-2 bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors"
-            >
-              <span>Back to Events</span>
-            </Link>
-          </div>
+      <div className="space-y-5">
+        <Link
+          href="/dashboard/events"
+          className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-500 hover:text-blue-600 transition-colors"
+        >
+          <ChevronLeft size={15} />
+          Events
+        </Link>
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-12 text-center">
+          <h1 className="text-xl font-bold text-slate-800 mb-2">Event Not Found</h1>
+          <p className="text-slate-500 text-sm">The event you&apos;re looking for doesn&apos;t exist or has been removed.</p>
         </div>
       </div>
     );
   }
 
   return (
-    <ExclusionManagementPage 
-      eventId={event._id} 
+    <ExclusionManagementPage
+      eventId={event._id}
       eventName={event.Event_Name}
+      eventUrl={event.URL}
+      eventVenue={event.Venue}
+      eventDate={event.Event_DateTime}
     />
   );
 }

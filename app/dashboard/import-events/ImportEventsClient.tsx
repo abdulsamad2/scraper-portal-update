@@ -476,12 +476,13 @@ export default function ImportEventsClient({
     }
     updateImportState(event.id, { status: 'importing', error: undefined });
     try {
-      let eventDateTime = event.dateTime;
-      if (!eventDateTime && event.localDate) eventDateTime = `${event.localDate}T${event.localTime || '19:00:00'}`;
-      const eventDt = new Date(eventDateTime);
-      const today = new Date(); today.setHours(0, 0, 0, 0);
+      const eventDateTime = event.dateTime;
+      // Use UTC methods throughout to avoid server timezone shifting the date
+      const [y, mo, d] = eventDateTime.slice(0, 10).split('-').map(Number);
+      const eventDt = new Date(Date.UTC(y, mo - 1, d));
+      const today = new Date(); today.setUTCHours(0, 0, 0, 0);
       const inHandDt = new Date(eventDt);
-      if (eventDt > today) inHandDt.setDate(inHandDt.getDate() - 1);
+      if (eventDt > today) inHandDt.setUTCDate(inHandDt.getUTCDate() - 1);
 
       let finalUrl = event.url;
       let urlEventId = extractUrlEventId(event.url);

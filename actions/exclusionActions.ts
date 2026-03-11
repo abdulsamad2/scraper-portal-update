@@ -17,6 +17,20 @@ export interface ExclusionRulesData {
   isActive: boolean;
 }
 
+export interface OutlierListing {
+  section: string;
+  row: string;
+  listPrice: number;
+  quantity: number;
+  sectionAvgPrice: number; // average price within this section
+  deviationPct: number;    // % below section average (positive = below)
+}
+
+export interface OutlierAnalysis {
+  standard: { avgPrice: number; totalListings: number; outliers: OutlierListing[] };
+  resale:   { avgPrice: number; totalListings: number; outliers: OutlierListing[] };
+}
+
 // Get exclusion rules for an event
 export async function getExclusionRules(eventId: string) {
   try {
@@ -141,6 +155,83 @@ export async function getEventSectionsAndRows(eventId: string) {
       metadata: { eventId }
     });
     return { success: false, error: 'Failed to fetch sections and rows' };
+  }
+}
+
+// Get outlier listings (prices below average) for an event, split by standard vs resale
+export async function getOutlierAnalysis(eventId: string): Promise<{ success: boolean; data?: OutlierAnalysis; error?: string }> {
+  try {
+    await dbConnect();
+    const { Event } = await import('../models/eventModel');
+    const event = await Event.findById(eventId).lean();
+    if (!event || Array.isArray(event) || !('mapping_id' in event)) {
+      return { success: false, error: 'Event not found' };
+    }
+
+    const mappingId = (event as any).mapping_id;
+
+    // Aggregate all listings grouped by section+row+splitType with their listPrice
+    const rows = await ConsecutiveGroup.aggregate([
+      { $match: { mapping_id: mappingId } },
+      {
+        $project: {
+          section: '$inventory.section',
+          row: '$inventory.row',
+          listPrice: '$inventory.listPrice',
+          quantity: '$inventory.quantity',
+          isStandard: { $eq: ['$inventory.splitType', 'NEVERLEAVEONE'] },
+        }
+      }
+    ]);
+
+    const plain: Array<{ section: string; row: string; listPrice: number; quantity: number; isStandard: boolean }> =
+      JSON.parse(JSON.stringify(rows));
+
+    const standard = plain.filter(r => r.isStandard);
+    const resale   = plain.filter(r => !r.isStandard);
+
+    function analyze(listings: typeof standard): OutlierAnalysis['standard'] {
+      if (!listings.length) return { avgPrice: 0, totalListings: 0, outliers: [] };
+
+      // Global avg (for display only)
+      const globalAvg = Math.round((listings.reduce((s, r) => s + r.listPrice, 0) / listings.length) * 100) / 100;
+
+      // Group by section and compute per-section average
+      const bySection = new Map<string, typeof standard>();
+      for (const r of listings) {
+        if (!bySection.has(r.section)) bySection.set(r.section, []);
+        bySection.get(r.section)!.push(r);
+      }
+
+      const outliers: OutlierListing[] = [];
+      for (const sectionListings of bySection.values()) {
+        const sectionAvg = Math.round(
+          (sectionListings.reduce((s, r) => s + r.listPrice, 0) / sectionListings.length) * 100
+        ) / 100;
+        for (const r of sectionListings) {
+          if (r.listPrice < sectionAvg) {
+            outliers.push({
+              section: r.section,
+              row: r.row,
+              listPrice: r.listPrice,
+              quantity: r.quantity,
+              sectionAvgPrice: sectionAvg,
+              deviationPct: Math.round(((sectionAvg - r.listPrice) / sectionAvg) * 100),
+            });
+          }
+        }
+      }
+      outliers.sort((a, b) => b.deviationPct - a.deviationPct);
+      return { avgPrice: globalAvg, totalListings: listings.length, outliers };
+    }
+
+    return {
+      success: true,
+      data: { standard: analyze(standard), resale: analyze(resale) },
+    };
+  } catch (error) {
+    console.error('Error computing outlier analysis:', error);
+    return { success: false, error: 'Failed to compute outlier analysis' };
   }
 }
 

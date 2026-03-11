@@ -239,7 +239,7 @@ export async function getEventCounts(): Promise<{ total: number; active: number 
  */
 export async function getInventoryCountsByType(
   mappingIds: string[]
-): Promise<Record<string, { standard: number; resale: number; standardRows: number; resaleRows: number }>> {
+): Promise<Record<string, { standard: number; resale: number; standardRows: number; resaleRows: number; standardAvgCost: number | null; resaleAvgCost: number | null }>> {
   if (!mappingIds.length) return {};
   await dbConnect();
   try {
@@ -250,46 +250,48 @@ export async function getInventoryCountsByType(
           _id: '$mapping_id',
           standard: {
             $sum: {
-              $cond: [
-                { $eq: ['$inventory.splitType', 'NEVERLEAVEONE'] },
-                '$inventory.quantity',
-                0,
-              ],
+              $cond: [{ $eq: ['$inventory.splitType', 'NEVERLEAVEONE'] }, '$inventory.quantity', 0],
             },
           },
           resale: {
             $sum: {
-              $cond: [
-                { $ne: ['$inventory.splitType', 'NEVERLEAVEONE'] },
-                '$inventory.quantity',
-                0,
-              ],
+              $cond: [{ $ne: ['$inventory.splitType', 'NEVERLEAVEONE'] }, '$inventory.quantity', 0],
             },
           },
           standardRows: {
             $sum: {
-              $cond: [
-                { $eq: ['$inventory.splitType', 'NEVERLEAVEONE'] },
-                1,
-                0,
-              ],
+              $cond: [{ $eq: ['$inventory.splitType', 'NEVERLEAVEONE'] }, 1, 0],
             },
           },
           resaleRows: {
             $sum: {
-              $cond: [
-                { $ne: ['$inventory.splitType', 'NEVERLEAVEONE'] },
-                1,
-                0,
-              ],
+              $cond: [{ $ne: ['$inventory.splitType', 'NEVERLEAVEONE'] }, 1, 0],
+            },
+          },
+          // $avg ignores nulls, so non-matching rows become null and are excluded
+          standardAvgCost: {
+            $avg: {
+              $cond: [{ $eq: ['$inventory.splitType', 'NEVERLEAVEONE'] }, '$inventory.cost', null],
+            },
+          },
+          resaleAvgCost: {
+            $avg: {
+              $cond: [{ $ne: ['$inventory.splitType', 'NEVERLEAVEONE'] }, '$inventory.cost', null],
             },
           },
         },
       },
     ]);
-    const map: Record<string, { standard: number; resale: number; standardRows: number; resaleRows: number }> = {};
+    const map: Record<string, { standard: number; resale: number; standardRows: number; resaleRows: number; standardAvgCost: number | null; resaleAvgCost: number | null }> = {};
     for (const row of result) {
-      map[row._id] = { standard: row.standard, resale: row.resale, standardRows: row.standardRows, resaleRows: row.resaleRows };
+      map[row._id] = {
+        standard: row.standard,
+        resale: row.resale,
+        standardRows: row.standardRows,
+        resaleRows: row.resaleRows,
+        standardAvgCost: row.standardAvgCost != null ? Math.round(row.standardAvgCost * 100) / 100 : null,
+        resaleAvgCost: row.resaleAvgCost != null ? Math.round(row.resaleAvgCost * 100) / 100 : null,
+      };
     }
     return map;
   } catch (error) {
