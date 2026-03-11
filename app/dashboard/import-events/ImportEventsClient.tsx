@@ -520,14 +520,19 @@ export default function ImportEventsClient({
     updateImportState(event.id, { status: 'importing', error: undefined });
     try {
       // Use the venue's local date/time from the TM Discovery API — this is what
-      // appears on the ticket and what Vivid Seats also uses.  Never use the UTC
-      // dateTime here because a 7 PM EST event would have a UTC date of the next day.
+      // appears on the ticket and what Vivid Seats also uses.
       const localDate = event.localDate || event.dateTime.slice(0, 10);
       const localTime = event.localTime || event.dateTime.slice(11, 19) || '00:00:00';
-      const eventDateTime = `${localDate}T${localTime}`;
 
-      // Parse inHandDate from localDate components via UTC to avoid server TZ shifting the date
+      // Build a Date using Date.UTC() with the local time components so that
+      // MongoDB/JS never applies a server-timezone offset.  The result is stored
+      // as "2024-11-15T19:00:00.000Z" — the display layer reads it back with
+      // timeZone:'UTC' so the user always sees the original venue local time.
       const [y, mo, d] = localDate.split('-').map(Number);
+      const [h, min, sec] = localTime.split(':').map(Number);
+      const eventDateTime = new Date(Date.UTC(y, mo - 1, d, h || 0, min || 0, sec || 0));
+
+      // inHandDate: day before the event (also UTC-safe)
       const eventDt = new Date(Date.UTC(y, mo - 1, d));
       const today = new Date(); today.setUTCHours(0, 0, 0, 0);
       const inHandDt = new Date(eventDt);
