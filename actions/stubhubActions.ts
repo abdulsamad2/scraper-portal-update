@@ -302,24 +302,10 @@ export async function getEventComparison(eventId: string) {
       const sectionHigh   = sh ? sh.sectionHigh : null;
       const priceDiff     = sectionLowest !== null ? +(ourPrice - sectionLowest).toFixed(2) : null;
 
-      // Per-row floor price — matches scraper's STUBHUB_MIN_MARKUP_PCT (default 20%)
-      const minMarkupPct = parseFloat(process.env.STUBHUB_MIN_MARKUP_PCT || '20');
-      const ourFloorPrice = ourCost > 0 ? +(ourCost * (1 + minMarkupPct / 100)).toFixed(2) : null;
-      const atFloor = ourFloorPrice !== null && sectionLowest !== null && ourPrice <= ourFloorPrice * 1.01 && ourPrice > sectionLowest;
-
-      // Per-row pricing status derived from this row's actual price
-      let pricingStatus: ComparisonRow['pricingStatus'] = 'NO_COMPETITION';
-      if (sectionLowest !== null) {
-        if (atFloor) {
-          pricingStatus = 'AT_FLOOR';
-        } else if (ourPrice < sectionLowest * 0.95) {
-          pricingStatus = 'BELOW_MARKET';
-        } else if (ourPrice <= sectionLowest * 1.05) {
-          pricingStatus = 'COMPETITIVE';
-        } else {
-          pricingStatus = 'OVERPRICED';
-        }
-      }
+      // Use scraper's pre-computed values directly
+      const ourFloorPrice = sh?.ourFloorPrice ?? null;
+      const atFloor = sh?.atFloor ?? false;
+      const pricingStatus = sh?.pricingStatus ?? 'NO_COMPETITION';
 
       let pricePosition: number | null = null;
       if (sectionLowest !== null && sectionHigh !== null && sectionHigh > sectionLowest) {
