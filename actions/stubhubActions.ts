@@ -368,9 +368,11 @@ export async function getEventComparison(eventId: string) {
     };
 
     // Fetch sales analytics in parallel
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const SaleModel = StubHubSale as any;
     const [salesSummary, salesVelocity] = await Promise.all([
-      StubHubSale.getEventSalesSummary(eventId).catch(() => null),
-      StubHubSale.getSalesVelocity(eventId, 24).catch(() => []),
+      SaleModel.getEventSalesSummary(eventId).catch(() => null),
+      SaleModel.getSalesVelocity(eventId, 24).catch(() => []),
     ]);
 
     return {
