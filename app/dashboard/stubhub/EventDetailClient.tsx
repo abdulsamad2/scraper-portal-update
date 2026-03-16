@@ -95,9 +95,9 @@ function PriceBar({ position }: { position: number }) {
 
 /* ─── Badge pill ─── */
 function BadgePill({ achievable, name }: { achievable: boolean; name?: string | null }) {
-  return achievable
-    ? <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-yellow-100 text-yellow-700 border border-yellow-200"><Award className="w-2.5 h-2.5" /> {name || 'Badge'}</span>
-    : <span className="text-[10px] text-gray-300">-</span>;
+  if (!achievable) return <span className="text-[10px] text-gray-300">-</span>;
+  if (name) return <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-yellow-100 text-yellow-700 border border-yellow-200"><Award className="w-2.5 h-2.5" /> {name}</span>;
+  return <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-100 text-emerald-700 border border-emerald-200"><CheckCircle className="w-2.5 h-2.5" /> Yes</span>;
 }
 
 /* ═══════════════════════════════════════════════════════

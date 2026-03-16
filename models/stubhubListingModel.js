@@ -85,6 +85,8 @@ const stubhubListingSchema = new mongoose.Schema(
     sectionLowest: Number,       // Cheapest price in this section right now
     sectionAvg: Number,          // Average price across section
     sectionCount: Number,        // Total competing listings in section
+    priceRank: { type: Number, default: null },
+    bestValueRank: { type: Number, default: null },
     dealZonePrice: Number,       // Price threshold needed for Best Deal badge
 
     // === Our inventory comparison (pre-computed by scraper) ===
