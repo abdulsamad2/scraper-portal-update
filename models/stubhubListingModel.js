@@ -98,7 +98,8 @@ const stubhubListingSchema = new mongoose.Schema(
     // === Pricing decision fields (pre-computed by scraper) ===
     badgeAchievable: { type: Boolean, default: false }, // Can we get Best Deal badge at suggestedPrice?
     atFloor: { type: Boolean, default: false },         // Is market so cheap our floor is protecting us?
-    achievedRank: Number,        // Rank our suggestedPrice would achieve in section
+    ourCurrentRank: { type: Number, default: null },   // Current rank of our price in section
+    suggestedRank: { type: Number, default: null },    // Rank our suggestedPrice would achieve
     pricingStatus: {
       type: String,
       enum: ['OVERPRICED', 'AT_FLOOR', 'COMPETITIVE', 'BELOW_MARKET', 'NO_COMPETITION', 'NO_OUR_INVENTORY'],

@@ -305,8 +305,8 @@ function ComparisonTable({ rows }: { rows: ComparisonRow[] }) {
                           <BadgePill achievable={r.badgeAchievable} name={r.badgeName} />
                         </td>
                         <td className="px-4 py-2.5 text-sm text-center border-r border-gray-100/60">
-                          {r.achievedRank !== null
-                            ? <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${r.achievedRank === 1 ? 'bg-emerald-100 text-emerald-700' : r.achievedRank <= 3 ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>#{r.achievedRank}</span>
+                          {r.suggestedRank !== null
+                            ? <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${r.suggestedRank === 1 ? 'bg-emerald-100 text-emerald-700' : r.suggestedRank <= 3 ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>#{r.suggestedRank}</span>
                             : <span className="text-gray-300">-</span>}
                         </td>
                         <td className="px-4 py-2.5 text-sm text-right font-bold border-r border-gray-100/60">
