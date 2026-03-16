@@ -110,8 +110,4 @@ const eventSchema = new mongoose.Schema(
 eventSchema.index({ URL: 1 }, { unique: true });
 eventSchema.index({ Last_Updated: 1 }); // Index for CSV generation filtering
 
-// Delete cached model so schema changes are picked up in dev hot-reload
-if (mongoose.models.Event) {
-  delete mongoose.models.Event;
-}
-export const Event = mongoose.model("Event", eventSchema);
+export const Event = mongoose.models.Event || mongoose.model("Event", eventSchema);

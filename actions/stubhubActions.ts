@@ -252,9 +252,11 @@ export async function getEventComparison(eventId: string) {
     }
 
     const shBySection = new Map<string, ShSection>();
+    const normalizeSection = (s: string) => s.trim().toUpperCase().replace(/\s+/g, ' ');
 
     for (const l of stubhubListings) {
-      const existing = shBySection.get(l.section);
+      const key = normalizeSection(l.section);
+      const existing = shBySection.get(key);
       const entry: ShSection = {
         sectionLowest:   l.sectionLowest   ?? existing?.sectionLowest   ?? null,
         sectionAvg:      l.sectionAvg      ?? existing?.sectionAvg      ?? null,
@@ -270,12 +272,12 @@ export async function getEventComparison(eventId: string) {
         suggestedPrice:  l.suggestedPrice  ?? existing?.suggestedPrice  ?? null,
         lastScraped:     l.lastScraped ? new Date(l.lastScraped).toISOString() : existing?.lastScraped ?? null,
       };
-      shBySection.set(l.section, entry);
+      shBySection.set(key, entry);
     }
 
     // Build one row per consecutive group
     const rows: ComparisonRow[] = ourInventory.map(inv => {
-      const sh = shBySection.get(inv.section) ?? null;
+      const sh = shBySection.get(normalizeSection(inv.section)) ?? null;
       const ourPrice = inv.inventory.listPrice;
       const ourCost  = inv.inventory.cost;
       const margin   = ourCost > 0 ? +((ourPrice - ourCost) / ourCost * 100).toFixed(1) : null;

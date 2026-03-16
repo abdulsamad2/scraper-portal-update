@@ -3,7 +3,6 @@ import { revalidatePath } from 'next/cache';
 import dbConnect from '@/lib/dbConnect';
 import { Order } from '@/models/orderModel';
 import { Event } from '@/models/eventModel';
-import { requireAuth } from '@/lib/auth';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -114,9 +113,6 @@ async function findEventUrl(o: Record<string, any>): Promise<{ eventId: any; url
 }
 
 export async function GET(request: NextRequest) {
-  const authError = await requireAuth(request);
-  if (authError) return authError;
-
   const t0 = Date.now();
 
   // Prevent overlapping syncs from flooding the external API
