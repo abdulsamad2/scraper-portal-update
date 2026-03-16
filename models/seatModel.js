@@ -221,6 +221,18 @@ const consecutiveGroupSchema = new mongoose.Schema(
         type: Date,
         default: null,
       },
+      stubhubSectionAvg: {
+        type: Number,
+        default: null,
+      },
+      stubhubDealZonePrice: {
+        type: Number,
+        default: null,
+      },
+      stubhubBadgeAchievable: {
+        type: Boolean,
+        default: false,
+      },
     },
   },
   {

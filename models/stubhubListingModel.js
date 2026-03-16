@@ -1,5 +1,16 @@
 import mongoose from "mongoose";
 
+function normalizeSection(name) {
+  if (!name) return "";
+  let n = name.toUpperCase().trim();
+  n = n.replace(/^(SEC(?:TION|T)?)\s+/i, "");
+  n = n.replace(/^FLR\s+L$/i, "LEFT")
+       .replace(/^FLR\s+R$/i, "RIGHT")
+       .replace(/^FLR\s+C$/i, "CENTER")
+       .replace(/^FLOOR$/i, "CENTER");
+  return n;
+}
+
 const stubhubListingSchema = new mongoose.Schema(
   {
     // Link to our internal event
@@ -48,12 +59,25 @@ const stubhubListingSchema = new mongoose.Schema(
     dealScore: Number,           // e.g. 8.89
     seatQualityScore: Number,    // e.g. 3.71
     starRating: Number,          // 1-5
+    formattedDealScore: String,
     sectionRank: Number,         // This listing's rank in section (1 = cheapest)
     badgeEligible: Boolean,      // Does THIS listing have Best Deal badge?
+
+    // StubHub badge flags
+    showBestDealTag: { type: Boolean, default: false },
+    showCheapestTag: { type: Boolean, default: false },
+    showBestViewTag: { type: Boolean, default: false },
+    isMostAffordable: { type: Boolean, default: false },
+    isCheapestListing: { type: Boolean, default: false },
+    isBetterValueListing: { type: Boolean, default: false },
+    bestPriceTagMessage: String,
+    hiddenGemMessage: String,
+    badgeName: String,            // "Best Deal", "Cheapest", "Best View", etc.
 
     // Seller info
     sellerNotes: String,
     savingsMessage: String,      // "This ticket is 49% cheaper..."
+    savingsPercent: Number,
     activeSince: String,         // "59 days ago"
     listingCreatedAt: Date,
 
@@ -75,7 +99,7 @@ const stubhubListingSchema = new mongoose.Schema(
     achievedRank: Number,        // Rank our suggestedPrice would achieve in section
     pricingStatus: {
       type: String,
-      enum: ['OVERPRICED', 'AT_FLOOR', 'COMPETITIVE', 'NO_COMPETITION', 'NO_OUR_INVENTORY'],
+      enum: ['OVERPRICED', 'AT_FLOOR', 'COMPETITIVE', 'BELOW_MARKET', 'NO_COMPETITION', 'NO_OUR_INVENTORY'],
       default: 'NO_COMPETITION',
     },
 
@@ -153,11 +177,11 @@ stubhubListingSchema.statics.getPriceComparison = async function (eventId) {
 
   const ourMap = new Map();
   ourInventory.forEach((item) => {
-    ourMap.set(`${item._id.section}|${item._id.row}`, item);
+    ourMap.set(`${normalizeSection(item._id.section)}|${item._id.row}`, item);
   });
 
   return stubhubSections.map((sh) => {
-    const ours = ourMap.get(`${sh.section}|${sh.row}`);
+    const ours = ourMap.get(`${normalizeSection(sh.section)}|${sh.row}`);
     const suggestedPrice = Math.max(0, sh.lowestPrice - 3);
 
     return {

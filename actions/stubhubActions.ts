@@ -195,7 +195,7 @@ export interface ComparisonRow {
   badgeAchievable: boolean;
   atFloor: boolean;
   achievedRank: number | null;
-  pricingStatus: 'OVERPRICED' | 'AT_FLOOR' | 'COMPETITIVE' | 'NO_COMPETITION' | 'NO_OUR_INVENTORY';
+  pricingStatus: 'OVERPRICED' | 'AT_FLOOR' | 'COMPETITIVE' | 'BELOW_MARKET' | 'NO_COMPETITION' | 'NO_OUR_INVENTORY';
   ourFloorPrice: number | null;
   suggestedPrice: number | null;
   // Derived
@@ -252,7 +252,16 @@ export async function getEventComparison(eventId: string) {
     }
 
     const shBySection = new Map<string, ShSection>();
-    const normalizeSection = (s: string) => s.trim().toUpperCase().replace(/\s+/g, ' ');
+    const normalizeSection = (s: string): string => {
+      if (!s) return '';
+      let n = s.toUpperCase().trim();
+      n = n.replace(/^(SEC(?:TION|T)?)\s+/i, '');
+      n = n.replace(/^FLR\s+L$/i, 'LEFT')
+           .replace(/^FLR\s+R$/i, 'RIGHT')
+           .replace(/^FLR\s+C$/i, 'CENTER')
+           .replace(/^FLOOR$/i, 'CENTER');
+      return n;
+    };
 
     for (const l of stubhubListings) {
       const key = normalizeSection(l.section);
