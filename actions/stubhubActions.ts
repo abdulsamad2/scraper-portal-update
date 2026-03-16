@@ -344,7 +344,8 @@ export async function getEventComparison(eventId: string) {
         sectionCount:    sh?.sectionCount    ?? 0,
         ticketClassName: sh?.ticketClassName ?? '',
         dealZonePrice:   sh?.dealZonePrice   ?? null,
-        badgeAchievable: sh?.badgeAchievable ?? false,
+        badgeAchievable: (sh?.badgeAchievable ?? false) &&
+          (sh?.suggestedPrice == null || ourFloorPrice == null || sh.suggestedPrice >= ourFloorPrice * 0.97),
         badgeName:       sh?.badgeName       ?? null,
         atFloor,
         currentRank:     sh?.currentRank     ?? null,
