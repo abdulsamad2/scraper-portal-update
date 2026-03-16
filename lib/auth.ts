@@ -1,5 +1,5 @@
 import { SignJWT, jwtVerify, type JWTPayload } from 'jose';
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { timingSafeEqual } from 'crypto';
 
 const COOKIE_NAME = 'session_token';
@@ -137,6 +137,18 @@ export function getExpiredCookieConfig() {
     path: '/',
     maxAge: 0,
   };
+}
+
+/**
+ * Require authentication on an API route.
+ * Returns a 401 NextResponse if not authenticated, or null if OK.
+ */
+export async function requireAuth(request: NextRequest): Promise<NextResponse | null> {
+  const role = await getSessionRole(request);
+  if (!role) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+  return null;
 }
 
 export { COOKIE_NAME };

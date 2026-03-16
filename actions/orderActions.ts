@@ -41,7 +41,7 @@ export async function getPaginatedOrders(
     query.status = filters.status;
   }
   if (filters.marketplace && filters.marketplace !== 'all') {
-    query.marketplace = filters.marketplace;
+    query.marketplace = { $regex: `^${filters.marketplace.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, $options: 'i' };
   }
   if (filters.acknowledged === 'true') {
     query.acknowledged = true;
@@ -70,6 +70,10 @@ export async function getPaginatedOrders(
 
   const skip = (page - 1) * limit;
   const sort: Record<string, 1 | -1> = { [sortBy]: sortOrder === 'asc' ? 1 : -1 };
+  // Add secondary sort by order_date when primary sort is not a date field
+  if (sortBy !== 'order_date' && sortBy !== 'occurs_at') {
+    sort.order_date = -1;
+  }
 
   const [orders, total, unacknowledgedCount] = await Promise.all([
     Order.find(query).sort(sort).skip(skip).limit(limit).lean(),

@@ -2,12 +2,16 @@ import { NextRequest, NextResponse } from 'next/server';
 import { revalidatePath } from 'next/cache';
 import dbConnect from '@/lib/dbConnect';
 import { Order } from '@/models/orderModel';
+import { requireAuth } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
 const SYNC_API_BASE = 'https://app.sync.automatiq.com/sync/api';
 
 export async function POST(req: NextRequest) {
+  const authError = await requireAuth(req);
+  if (authError) return authError;
+
   try {
     const apiToken = process.env.SYNC_API_TOKEN;
     const companyId = process.env.SYNC_COMPANY_ID;

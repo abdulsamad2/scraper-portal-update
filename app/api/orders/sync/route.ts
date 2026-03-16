@@ -3,6 +3,7 @@ import { revalidatePath } from 'next/cache';
 import dbConnect from '@/lib/dbConnect';
 import { Order } from '@/models/orderModel';
 import { Event } from '@/models/eventModel';
+import { requireAuth } from '@/lib/auth';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -11,6 +12,9 @@ export const revalidate = 0;
 
 const SYNC_API_BASE = 'https://app.sync.automatiq.com/sync/api';
 const CONFIRMED_STATUSES = new Set(['confirmed', 'confirmed_delay', 'delivery_problem']);
+
+// Concurrency lock — prevent overlapping syncs from flooding the external API
+let _syncInProgress = false;
 
 function escapeRegex(str: string) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -110,7 +114,17 @@ async function findEventUrl(o: Record<string, any>): Promise<{ eventId: any; url
 }
 
 export async function GET(request: NextRequest) {
+  const authError = await requireAuth(request);
+  if (authError) return authError;
+
   const t0 = Date.now();
+
+  // Prevent overlapping syncs from flooding the external API
+  if (_syncInProgress) {
+    return NextResponse.json({ synced: 0, newOrderIds: [], newOrders: [], skipped: 'sync already in progress' });
+  }
+  _syncInProgress = true;
+
   try {
     const apiToken = process.env.SYNC_API_TOKEN;
     const companyId = process.env.SYNC_COMPANY_ID;
@@ -411,9 +425,12 @@ export async function GET(request: NextRequest) {
     }
     console.log(`[sync] cross-ref (${unmatchedOrders.length} checked): ${Date.now() - t0}ms`);
 
-    // Fetch seat data from /transfers for NEW orders (with retries) + backfill existing orders
+    // Fetch seat data from /transfers for NEW orders + backfill existing orders
+    // Uses batched approach (3 concurrent) to avoid flooding external API
     {
-      // New orders: retry up to 3 times with backoff to ensure we get seat data
+      const SEAT_BATCH_SIZE = 3; // Max concurrent API calls for seats
+
+      // New orders: retry up to 2 times with backoff
       const newOrdersForSeats = newOrderIds.length > 0
         ? await Order.find(
             { order_id: { $in: newOrderIds }, sync_id: { $ne: null } },
@@ -422,21 +439,30 @@ export async function GET(request: NextRequest) {
         : [];
 
       if (newOrdersForSeats.length > 0) {
-        const seatResults = await Promise.all(
-          newOrdersForSeats.map(async (o: any) => {
-            const range = await fetchSeatRange(o.sync_id, companyId, apiToken, 3);
-            if (range) {
-              await Order.updateOne({ _id: o._id }, { $set: { low_seat: range.low_seat, high_seat: range.high_seat } });
-            }
-            return range ? 1 : 0;
-          })
-        );
-        const seatUpdated = seatResults.reduce((a: number, b) => a + b, 0 as number);
-        console.log(`[sync] new order seats: ${seatUpdated}/${newOrdersForSeats.length} fetched (3 retries each)`);
+        let seatUpdated = 0;
+        for (let i = 0; i < newOrdersForSeats.length; i += SEAT_BATCH_SIZE) {
+          const batch = newOrdersForSeats.slice(i, i + SEAT_BATCH_SIZE);
+          const results = await Promise.all(
+            batch.map(async (o: any) => {
+              const range = await fetchSeatRange(o.sync_id, companyId, apiToken, 2);
+              if (range) {
+                await Order.updateOne({ _id: o._id }, { $set: { low_seat: range.low_seat, high_seat: range.high_seat } });
+                return 1;
+              }
+              return 0;
+            })
+          );
+          seatUpdated += (results as number[]).reduce((a, b) => a + b, 0);
+          // Throttle between batches
+          if (i + SEAT_BATCH_SIZE < newOrdersForSeats.length) {
+            await new Promise(r => setTimeout(r, 300));
+          }
+        }
+        console.log(`[sync] new order seats: ${seatUpdated}/${newOrdersForSeats.length} fetched`);
       }
 
-      // Existing orders missing seat data: backfill a batch each sync cycle (no retries, keep it fast)
-      const SEAT_BACKFILL_LIMIT = 10;
+      // Existing orders missing seat data: backfill a small batch each sync cycle (no retries)
+      const SEAT_BACKFILL_LIMIT = 5;
       const missingSeatsOrders = await Order.find(
         {
           sync_id: { $ne: null },
@@ -447,16 +473,24 @@ export async function GET(request: NextRequest) {
       ).sort({ order_date: -1 }).limit(SEAT_BACKFILL_LIMIT).lean();
 
       if (missingSeatsOrders.length > 0) {
-        const backfillResults = await Promise.all(
-          missingSeatsOrders.map(async (o: any) => {
-            const range = await fetchSeatRange(o.sync_id, companyId, apiToken);
-            if (range) {
-              await Order.updateOne({ _id: o._id }, { $set: { low_seat: range.low_seat, high_seat: range.high_seat } });
-            }
-            return range ? 1 : 0;
-          })
-        );
-        const backfilled = backfillResults.reduce((a: number, b) => a + b, 0 as number);
+        let backfilled = 0;
+        for (let i = 0; i < missingSeatsOrders.length; i += SEAT_BATCH_SIZE) {
+          const batch = missingSeatsOrders.slice(i, i + SEAT_BATCH_SIZE);
+          const results = await Promise.all(
+            batch.map(async (o: any) => {
+              const range = await fetchSeatRange(o.sync_id, companyId, apiToken);
+              if (range) {
+                await Order.updateOne({ _id: o._id }, { $set: { low_seat: range.low_seat, high_seat: range.high_seat } });
+                return 1;
+              }
+              return 0;
+            })
+          );
+          backfilled += (results as number[]).reduce((a, b) => a + b, 0);
+          if (i + SEAT_BATCH_SIZE < missingSeatsOrders.length) {
+            await new Promise(r => setTimeout(r, 200));
+          }
+        }
         if (backfilled > 0) console.log(`[sync] seat backfill: ${backfilled}/${missingSeatsOrders.length} orders updated`);
       }
     }
@@ -520,5 +554,7 @@ export async function GET(request: NextRequest) {
       { error: (error as Error).message || 'Sync failed' },
       { status: 500 }
     );
+  } finally {
+    _syncInProgress = false;
   }
 }

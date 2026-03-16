@@ -40,6 +40,8 @@ interface AutoDeleteSettings {
   isEnabled: boolean;
   stopBeforeMinutes: number;
   scheduleIntervalMinutes: number;
+  postEventDeleteEnabled: boolean;
+  postEventDeleteHoursAfter: number;
   lastRunAt: string | null;
   nextRunAt: string | null;
   totalRuns: number;
@@ -156,6 +158,8 @@ const ExportCsvPage: React.FC = () => {
     isEnabled: false,
     stopBeforeMinutes: 120,
     scheduleIntervalMinutes: 15,
+    postEventDeleteEnabled: false,
+    postEventDeleteHoursAfter: 12,
     lastRunAt: null,
     nextRunAt: null,
     totalRuns: 0,
@@ -1101,8 +1105,37 @@ const ExportCsvPage: React.FC = () => {
                   </div>
                 </div>
 
+                {/* Post-event hard delete */}
+                <div className="border border-red-200 rounded-lg p-3 bg-red-50/50 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs font-semibold text-red-800">Auto-Delete Old Events</p>
+                      <p className="text-[11px] text-red-600 mt-0.5">Permanently removes events + inventory + StubHub data after event passes</p>
+                    </div>
+                    <button
+                      onClick={() => setAutoDeleteSettings((prev: AutoDeleteSettings) => ({ ...prev, postEventDeleteEnabled: !prev.postEventDeleteEnabled }))}
+                      className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${autoDeleteSettings.postEventDeleteEnabled ? 'bg-red-500' : 'bg-slate-300'}`}
+                    >
+                      <span className={`inline-block h-4 w-4 rounded-full bg-white shadow ring-0 transition-transform ${autoDeleteSettings.postEventDeleteEnabled ? 'translate-x-4' : 'translate-x-0'}`} />
+                    </button>
+                  </div>
+                  {autoDeleteSettings.postEventDeleteEnabled && (
+                    <div className="flex items-center gap-2">
+                      <label className="text-xs text-red-700 whitespace-nowrap">Delete</label>
+                      <input
+                        type="number"
+                        value={autoDeleteSettings.postEventDeleteHoursAfter}
+                        onChange={(e) => setAutoDeleteSettings((prev: AutoDeleteSettings) => ({ ...prev, postEventDeleteHoursAfter: parseInt(e.target.value) || 12 }))}
+                        min="1" max="168"
+                        className="w-20 px-2 py-1 border border-red-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-red-400 bg-white"
+                      />
+                      <label className="text-xs text-red-700">hours after event date</label>
+                    </div>
+                  )}
+                </div>
+
                 <div className="flex flex-wrap gap-2">
-                  <button onClick={() => handleAutoDeleteSettingsUpdate({ stopBeforeMinutes: autoDeleteSettings.stopBeforeMinutes, scheduleIntervalMinutes: autoDeleteSettings.scheduleIntervalMinutes })}
+                  <button onClick={() => handleAutoDeleteSettingsUpdate({ stopBeforeMinutes: autoDeleteSettings.stopBeforeMinutes, scheduleIntervalMinutes: autoDeleteSettings.scheduleIntervalMinutes, postEventDeleteEnabled: autoDeleteSettings.postEventDeleteEnabled, postEventDeleteHoursAfter: autoDeleteSettings.postEventDeleteHoursAfter })}
                     disabled={isLoadingAutoDelete}
                     className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium py-2 px-4 rounded-lg transition-colors disabled:bg-slate-300">
                     <RefreshCw className="w-4 h-4" /> Save

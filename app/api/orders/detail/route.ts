@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import dbConnect from '@/lib/dbConnect';
 import { Order } from '@/models/orderModel';
+import { requireAuth } from '@/lib/auth';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -92,46 +93,93 @@ function buildDetail(order: any, source: 'api' | 'db') {
 }
 
 export async function GET(req: NextRequest) {
+  const authError = await requireAuth(req);
+  if (authError) return authError;
+
   try {
     const syncId = req.nextUrl.searchParams.get('syncId');
-    if (!syncId) {
-      return NextResponse.json({ error: 'syncId required' }, { status: 400 });
+    if (!syncId || !/^\d+$/.test(syncId)) {
+      return NextResponse.json({ error: 'Valid numeric syncId required' }, { status: 400 });
     }
 
     await dbConnect();
 
+    // Single DB query upfront — fetch all detail fields so we can skip external API when possible
+    const existingOrder = await Order.findOne(
+      { sync_id: Number(syncId) },
+      {
+        order_id: 1, low_seat: 1, high_seat: 1,
+        customer_name: 1, customer_email: 1, customer_phone: 1,
+        transfer_to_email: 1, public_notes: 1, reason: 1,
+        in_hand_date: 1, inventory_tags: 1, last_seen_internal_notes: 1,
+      }
+    ).lean() as any;
+
+    const hasSeatsInDb = existingOrder?.low_seat != null && existingOrder?.high_seat != null;
+    // If we already have customer detail data in DB, serve directly — no external API needed
+    const hasDetailInDb = existingOrder && (existingOrder.customer_name || existingOrder.customer_email);
+
     const apiToken = process.env.SYNC_API_TOKEN;
     const companyId = process.env.SYNC_COMPANY_ID;
 
-    // Try fetching from SeatScouts API first
+    // Fast path: if DB already has detail + seats, serve immediately
+    if (hasDetailInDb && hasSeatsInDb) {
+      const detail = buildDetail(existingOrder, 'db');
+      return NextResponse.json({ success: true, detail, source: 'db' });
+    }
+
+    // Slow path: fetch from external API for missing data
     if (apiToken && companyId) {
       try {
-        // Fetch order detail and transfer seat data in parallel
-        const [orderRes, seatRange] = await Promise.all([
-          fetch(`${SYNC_API_BASE}/orders/${syncId}`, {
-            headers: {
-              'X-Company-Id': companyId,
-              'X-Api-Token': apiToken,
-              'Accept': 'application/json',
-            },
-            cache: 'no-store',
-            signal: AbortSignal.timeout(15000),
-          }),
-          fetchSeatRange(syncId, companyId, apiToken),
-        ]);
+        // Build parallel requests — only fetch what's missing
+        const promises: [Promise<Response | null>, Promise<{ low_seat: number; high_seat: number } | null>] = [
+          // Skip order API if we already have detail data
+          hasDetailInDb
+            ? Promise.resolve(null)
+            : fetch(`${SYNC_API_BASE}/orders/${syncId}`, {
+                headers: {
+                  'X-Company-Id': companyId,
+                  'X-Api-Token': apiToken,
+                  'Accept': 'application/json',
+                },
+                cache: 'no-store',
+                signal: AbortSignal.timeout(15000),
+              }),
+          // Skip seat API if we already have seats
+          hasSeatsInDb
+            ? Promise.resolve({ low_seat: existingOrder.low_seat, high_seat: existingOrder.high_seat })
+            : fetchSeatRange(syncId, companyId, apiToken),
+        ];
 
-        if (orderRes.ok) {
+        const [orderRes, seatRange] = await Promise.all(promises);
+
+        // Build detail from API response or DB fallback
+        let detail;
+        let orderId: string | null = null;
+
+        if (orderRes && orderRes.ok) {
           const order = await orderRes.json();
           if (order && order.order_id) {
-            const detail = buildDetail(order, 'api');
+            detail = buildDetail(order, 'api');
+            orderId = order.order_id;
+          }
+        }
 
-            // Override seat data from transfers endpoint (more reliable)
-            if (seatRange) {
-              detail.low_seat = seatRange.low_seat;
-              detail.high_seat = seatRange.high_seat;
-            }
+        // Fall back to DB if API didn't return usable data
+        if (!detail && existingOrder) {
+          detail = buildDetail(existingOrder, 'db');
+          orderId = existingOrder.order_id;
+        }
 
-            // Update local DB with fetched fields
+        if (detail) {
+          // Override seat data from transfers endpoint (more reliable)
+          if (seatRange) {
+            detail.low_seat = seatRange.low_seat;
+            detail.high_seat = seatRange.high_seat;
+          }
+
+          // Persist any newly fetched data back to DB
+          if (orderId) {
             const updateFields: Record<string, unknown> = {};
             if (detail.customer_name) updateFields.customer_name = detail.customer_name;
             if (detail.customer_email) updateFields.customer_email = detail.customer_email;
@@ -146,37 +194,20 @@ export async function GET(req: NextRequest) {
             if (detail.high_seat != null) updateFields.high_seat = detail.high_seat;
 
             if (Object.keys(updateFields).length > 0) {
-              await Order.updateOne({ order_id: order.order_id }, { $set: updateFields });
+              Order.updateOne({ order_id: orderId }, { $set: updateFields }).catch(() => {});
             }
-
-            return NextResponse.json({ success: true, detail });
           }
-        }
 
-        // Order API failed (404 etc.) — still try to use seat data from transfers + DB fallback
-        const dbOrder = await Order.findOne({ sync_id: Number(syncId) }).lean() as any;
-        if (dbOrder) {
-          const detail = buildDetail(dbOrder, 'db');
-          if (seatRange) {
-            detail.low_seat = seatRange.low_seat;
-            detail.high_seat = seatRange.high_seat;
-            // Save seat data to DB
-            await Order.updateOne(
-              { sync_id: Number(syncId) },
-              { $set: { low_seat: seatRange.low_seat, high_seat: seatRange.high_seat } }
-            );
-          }
-          return NextResponse.json({ success: true, detail, source: 'db' });
+          return NextResponse.json({ success: true, detail });
         }
       } catch {
         // API timeout or network error — fall through to DB
       }
     }
 
-    // Fallback: serve from local DB only
-    const dbOrder = await Order.findOne({ sync_id: Number(syncId) }).lean() as any;
-    if (dbOrder) {
-      const detail = buildDetail(dbOrder, 'db');
+    // Fallback: serve from existing DB data (already fetched above)
+    if (existingOrder) {
+      const detail = buildDetail(existingOrder, 'db');
       return NextResponse.json({ success: true, detail, source: 'db' });
     }
 

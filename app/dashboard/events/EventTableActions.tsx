@@ -5,11 +5,13 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Edit, Trash2, Play, Square, Eye, MoreHorizontal, X } from 'lucide-react';
 import { updateEvent, deleteEvent } from '@/actions/eventActions';
+import { toggleStubHubEnabled } from '@/actions/stubhubActions';
 
 interface EventTableActionsProps {
   eventId: string;
   eventName: string;
   isScrapingActive: boolean;
+  stubhubEnabled?: boolean;
   compact?: boolean;
 }
 
@@ -17,6 +19,7 @@ export default function EventTableActions({
   eventId,
   eventName,
   isScrapingActive,
+  stubhubEnabled: initialStubhubEnabled = true,
   compact = false
 }: EventTableActionsProps) {
   const router = useRouter();
@@ -25,8 +28,20 @@ export default function EventTableActions({
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const [stubhubOn, setStubhubOn] = useState(initialStubhubEnabled);
+  const [isTogglingStubhub, startStubhubTransition] = useTransition();
 
   useEffect(() => setMounted(true), []);
+
+  // Toggle StubHub scraping
+  const handleToggleStubHub = () => {
+    const next = !stubhubOn;
+    setStubhubOn(next);
+    startStubhubTransition(async () => {
+      const res = await toggleStubHubEnabled(eventId, next);
+      if (!res.success) setStubhubOn(!next);
+    });
+  };
 
   // Toggle scraping status
   const handleToggleScraping = async () => {
@@ -85,6 +100,15 @@ export default function EventTableActions({
             </Link>
             
             <button
+              onClick={handleToggleStubHub}
+              disabled={isTogglingStubhub}
+              className={`flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-gray-50 disabled:opacity-50 ${stubhubOn ? 'text-emerald-700' : 'text-red-600'}`}
+            >
+              <span className={`w-2 h-2 rounded-full ${stubhubOn ? 'bg-emerald-500' : 'bg-red-400'}`} />
+              SH {stubhubOn ? 'On' : 'Off'}
+            </button>
+
+            <button
               onClick={handleToggleScraping}
               disabled={isToggling}
               className="flex items-center gap-2 w-full px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
@@ -98,7 +122,7 @@ export default function EventTableActions({
               )}
               {isToggling ? 'Processing...' : isScrapingActive ? 'Stop' : 'Start'}
             </button>
-            
+
             <button
               onClick={() => {
                 setShowDeleteConfirm(true);

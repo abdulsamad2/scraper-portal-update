@@ -30,6 +30,7 @@ interface EventData {
   resaleRows?: number;
   includeStandardSeats?: boolean;
   includeResaleSeats?: boolean;
+  stubhubEnabled?: boolean;
 }
 
 interface ResolvedSearchParams {
@@ -407,10 +408,11 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                       </td>
                       
                       <td className="px-3 py-2 whitespace-nowrap text-right">
-                        <EventTableActions 
+                        <EventTableActions
                           eventId={event._id}
                           eventName={event.Event_Name}
                           isScrapingActive={isActive}
+                          stubhubEnabled={event.stubhubEnabled ?? true}
                         />
                       </td>
                     </tr>
@@ -453,10 +455,11 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                           <StatusBadge isActive={isActive} />
                         </div>
                       </div>
-                      <EventTableActions 
+                      <EventTableActions
                         eventId={event._id}
                         eventName={event.Event_Name}
                         isScrapingActive={isActive}
+                        stubhubEnabled={event.stubhubEnabled ?? true}
                         compact
                       />
                     </div>

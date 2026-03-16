@@ -23,6 +23,7 @@
 import dbConnect from '@/lib/dbConnect';
 import { Event } from '@/models/eventModel';
 import { ConsecutiveGroup } from '@/models/seatModel';
+import { StubHubListing } from '@/models/stubhubListingModel';
 import { deleteConsecutiveGroupsByEventIds } from './seatActions';
 import { createErrorLog } from './errorLogActions';
 import { shouldStopEvent, shouldStopEventAsync, detectTimezoneFromVenue, detectTimezoneFromVenueAsync, getTimezoneAbbr, getCurrentTimeInTimezone } from '@/lib/timezone';
@@ -482,4 +483,106 @@ export async function getLastDeletedEvents() {
     console.error('Error getting last deleted events:', error);
     return [];
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// POST-EVENT CLEANUP: Permanently delete events + all related data
+// once they are N hours past their event date.
+//
+// Logic: Event_DateTime + hoursAfter < now  →  delete
+// Example: event 16 Aug 8pm, hoursAfter=12  →  deleted 17 Aug 8am
+// ═══════════════════════════════════════════════════════════════════
+
+export interface PostEventDeleteStats {
+  checked: number;
+  deleted: number;
+  eventIds: string[];
+  errors: string[];
+}
+
+export async function deletePassedEvents(hoursAfter: number = 12): Promise<PostEventDeleteStats> {
+  await dbConnect();
+
+  const stats: PostEventDeleteStats = { checked: 0, deleted: 0, eventIds: [], errors: [] };
+
+  try {
+    const cutoff = new Date(Date.now() - hoursAfter * 60 * 60 * 1000);
+
+    const expiredEvents = await Event.find({ Event_DateTime: { $lt: cutoff } })
+      .select('_id Event_ID Event_Name Event_DateTime Venue')
+      .lean();
+
+    stats.checked = expiredEvents.length;
+
+    if (expiredEvents.length === 0) {
+      console.log(`Post-event cleanup: No events older than ${hoursAfter}h found`);
+      return stats;
+    }
+
+    const mongoIds = expiredEvents.map(e => String(e._id));
+    const eventIds = expiredEvents.map(e => e.Event_ID as string);
+
+    console.log(`Post-event cleanup: Deleting ${expiredEvents.length} events older than ${hoursAfter}h:`);
+    for (const e of expiredEvents) {
+      console.log(`  → ${e.Event_ID} | ${e.Event_Name} | ${new Date(e.Event_DateTime as Date).toISOString()}`);
+    }
+
+    // 1. Delete ConsecutiveGroups (inventory)
+    try {
+      const cgResult = await ConsecutiveGroup.deleteMany({ eventId: { $in: eventIds } });
+      console.log(`Post-event cleanup: Deleted ${cgResult.deletedCount} consecutive groups`);
+    } catch (err) {
+      const msg = `Failed to delete consecutive groups: ${(err as Error).message}`;
+      stats.errors.push(msg);
+      console.error('Post-event cleanup:', msg);
+    }
+
+    // 2. Delete StubHub listings
+    try {
+      const shResult = await StubHubListing.deleteMany({ eventId: { $in: eventIds } });
+      console.log(`Post-event cleanup: Deleted ${shResult.deletedCount} StubHub listings`);
+    } catch (err) {
+      const msg = `Failed to delete StubHub listings: ${(err as Error).message}`;
+      stats.errors.push(msg);
+      console.error('Post-event cleanup:', msg);
+    }
+
+    // 3. Delete Event documents (last — so retries are safe if above fail)
+    try {
+      const evResult = await Event.deleteMany({ _id: { $in: mongoIds } });
+      stats.deleted = evResult.deletedCount;
+      stats.eventIds = eventIds;
+      console.log(`Post-event cleanup: Deleted ${evResult.deletedCount} event documents`);
+    } catch (err) {
+      const msg = `Failed to delete events: ${(err as Error).message}`;
+      stats.errors.push(msg);
+      console.error('Post-event cleanup:', msg);
+    }
+
+    await createErrorLog({
+      errorType: 'POST_EVENT_DELETE_SUCCESS',
+      errorMessage: `Post-event cleanup: Permanently deleted ${stats.deleted} events (${hoursAfter}h after event date)`,
+      stackTrace: '',
+      metadata: {
+        deletedEvents: expiredEvents.map(e => ({
+          id: e.Event_ID, name: e.Event_Name, dateTime: e.Event_DateTime, venue: e.Venue
+        })),
+        hoursAfter,
+        cutoff: cutoff.toISOString(),
+      },
+    });
+
+  } catch (error) {
+    const msg = `Post-event cleanup failed: ${(error as Error).message}`;
+    stats.errors.push(msg);
+    console.error('Post-event cleanup error:', error);
+    await createErrorLog({
+      errorType: 'POST_EVENT_DELETE_ERROR',
+      errorMessage: msg,
+      stackTrace: (error as Error).stack || '',
+      metadata: { hoursAfter },
+    });
+  }
+
+  return stats;
 }

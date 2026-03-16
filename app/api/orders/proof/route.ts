@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireAuth } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
 const SYNC_API_BASE = 'https://app.sync.automatiq.com/sync/api';
 
 export async function POST(req: NextRequest) {
+  const authError = await requireAuth(req);
+  if (authError) return authError;
+
   try {
     const formData = await req.formData();
     const syncId = formData.get('syncId') as string;

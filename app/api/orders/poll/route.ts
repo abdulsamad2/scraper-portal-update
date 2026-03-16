@@ -1,6 +1,7 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import dbConnect from '@/lib/dbConnect';
 import { Order } from '@/models/orderModel';
+import { requireAuth } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -8,7 +9,10 @@ export const dynamic = 'force-dynamic';
  * Ultra-lightweight poll endpoint — single aggregate query.
  * No external API calls, no writes. Returns counts + a hash for change detection.
  */
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const authError = await requireAuth(req);
+  if (authError) return authError;
+
   try {
     await dbConnect();
 

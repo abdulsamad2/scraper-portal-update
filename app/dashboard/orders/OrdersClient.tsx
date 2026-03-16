@@ -1013,6 +1013,7 @@ export default function OrdersClient({
                   <option value="occurs_at">Event Date</option>
                   <option value="total">Total Price</option>
                   <option value="event_name">Event Name</option>
+                  <option value="marketplace">Marketplace</option>
                 </select>
               </div>
               <div className="flex items-end">

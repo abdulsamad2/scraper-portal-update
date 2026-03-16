@@ -82,6 +82,9 @@ orderSchema.index({ event_name: 1 });
 orderSchema.index({ status: 1, order_date: -1 });
 orderSchema.index({ hasIssue: 1, status: 1 });
 orderSchema.index({ confirmedAt: 1, order_date: 1, status: 1 });
+orderSchema.index({ marketplace: 1 });
+orderSchema.index({ sync_id: 1 });
+orderSchema.index({ marketplace: 1, order_date: -1 });
 
 export const Order =
   mongoose.models.Order || mongoose.model("Order", orderSchema);

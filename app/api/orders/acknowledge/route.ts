@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { revalidatePath } from 'next/cache';
 import { acknowledgeOrder, unacknowledgeOrder, acknowledgeAllPending } from '@/actions/orderActions';
+import { requireAuth } from '@/lib/auth';
 
 export async function POST(req: NextRequest) {
+  const authError = await requireAuth(req);
+  if (authError) return authError;
+
   try {
     const body = await req.json();
 

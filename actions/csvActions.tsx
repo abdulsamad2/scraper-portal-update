@@ -8,7 +8,7 @@ import { AutoDeleteSettings } from '../models/autoDeleteModel';
 import { ExclusionRules } from '../models/exclusionRulesModel';
 import SyncService from '../lib/syncService';
 import { createErrorLog } from './errorLogActions';
-import { deleteExpiredEvents, getExpiredEventsStats } from './autoDeleteActions';
+import { deleteExpiredEvents, getExpiredEventsStats, deletePassedEvents } from './autoDeleteActions';
 import { deleteConsecutiveGroupsByEventIds } from './seatActions';
 import { detectTimezoneFromVenueAsync, resolveVenueTimezonesBulk, getCurrentTimeInTimezone } from '../lib/timezone';
 import { PipelineStage } from 'mongoose';
@@ -374,12 +374,13 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
       // running $lookup per chunk. This is the single biggest speed-up.
       const eventDetailsMap = new Map<string, {
         url: string; stdAdj: number; resaleAdj: number; defaultPct: number;
-        includeStandard: boolean; includeResale: boolean;
+        includeStandard: boolean; includeResale: boolean; useStubHubPricing: boolean;
       }>();
       const eventDocs = await Event.find(
         { mapping_id: { $in: eventMappingIds } },
         { mapping_id: 1, URL: 1, standardMarkupAdjustment: 1, resaleMarkupAdjustment: 1,
-          priceIncreasePercentage: 1, includeStandardSeats: 1, includeResaleSeats: 1 }
+          priceIncreasePercentage: 1, includeStandardSeats: 1, includeResaleSeats: 1,
+          useStubHubPricing: 1 }
       ).lean();
       for (const ev of eventDocs) {
         eventDetailsMap.set(ev.mapping_id, {
@@ -389,6 +390,7 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
           defaultPct: ev.priceIncreasePercentage ?? 0,
           includeStandard: ev.includeStandardSeats !== false,
           includeResale: ev.includeResaleSeats !== false,
+          useStubHubPricing: ev.useStubHubPricing === true,
         });
       }
       console.log(`[CSV] Pre-fetched details for ${eventDetailsMap.size} events`);
@@ -424,6 +426,10 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
       'inventory.zone': 1,
       'inventory.shown_quantity': 1,
       'inventory.passthrough': 1,
+      'inventory.stubhubSuggestedPrice': 1,
+      'inventory.stubhubSectionLowest': 1,
+      'inventory.stubhubAtFloor': 1,
+      'inventory.stubhubPricedAt': 1,
     };
 
       // Chunked processing: first get all _ids (fast, no $lookup), then process
@@ -480,6 +486,7 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
             doc.event_std_adj = evData?.stdAdj ?? 0;
             doc.event_resale_adj = evData?.resaleAdj ?? 0;
             doc.event_default_pct = evData?.defaultPct ?? 0;
+            doc.event_use_stubhub_pricing = evData?.useStubHubPricing ?? false;
             enrichedDocs.push(doc);
           }
           if (enrichedDocs.length > 0) {
@@ -599,6 +606,10 @@ interface ConsecutiveGroupDocument {
     zone?: boolean;
     shown_quantity?: number;
     passthrough?: string;
+    stubhubSuggestedPrice?: number | null;
+    stubhubSectionLowest?: number | null;
+    stubhubAtFloor?: boolean;
+    stubhubPricedAt?: Date | string | null;
   };
   event_name?: string;
   venue_name?: string;
@@ -609,6 +620,7 @@ interface ConsecutiveGroupDocument {
   event_std_adj?: number;
   event_resale_adj?: number;
   event_default_pct?: number;
+  event_use_stubhub_pricing?: boolean;
   seats?: Array<{ number: string | number }>;
 }
 
@@ -682,14 +694,20 @@ async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]
     const row = inventory?.row || '';
     const isGALawn = /^GA\d+$/i.test(row);
 
+    // StubHub auto-pricing: if enabled for this event and scraper has written a price, use it.
+    // Otherwise fall back to the standard markup formula.
+    const useStubHub = doc.event_use_stubhub_pricing && inventory?.stubhubSuggestedPrice != null;
+
     // Apply per-ticket-type markup adjustment on top of already-marked-up listPrice.
     // Formula: adjustedPrice = listPrice * (1 + (defaultPct + adj) / 100) / (1 + defaultPct / 100)
     const rawListPrice = inventory?.listPrice || 0;
     const defaultPct = doc.event_default_pct ?? 0;
     const adj = isResale ? (doc.event_resale_adj ?? 0) : (doc.event_std_adj ?? 0);
-    const adjustedListPrice = defaultPct !== 0 || adj !== 0
+    const markupPrice = defaultPct !== 0 || adj !== 0
       ? rawListPrice * (1 + (defaultPct + adj) / 100) / (1 + defaultPct / 100)
       : rawListPrice;
+
+    const adjustedListPrice = useStubHub ? inventory!.stubhubSuggestedPrice! : markupPrice;
 
     // Pre-compute expensive operations with null safety
     // GA/Lawn seats have synthetic seat numbers — clear them so Sync doesn't see fake numbers
@@ -868,12 +886,13 @@ export async function* generateInventoryCsvStream(
 
     const eventDetailsMap = new Map<string, {
       url: string; stdAdj: number; resaleAdj: number; defaultPct: number;
-      includeStandard: boolean; includeResale: boolean;
+      includeStandard: boolean; includeResale: boolean; useStubHubPricing: boolean;
     }>();
     const eventDocs = await Event.find(
       { mapping_id: { $in: eventMappingIds } },
       { mapping_id: 1, URL: 1, standardMarkupAdjustment: 1, resaleMarkupAdjustment: 1,
-        priceIncreasePercentage: 1, includeStandardSeats: 1, includeResaleSeats: 1 }
+        priceIncreasePercentage: 1, includeStandardSeats: 1, includeResaleSeats: 1,
+        useStubHubPricing: 1 }
     ).lean();
     for (const ev of eventDocs) {
       eventDetailsMap.set(ev.mapping_id, {
@@ -883,6 +902,7 @@ export async function* generateInventoryCsvStream(
         defaultPct: ev.priceIncreasePercentage ?? 0,
         includeStandard: ev.includeStandardSeats !== false,
         includeResale: ev.includeResaleSeats !== false,
+        useStubHubPricing: ev.useStubHubPricing === true,
       });
     }
 
@@ -900,6 +920,8 @@ export async function* generateInventoryCsvStream(
       'inventory.custom_split': 1, 'inventory.stockType': 1,
       'inventory.zone': 1, 'inventory.shown_quantity': 1,
       'inventory.passthrough': 1,
+      'inventory.stubhubSuggestedPrice': 1, 'inventory.stubhubSectionLowest': 1,
+      'inventory.stubhubAtFloor': 1, 'inventory.stubhubPricedAt': 1,
     };
 
     const CHUNK_SIZE = 10000;
@@ -946,6 +968,7 @@ export async function* generateInventoryCsvStream(
           doc.event_std_adj = evData?.stdAdj ?? 0;
           doc.event_resale_adj = evData?.resaleAdj ?? 0;
           doc.event_default_pct = evData?.defaultPct ?? 0;
+          doc.event_use_stubhub_pricing = evData?.useStubHubPricing ?? false;
           enrichedDocs.push(doc);
         }
 
@@ -1274,6 +1297,8 @@ export async function updateAutoDeleteSettings(updates: {
   isEnabled?: boolean;
   stopBeforeMinutes?: number;
   scheduleIntervalMinutes?: number;
+  postEventDeleteEnabled?: boolean;
+  postEventDeleteHoursAfter?: number;
   lastRunAt?: Date;
   nextRunAt?: Date;
   totalRuns?: number;
@@ -1312,7 +1337,17 @@ export async function runAutoDelete() {
     }
 
     const stats = await deleteExpiredEvents(settings.stopBeforeMinutes ?? 120, settings.lowSeatThreshold ?? 20);
-    
+
+    // Post-event hard-delete: permanently remove events N hours after they pass
+    let postDeleteMsg = '';
+    if (settings.postEventDeleteEnabled) {
+      const hours = settings.postEventDeleteHoursAfter ?? 12;
+      const postStats = await deletePassedEvents(hours);
+      if (postStats.deleted > 0) {
+        postDeleteMsg = ` Permanently deleted ${postStats.deleted} past event${postStats.deleted > 1 ? 's' : ''} (${hours}h after event date).`;
+      }
+    }
+
     // Update settings with run statistics
     const intervalMinutes = settings.scheduleIntervalMinutes || 15;
     const nextRunDate = new Date(Date.now() + intervalMinutes * 60 * 1000);
@@ -1333,7 +1368,7 @@ export async function runAutoDelete() {
     const lowMsg = stats.lowSeatStopped > 0 ? ` Low-seat stopped: ${stats.lowSeatStopped}.` : '';
     return {
       success: true,
-      message: `Auto-delete completed. Stopped ${stats.eventsStopped} events and cleared inventory for ${stats.eventsDeleted} events.${lowMsg}`,
+      message: `Auto-delete completed. Stopped ${stats.eventsStopped} events and cleared inventory for ${stats.eventsDeleted} events.${lowMsg}${postDeleteMsg}`,
       stats
     };
   } catch (error) {

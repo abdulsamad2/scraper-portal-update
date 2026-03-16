@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireAuth } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -27,6 +28,9 @@ async function recheckOne(syncId: number, companyId: string, apiToken: string) {
 }
 
 export async function POST(req: NextRequest) {
+  const authError = await requireAuth(req);
+  if (authError) return authError;
+
   try {
     const apiToken = process.env.SYNC_API_TOKEN;
     const companyId = process.env.SYNC_COMPANY_ID;

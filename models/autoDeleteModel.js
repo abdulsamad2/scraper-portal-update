@@ -59,6 +59,18 @@ const autoDeleteSettingsSchema = new mongoose.Schema({
       type: String
     }]
   },
+  // Post-event hard-delete: permanently remove events N hours after they pass
+  postEventDeleteEnabled: {
+    type: Boolean,
+    default: false
+  },
+  postEventDeleteHoursAfter: {
+    type: Number,
+    min: 1,
+    max: 168, // max 7 days
+    default: 12
+  },
+
   // Last 4 events deleted by auto-delete (for dashboard display)
   lastDeletedEvents: [{
     eventId: String,

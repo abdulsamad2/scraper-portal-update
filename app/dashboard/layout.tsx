@@ -16,7 +16,8 @@ import {
   SignalHigh,
   Filter,
   Search,
-  Shield
+  Shield,
+  BarChart3,
 } from 'lucide-react';
 
 interface FeatureFlags {
@@ -126,6 +127,12 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
       label: 'Orders',
       icon: <ShoppingCart className="w-5 h-5" />,
       flagKey: 'orders' as keyof FeatureFlags,
+    },
+    {
+      path: '/dashboard/stubhub',
+      label: 'Market Intelligence',
+      icon: <BarChart3 className="w-5 h-5" />,
+      flagKey: null,
     },
     {
       path: '/dashboard/export-csv',

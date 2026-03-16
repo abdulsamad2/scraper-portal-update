@@ -144,6 +144,8 @@ export async function GET() {
         isEnabled: settings.isEnabled,
         stopBeforeMinutes: settings.stopBeforeMinutes,
         scheduleIntervalMinutes: settings.scheduleIntervalMinutes,
+        postEventDeleteEnabled: settings.postEventDeleteEnabled ?? false,
+        postEventDeleteHoursAfter: settings.postEventDeleteHoursAfter ?? 12,
         lastRunAt: settings.lastRunAt,
         nextRunAt: settings.nextRunAt,
         totalRuns: settings.totalRuns,
@@ -218,12 +220,20 @@ export async function POST(request: NextRequest) {
         const allowedUpdates: {
           stopBeforeMinutes?: number;
           scheduleIntervalMinutes?: number;
+          postEventDeleteEnabled?: boolean;
+          postEventDeleteHoursAfter?: number;
         } = {};
         if (typeof body.stopBeforeMinutes === 'number' && body.stopBeforeMinutes >= 0 && body.stopBeforeMinutes <= 10080) {
           allowedUpdates.stopBeforeMinutes = body.stopBeforeMinutes;
         }
         if (typeof body.scheduleIntervalMinutes === 'number' && body.scheduleIntervalMinutes >= 1 && body.scheduleIntervalMinutes <= 1440) {
           allowedUpdates.scheduleIntervalMinutes = body.scheduleIntervalMinutes;
+        }
+        if (typeof body.postEventDeleteEnabled === 'boolean') {
+          allowedUpdates.postEventDeleteEnabled = body.postEventDeleteEnabled;
+        }
+        if (typeof body.postEventDeleteHoursAfter === 'number' && body.postEventDeleteHoursAfter >= 1 && body.postEventDeleteHoursAfter <= 168) {
+          allowedUpdates.postEventDeleteHoursAfter = body.postEventDeleteHoursAfter;
         }
 
         if (Object.keys(allowedUpdates).length > 0) {
