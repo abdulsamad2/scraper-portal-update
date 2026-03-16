@@ -392,18 +392,33 @@ interface DetailProps {
       totalTickets: number;
       totalRevenue: number;
       avgPrice: number;
-      totalSales: number;
-      firstSale: string;
-      lastSale: string;
-      withBadge: number;
+      totalOrders: number;
+      firstOrder: string;
+      lastOrder: string;
+      marketplaces: string[];
     } | null;
-    velocity: Array<{
+    bySection: Array<{
       section: string;
-      totalSold: number;
-      totalRevenue: number;
+      ticketsSold: number;
+      orders: number;
+      revenue: number;
       avgPrice: number;
-      salesCount: number;
+      lowestSold: number;
+      highestSold: number;
       lastSale: string;
+      marketplaces: string[];
+    }>;
+    recent: Array<{
+      section: string;
+      row: string;
+      low_seat: number | null;
+      high_seat: number | null;
+      quantity: number;
+      unit_price: number;
+      total: number;
+      marketplace: string;
+      order_date: string;
+      status: string;
     }>;
   };
 }
@@ -561,45 +576,104 @@ export default function EventDetailView({ event, rows, summary, sales }: DetailP
       {/* Key insights */}
       {rows.length > 0 && <KeyInsights rows={rows} summary={summary} />}
 
-      {/* Sales Analytics */}
+      {/* Sales Analytics — real order data */}
       {sales?.summary && (
         <div className="space-y-3">
-          <h2 className="text-sm font-bold text-gray-700 uppercase tracking-wider">Sales Activity</h2>
+          <h2 className="text-sm font-bold text-gray-700 uppercase tracking-wider">Order History</h2>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <SummaryCard label="Total Sold" value={sales.summary.totalTickets} sub={`${sales.summary.totalSales} transactions`} color="text-purple-600" />
-            <SummaryCard label="Avg Sale Price" value={$c(sales.summary.avgPrice)} color="text-blue-600" />
+            <SummaryCard label="Tickets Sold" value={sales.summary.totalTickets} sub={`${sales.summary.totalOrders} orders`} color="text-purple-600" />
+            <SummaryCard label="Avg Price" value={$c(sales.summary.avgPrice)} color="text-blue-600" />
             <SummaryCard label="Total Revenue" value={$c(sales.summary.totalRevenue)} color="text-emerald-600" />
-            <SummaryCard label="With Badge" value={sales.summary.withBadge} sub={`of ${sales.summary.totalSales} sales`} color="text-yellow-600" icon={<Award className="w-3.5 h-3.5 text-yellow-500" />} />
+            <SummaryCard label="Marketplaces" value={sales.summary.marketplaces.length} sub={sales.summary.marketplaces.join(', ')} color="text-orange-600" />
           </div>
 
-          {/* Sales velocity by section (last 24h) */}
-          {sales.velocity && sales.velocity.length > 0 && (
+          {/* Sales by section */}
+          {sales.bySection && sales.bySection.length > 0 && (
             <div className="bg-white rounded-xl border border-gray-200/60 shadow-sm overflow-hidden">
               <div className="px-4 py-2.5 bg-gradient-to-r from-purple-50 to-blue-50 border-b border-gray-200">
-                <h3 className="text-xs font-bold text-gray-600 uppercase tracking-wider">Sales by Section (Last 24h)</h3>
+                <h3 className="text-xs font-bold text-gray-600 uppercase tracking-wider">Sales by Section</h3>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-gray-100 text-xs text-gray-500 uppercase">
                       <th className="px-4 py-2 text-left font-semibold">Section</th>
-                      <th className="px-4 py-2 text-right font-semibold">Tickets Sold</th>
-                      <th className="px-4 py-2 text-right font-semibold">Transactions</th>
+                      <th className="px-4 py-2 text-right font-semibold">Tickets</th>
+                      <th className="px-4 py-2 text-right font-semibold">Orders</th>
                       <th className="px-4 py-2 text-right font-semibold">Avg Price</th>
+                      <th className="px-4 py-2 text-right font-semibold">Low</th>
+                      <th className="px-4 py-2 text-right font-semibold">High</th>
                       <th className="px-4 py-2 text-right font-semibold">Revenue</th>
+                      <th className="px-4 py-2 text-left font-semibold">Via</th>
                       <th className="px-4 py-2 text-right font-semibold">Last Sale</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
-                    {sales.velocity.map((v, i) => (
-                      <tr key={v.section} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50/30'}>
-                        <td className="px-4 py-2 font-semibold text-gray-800">{v.section}</td>
-                        <td className="px-4 py-2 text-right font-bold text-purple-600">{v.totalSold}</td>
-                        <td className="px-4 py-2 text-right text-gray-600">{v.salesCount}</td>
-                        <td className="px-4 py-2 text-right text-blue-600 font-medium">{$c(v.avgPrice)}</td>
-                        <td className="px-4 py-2 text-right text-emerald-600 font-medium">{$c(v.totalRevenue)}</td>
-                        <td className="px-4 py-2 text-right text-gray-500 text-xs">
-                          {new Date(v.lastSale).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                    {sales.bySection.map((s, i) => (
+                      <tr key={s.section} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50/30'}>
+                        <td className="px-4 py-2 font-semibold text-gray-800">{s.section}</td>
+                        <td className="px-4 py-2 text-right font-bold text-purple-600">{s.ticketsSold}</td>
+                        <td className="px-4 py-2 text-right text-gray-600">{s.orders}</td>
+                        <td className="px-4 py-2 text-right text-blue-600 font-medium">{$c(s.avgPrice)}</td>
+                        <td className="px-4 py-2 text-right text-gray-500">{$c(s.lowestSold)}</td>
+                        <td className="px-4 py-2 text-right text-gray-500">{$c(s.highestSold)}</td>
+                        <td className="px-4 py-2 text-right text-emerald-600 font-medium">{$c(s.revenue)}</td>
+                        <td className="px-4 py-2 text-xs text-gray-500">{s.marketplaces.join(', ')}</td>
+                        <td className="px-4 py-2 text-right text-gray-500 text-xs whitespace-nowrap">
+                          {new Date(s.lastSale).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Recent individual orders */}
+          {sales.recent && sales.recent.length > 0 && (
+            <div className="bg-white rounded-xl border border-gray-200/60 shadow-sm overflow-hidden">
+              <div className="px-4 py-2.5 bg-gradient-to-r from-purple-50 to-blue-50 border-b border-gray-200">
+                <h3 className="text-xs font-bold text-gray-600 uppercase tracking-wider">Recent Orders</h3>
+              </div>
+              <div className="max-h-[400px] overflow-auto">
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 bg-gray-50 border-b border-gray-200">
+                    <tr className="text-xs text-gray-500 uppercase">
+                      <th className="px-4 py-2 text-left font-semibold">Section</th>
+                      <th className="px-4 py-2 text-left font-semibold">Row</th>
+                      <th className="px-4 py-2 text-left font-semibold">Seats</th>
+                      <th className="px-4 py-2 text-right font-semibold">Qty</th>
+                      <th className="px-4 py-2 text-right font-semibold">Price</th>
+                      <th className="px-4 py-2 text-right font-semibold">Total</th>
+                      <th className="px-4 py-2 text-left font-semibold">Marketplace</th>
+                      <th className="px-4 py-2 text-center font-semibold">Status</th>
+                      <th className="px-4 py-2 text-right font-semibold">Date</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {sales.recent.map((o, i) => (
+                      <tr key={i} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50/30'}>
+                        <td className="px-4 py-2 font-semibold text-gray-800">{o.section || '-'}</td>
+                        <td className="px-4 py-2 text-gray-700">{o.row || '-'}</td>
+                        <td className="px-4 py-2 text-gray-500 text-xs">
+                          {o.low_seat && o.high_seat ? `${o.low_seat}-${o.high_seat}` : '-'}
+                        </td>
+                        <td className="px-4 py-2 text-right font-medium">{o.quantity}</td>
+                        <td className="px-4 py-2 text-right font-bold text-blue-700">{$c(o.unit_price)}</td>
+                        <td className="px-4 py-2 text-right text-emerald-600 font-medium">{$c(o.total)}</td>
+                        <td className="px-4 py-2 text-xs text-gray-600">{o.marketplace || '-'}</td>
+                        <td className="px-4 py-2 text-center">
+                          <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                            o.status === 'confirmed' || o.status === 'delivered' ? 'bg-emerald-50 text-emerald-700' :
+                            o.status === 'invoiced' || o.status === 'pending' ? 'bg-blue-50 text-blue-700' :
+                            o.status === 'problem' ? 'bg-red-50 text-red-700' :
+                            'bg-gray-50 text-gray-600'
+                          }`}>{o.status}</span>
+                        </td>
+                        <td className="px-4 py-2 text-right text-xs text-gray-500 whitespace-nowrap">
+                          {new Date(o.order_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}{' '}
+                          {new Date(o.order_date).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
                         </td>
                       </tr>
                     ))}

@@ -4,7 +4,7 @@ import dbConnect from '@/lib/dbConnect';
 import { Event } from '@/models/eventModel';
 import { ConsecutiveGroup } from '@/models/seatModel';
 import { StubHubListing } from '@/models/stubhubListingModel';
-import { StubHubSale } from '@/models/stubhubSaleModel';
+import { Order } from '@/models/orderModel';
 
 /**
  * Get ALL events for the StubHub page (matched and unmatched).
@@ -367,12 +367,62 @@ export async function getEventComparison(eventId: string) {
       lastScraped:         latestScrape,
     };
 
-    // Fetch sales analytics in parallel
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const SaleModel = StubHubSale as any;
-    const [salesSummary, salesVelocity] = await Promise.all([
-      SaleModel.getEventSalesSummary(eventId).catch(() => null),
-      SaleModel.getSalesVelocity(eventId, 24).catch(() => []),
+    // Fetch real sales data from Orders collection
+    const eventName = (eventDoc as Record<string, unknown>).Event_Name as string;
+    const orderMatch = {
+      $or: [
+        { pos_event_id: eventId },
+        { event_name: eventName },
+      ],
+      status: { $nin: ['cancelled', 'rejected'] },
+    };
+
+    const [orderSummary, sectionSales, recentOrders] = await Promise.all([
+      Order.aggregate([
+        { $match: orderMatch },
+        { $group: {
+          _id: null,
+          totalTickets: { $sum: '$quantity' },
+          totalRevenue: { $sum: '$total' },
+          avgPrice: { $avg: '$unit_price' },
+          totalOrders: { $sum: 1 },
+          firstOrder: { $min: '$order_date' },
+          lastOrder: { $max: '$order_date' },
+          marketplaces: { $addToSet: '$marketplace' },
+        }},
+      ]).then(r => r[0] || null).catch(() => null),
+
+      Order.aggregate([
+        { $match: orderMatch },
+        { $group: {
+          _id: '$section',
+          ticketsSold: { $sum: '$quantity' },
+          orders: { $sum: 1 },
+          revenue: { $sum: '$total' },
+          avgPrice: { $avg: '$unit_price' },
+          lowestSold: { $min: '$unit_price' },
+          highestSold: { $max: '$unit_price' },
+          lastSale: { $max: '$order_date' },
+          marketplaces: { $addToSet: '$marketplace' },
+        }},
+        { $sort: { ticketsSold: -1 } },
+        { $project: {
+          _id: 0, section: '$_id',
+          ticketsSold: 1, orders: 1,
+          revenue: { $round: ['$revenue', 2] },
+          avgPrice: { $round: ['$avgPrice', 2] },
+          lowestSold: { $round: ['$lowestSold', 2] },
+          highestSold: { $round: ['$highestSold', 2] },
+          lastSale: 1, marketplaces: 1,
+        }},
+      ]).catch(() => []),
+
+      Order.find(orderMatch)
+        .sort({ order_date: -1 })
+        .limit(50)
+        .select('section row low_seat high_seat quantity unit_price total marketplace order_date status')
+        .lean()
+        .catch(() => []),
     ]);
 
     return {
@@ -380,7 +430,7 @@ export async function getEventComparison(eventId: string) {
       event:   JSON.parse(JSON.stringify(eventDoc)),
       rows:    JSON.parse(JSON.stringify(rows)),
       summary: JSON.parse(JSON.stringify(summary)),
-      sales:   JSON.parse(JSON.stringify({ summary: salesSummary, velocity: salesVelocity })),
+      sales:   JSON.parse(JSON.stringify({ summary: orderSummary, bySection: sectionSales, recent: recentOrders })),
     };
   } catch (error: unknown) {
     console.error('Error fetching comparison:', error);
