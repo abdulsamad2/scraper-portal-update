@@ -94,9 +94,9 @@ function PriceBar({ position }: { position: number }) {
 }
 
 /* ─── Badge pill ─── */
-function BadgePill({ achievable }: { achievable: boolean }) {
+function BadgePill({ achievable, name }: { achievable: boolean; name?: string | null }) {
   return achievable
-    ? <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-yellow-100 text-yellow-700 border border-yellow-200"><Award className="w-2.5 h-2.5" /> Badge</span>
+    ? <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-yellow-100 text-yellow-700 border border-yellow-200"><Award className="w-2.5 h-2.5" /> {name || 'Badge'}</span>
     : <span className="text-[10px] text-gray-300">-</span>;
 }
 
@@ -302,7 +302,7 @@ function ComparisonTable({ rows }: { rows: ComparisonRow[] }) {
                           {r.suggestedPrice !== null ? $c(r.suggestedPrice) : <span className="text-gray-300 font-normal">-</span>}
                         </td>
                         <td className="px-4 py-2.5 text-center border-r border-gray-100/60">
-                          <BadgePill achievable={r.badgeAchievable} />
+                          <BadgePill achievable={r.badgeAchievable} name={r.badgeName} />
                         </td>
                         <td className="px-4 py-2.5 text-sm text-center border-r border-gray-100/60">
                           {r.achievedRank !== null
@@ -516,9 +516,10 @@ export default function EventDetailView({ event, rows, summary }: DetailProps) {
       </div>
 
       {/* Summary cards */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
         <SummaryCard label="Inv. Groups"  value={summary.totalRows}      sub={`${summary.totalOurTickets} tickets`} color="text-blue-600" />
         <SummaryCard label="Competitive"  value={summary.competitive}    icon={<CheckCircle className="w-3.5 h-3.5 text-emerald-500" />} color="text-emerald-600" />
+        <SummaryCard label="Below Market" value={summary.belowMarket}    icon={<TrendingUp className="w-3.5 h-3.5 text-blue-500" />} color="text-blue-600" />
         <SummaryCard label="Overpriced"   value={summary.overpriced}     icon={<TrendingUp className="w-3.5 h-3.5 text-red-500" />} color="text-red-600" />
         <SummaryCard label="At Floor"     value={summary.atFloor}        icon={<ShieldAlert className="w-3.5 h-3.5 text-amber-500" />} color="text-amber-600" />
         <SummaryCard label="SH Listings"  value={summary.totalShListings} color="text-orange-600" />

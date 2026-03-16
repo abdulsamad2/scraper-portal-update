@@ -193,6 +193,7 @@ export interface ComparisonRow {
   ticketClassName: string;
   dealZonePrice: number | null;
   badgeAchievable: boolean;
+  badgeName: string | null;
   atFloor: boolean;
   achievedRank: number | null;
   pricingStatus: 'OVERPRICED' | 'AT_FLOOR' | 'COMPETITIVE' | 'BELOW_MARKET' | 'NO_COMPETITION' | 'NO_OUR_INVENTORY';
@@ -208,6 +209,7 @@ export interface EventSummary {
   overpriced: number;
   atFloor: number;
   competitive: number;
+  belowMarket: number;
   noCompetition: number;
   totalOurTickets: number;
   totalShListings: number;
@@ -248,6 +250,7 @@ export async function getEventComparison(eventId: string) {
       pricingStatus: ComparisonRow['pricingStatus'];
       ourFloorPrice: number | null;
       suggestedPrice: number | null;
+      badgeName: string | null;
       lastScraped: string | null;
     }
 
@@ -274,6 +277,7 @@ export async function getEventComparison(eventId: string) {
         ticketClassName: l.ticketClassName ?? existing?.ticketClassName ?? '',
         dealZonePrice:   l.dealZonePrice   ?? existing?.dealZonePrice   ?? null,
         badgeAchievable: l.badgeAchievable ?? existing?.badgeAchievable ?? false,
+        badgeName:       l.badgeName       ?? existing?.badgeName       ?? null,
         atFloor:         l.atFloor         ?? existing?.atFloor         ?? false,
         achievedRank:    l.achievedRank    ?? existing?.achievedRank    ?? null,
         pricingStatus:   (l.pricingStatus  ?? existing?.pricingStatus   ?? 'NO_COMPETITION') as ComparisonRow['pricingStatus'],
@@ -284,7 +288,7 @@ export async function getEventComparison(eventId: string) {
       shBySection.set(key, entry);
     }
 
-    // Build one row per consecutive group
+    // Build one row per consecutive group — derive per-row status from actual row price/cost
     const rows: ComparisonRow[] = ourInventory.map(inv => {
       const sh = shBySection.get(normalizeSection(inv.section)) ?? null;
       const ourPrice = inv.inventory.listPrice;
@@ -294,6 +298,24 @@ export async function getEventComparison(eventId: string) {
       const sectionLowest = sh?.sectionLowest ?? null;
       const sectionHigh   = sh ? sh.sectionHigh : null;
       const priceDiff     = sectionLowest !== null ? +(ourPrice - sectionLowest).toFixed(2) : null;
+
+      // Per-row floor price (cost × 1.22) — minimum profitable price
+      const ourFloorPrice = ourCost > 0 ? +(ourCost * 1.22).toFixed(2) : null;
+      const atFloor = ourFloorPrice !== null && sectionLowest !== null && ourPrice <= ourFloorPrice * 1.01 && ourPrice > sectionLowest;
+
+      // Per-row pricing status derived from this row's actual price
+      let pricingStatus: ComparisonRow['pricingStatus'] = 'NO_COMPETITION';
+      if (sectionLowest !== null) {
+        if (atFloor) {
+          pricingStatus = 'AT_FLOOR';
+        } else if (ourPrice < sectionLowest * 0.95) {
+          pricingStatus = 'BELOW_MARKET';
+        } else if (ourPrice <= sectionLowest * 1.05) {
+          pricingStatus = 'COMPETITIVE';
+        } else {
+          pricingStatus = 'OVERPRICED';
+        }
+      }
 
       let pricePosition: number | null = null;
       if (sectionLowest !== null && sectionHigh !== null && sectionHigh > sectionLowest) {
@@ -319,10 +341,11 @@ export async function getEventComparison(eventId: string) {
         ticketClassName: sh?.ticketClassName ?? '',
         dealZonePrice:   sh?.dealZonePrice   ?? null,
         badgeAchievable: sh?.badgeAchievable ?? false,
-        atFloor:         sh?.atFloor         ?? false,
+        badgeName:       sh?.badgeName       ?? null,
+        atFloor,
         achievedRank:    sh?.achievedRank    ?? null,
-        pricingStatus:   sh?.pricingStatus   ?? 'NO_COMPETITION',
-        ourFloorPrice:   sh?.ourFloorPrice   ?? null,
+        pricingStatus,
+        ourFloorPrice,
         suggestedPrice:  sh?.suggestedPrice  ?? null,
         priceDiff,
         pricePosition,
@@ -343,6 +366,7 @@ export async function getEventComparison(eventId: string) {
       overpriced:          rows.filter(r => r.pricingStatus === 'OVERPRICED').length,
       atFloor:             rows.filter(r => r.pricingStatus === 'AT_FLOOR').length,
       competitive:         rows.filter(r => r.pricingStatus === 'COMPETITIVE').length,
+      belowMarket:         rows.filter(r => r.pricingStatus === 'BELOW_MARKET').length,
       noCompetition:       rows.filter(r => r.pricingStatus === 'NO_COMPETITION').length,
       totalOurTickets:     rows.reduce((s, r) => s + r.seatCount, 0),
       totalShListings:     stubhubListings.length,
