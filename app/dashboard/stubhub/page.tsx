@@ -164,6 +164,7 @@ async function EventDetailContent({ eventId }: { eventId: string }) {
       event={res.event}
       rows={res.rows ?? []}
       summary={res.summary!}
+      sales={res.sales}
     />
   );
 }

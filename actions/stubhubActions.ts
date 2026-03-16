@@ -4,6 +4,7 @@ import dbConnect from '@/lib/dbConnect';
 import { Event } from '@/models/eventModel';
 import { ConsecutiveGroup } from '@/models/seatModel';
 import { StubHubListing } from '@/models/stubhubListingModel';
+import { StubHubSale } from '@/models/stubhubSaleModel';
 
 /**
  * Get ALL events for the StubHub page (matched and unmatched).
@@ -366,11 +367,18 @@ export async function getEventComparison(eventId: string) {
       lastScraped:         latestScrape,
     };
 
+    // Fetch sales analytics in parallel
+    const [salesSummary, salesVelocity] = await Promise.all([
+      StubHubSale.getEventSalesSummary(eventId).catch(() => null),
+      StubHubSale.getSalesVelocity(eventId, 24).catch(() => []),
+    ]);
+
     return {
       success: true,
       event:   JSON.parse(JSON.stringify(eventDoc)),
       rows:    JSON.parse(JSON.stringify(rows)),
       summary: JSON.parse(JSON.stringify(summary)),
+      sales:   JSON.parse(JSON.stringify({ summary: salesSummary, velocity: salesVelocity })),
     };
   } catch (error: unknown) {
     console.error('Error fetching comparison:', error);

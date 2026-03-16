@@ -387,9 +387,28 @@ interface DetailProps {
   };
   rows: ComparisonRow[];
   summary: EventSummary;
+  sales?: {
+    summary: {
+      totalTickets: number;
+      totalRevenue: number;
+      avgPrice: number;
+      totalSales: number;
+      firstSale: string;
+      lastSale: string;
+      withBadge: number;
+    } | null;
+    velocity: Array<{
+      section: string;
+      totalSold: number;
+      totalRevenue: number;
+      avgPrice: number;
+      salesCount: number;
+      lastSale: string;
+    }>;
+  };
 }
 
-export default function EventDetailView({ event, rows, summary }: DetailProps) {
+export default function EventDetailView({ event, rows, summary, sales }: DetailProps) {
   const router = useRouter();
   const [urlEditing, setUrlEditing] = useState(false);
   const [urlDraft, setUrlDraft] = useState('');
@@ -541,6 +560,56 @@ export default function EventDetailView({ event, rows, summary }: DetailProps) {
 
       {/* Key insights */}
       {rows.length > 0 && <KeyInsights rows={rows} summary={summary} />}
+
+      {/* Sales Analytics */}
+      {sales?.summary && (
+        <div className="space-y-3">
+          <h2 className="text-sm font-bold text-gray-700 uppercase tracking-wider">Sales Activity</h2>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <SummaryCard label="Total Sold" value={sales.summary.totalTickets} sub={`${sales.summary.totalSales} transactions`} color="text-purple-600" />
+            <SummaryCard label="Avg Sale Price" value={$c(sales.summary.avgPrice)} color="text-blue-600" />
+            <SummaryCard label="Total Revenue" value={$c(sales.summary.totalRevenue)} color="text-emerald-600" />
+            <SummaryCard label="With Badge" value={sales.summary.withBadge} sub={`of ${sales.summary.totalSales} sales`} color="text-yellow-600" icon={<Award className="w-3.5 h-3.5 text-yellow-500" />} />
+          </div>
+
+          {/* Sales velocity by section (last 24h) */}
+          {sales.velocity && sales.velocity.length > 0 && (
+            <div className="bg-white rounded-xl border border-gray-200/60 shadow-sm overflow-hidden">
+              <div className="px-4 py-2.5 bg-gradient-to-r from-purple-50 to-blue-50 border-b border-gray-200">
+                <h3 className="text-xs font-bold text-gray-600 uppercase tracking-wider">Sales by Section (Last 24h)</h3>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-100 text-xs text-gray-500 uppercase">
+                      <th className="px-4 py-2 text-left font-semibold">Section</th>
+                      <th className="px-4 py-2 text-right font-semibold">Tickets Sold</th>
+                      <th className="px-4 py-2 text-right font-semibold">Transactions</th>
+                      <th className="px-4 py-2 text-right font-semibold">Avg Price</th>
+                      <th className="px-4 py-2 text-right font-semibold">Revenue</th>
+                      <th className="px-4 py-2 text-right font-semibold">Last Sale</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {sales.velocity.map((v, i) => (
+                      <tr key={v.section} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50/30'}>
+                        <td className="px-4 py-2 font-semibold text-gray-800">{v.section}</td>
+                        <td className="px-4 py-2 text-right font-bold text-purple-600">{v.totalSold}</td>
+                        <td className="px-4 py-2 text-right text-gray-600">{v.salesCount}</td>
+                        <td className="px-4 py-2 text-right text-blue-600 font-medium">{$c(v.avgPrice)}</td>
+                        <td className="px-4 py-2 text-right text-emerald-600 font-medium">{$c(v.totalRevenue)}</td>
+                        <td className="px-4 py-2 text-right text-gray-500 text-xs">
+                          {new Date(v.lastSale).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* No data */}
       {rows.length === 0 && (
