@@ -95,9 +95,9 @@ function PriceBar({ position }: { position: number }) {
 
 /* ─── Badge pill ─── */
 function BadgePill({ achievable, name }: { achievable: boolean; name?: string | null }) {
-  if (!achievable) return <span className="text-[10px] text-gray-300">-</span>;
+  if (!achievable) return <span className="text-[10px] text-gray-400">No</span>;
   if (name) return <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-yellow-100 text-yellow-700 border border-yellow-200"><Award className="w-2.5 h-2.5" /> {name}</span>;
-  return <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-100 text-emerald-700 border border-emerald-200"><CheckCircle className="w-2.5 h-2.5" /> Yes</span>;
+  return <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-50 text-emerald-600 border border-emerald-200">Achievable</span>;
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -251,7 +251,7 @@ function ComparisonTable({ rows }: { rows: ComparisonRow[] }) {
                     <TH title="Deal $"  tip="Price for StubHub Best Deal badge."                                                                                                className="text-right" />
                     <TH title="Suggest" tip="Scraper-recommended price."                                                                                                        className="text-right" />
                     <TH title="Badge"   tip="Can you earn Best Deal badge?"                                                                                                     className="text-center" />
-                    <TH title="Rank"    tip="Rank suggested price would achieve."                                                                                                className="text-center" />
+                    <TH title="Rank"    tip="Current rank → target rank after repricing (out of total listings in section)."                                                      className="text-center" />
                     <TH title="Diff"    tip="Your price - SH lowest."                               field="priceDiff"     sortBy={sortBy} sortDir={sortDir} onSort={handleSort} className="text-right" />
                     <TH title="Pos"     tip="Position in SH range (0%=cheapest, 100%=most expensive)." field="pricePosition" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} className="text-center" />
                     <TH title="Margin"  tip="(Price - Cost) / Cost x 100."                          field="margin"        sortBy={sortBy} sortDir={sortDir} onSort={handleSort} className="text-right" />
@@ -304,10 +304,17 @@ function ComparisonTable({ rows }: { rows: ComparisonRow[] }) {
                         <td className="px-4 py-2.5 text-center border-r border-gray-100/60">
                           <BadgePill achievable={r.badgeAchievable} name={r.badgeName} />
                         </td>
-                        <td className="px-4 py-2.5 text-sm text-center border-r border-gray-100/60">
-                          {r.suggestedRank !== null
-                            ? <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${r.suggestedRank === 1 ? 'bg-emerald-100 text-emerald-700' : r.suggestedRank <= 3 ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>#{r.suggestedRank}</span>
-                            : <span className="text-gray-300">-</span>}
+                        <td className="px-4 py-2.5 text-center border-r border-gray-100/60">
+                          {(r.currentRank !== null || r.suggestedRank !== null)
+                            ? <div className="flex items-center justify-center gap-1 text-[10px] font-bold">
+                                <span className="text-gray-500">#{r.currentRank ?? '?'}</span>
+                                <span className="text-gray-300">→</span>
+                                <span className={r.suggestedRank === 1 ? 'text-emerald-600' : r.suggestedRank != null && r.suggestedRank <= 3 ? 'text-blue-600' : 'text-gray-600'}>
+                                  #{r.suggestedRank ?? '?'}
+                                </span>
+                                <span className="font-normal text-[9px] text-gray-400">/{r.sectionCount}</span>
+                              </div>
+                            : <span className="text-gray-300 text-[10px]">-</span>}
                         </td>
                         <td className="px-4 py-2.5 text-sm text-right font-bold border-r border-gray-100/60">
                           {r.priceDiff !== null

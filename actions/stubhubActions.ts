@@ -195,6 +195,7 @@ export interface ComparisonRow {
   badgeAchievable: boolean;
   badgeName: string | null;
   atFloor: boolean;
+  currentRank: number | null;
   suggestedRank: number | null;
   pricingStatus: 'OVERPRICED' | 'AT_FLOOR' | 'COMPETITIVE' | 'BELOW_MARKET' | 'NO_COMPETITION' | 'NO_OUR_INVENTORY';
   ourFloorPrice: number | null;
@@ -246,6 +247,7 @@ export async function getEventComparison(eventId: string) {
       dealZonePrice: number | null;
       badgeAchievable: boolean;
       atFloor: boolean;
+      currentRank: number | null;
       suggestedRank: number | null;
       pricingStatus: ComparisonRow['pricingStatus'];
       ourFloorPrice: number | null;
@@ -279,6 +281,7 @@ export async function getEventComparison(eventId: string) {
         badgeAchievable: l.badgeAchievable ?? existing?.badgeAchievable ?? false,
         badgeName:       l.badgeName       ?? existing?.badgeName       ?? null,
         atFloor:         l.atFloor         ?? existing?.atFloor         ?? false,
+        currentRank:     l.ourCurrentRank  ?? existing?.currentRank     ?? null,
         suggestedRank:   l.suggestedRank   ?? existing?.suggestedRank   ?? null,
         pricingStatus:   (l.pricingStatus  ?? existing?.pricingStatus   ?? 'NO_COMPETITION') as ComparisonRow['pricingStatus'],
         ourFloorPrice:   l.ourFloorPrice   ?? existing?.ourFloorPrice   ?? null,
@@ -344,6 +347,7 @@ export async function getEventComparison(eventId: string) {
         badgeAchievable: sh?.badgeAchievable ?? false,
         badgeName:       sh?.badgeName       ?? null,
         atFloor,
+        currentRank:     sh?.currentRank     ?? null,
         suggestedRank:   sh?.suggestedRank   ?? null,
         pricingStatus,
         ourFloorPrice,
