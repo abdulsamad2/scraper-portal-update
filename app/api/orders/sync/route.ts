@@ -16,6 +16,10 @@ const CONFIRMED_STATUSES = new Set(['confirmed', 'confirmed_delay', 'delivery_pr
 // Concurrency lock — prevent overlapping syncs from flooding the external API
 let _syncInProgress = false;
 
+// Purchase sync: runs every 30s independently, incremental only
+let _lastPurchaseSync = 0;
+const PURCHASE_SYNC_INTERVAL = 30_000; // 30 seconds
+
 function escapeRegex(str: string) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -184,6 +188,12 @@ export async function GET(request: NextRequest) {
 
   // Prevent overlapping syncs from flooding the external API
   if (_syncInProgress) {
+    // Even when order sync is skipped, run purchase sync if interval elapsed
+    if (Date.now() - _lastPurchaseSync > PURCHASE_SYNC_INTERVAL && process.env.SYNC_API_TOKEN && process.env.SYNC_COMPANY_ID) {
+      _lastPurchaseSync = Date.now();
+      syncPurchasesIncremental(process.env.SYNC_API_TOKEN, process.env.SYNC_COMPANY_ID)
+        .catch(err => console.error('[purchase-sync]', err.message));
+    }
     return NextResponse.json({ synced: 0, newOrderIds: [], newOrders: [], skipped: 'sync already in progress' });
   }
   _syncInProgress = true;
@@ -621,6 +631,7 @@ export async function GET(request: NextRequest) {
     _syncInProgress = false;
 
     // Non-blocking: sync purchases in background after order sync
+    _lastPurchaseSync = Date.now();
     syncPurchasesIncremental(
       process.env.SYNC_API_TOKEN!,
       process.env.SYNC_COMPANY_ID!
