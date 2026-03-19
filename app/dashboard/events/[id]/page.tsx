@@ -62,6 +62,11 @@ export default async function EventDetailsPage({ params }: EventDetailsProps) {
     notFound();
   }
 
+  /* async-defer-await: start inventory fetch immediately, await late */
+  const inventoryPromise = event.mapping_id
+    ? getInventoryCountsByType([event.mapping_id])
+    : Promise.resolve({} as Record<string, { standard: number; resale: number; standardRows: number; resaleRows: number; standardAvgCost: number | null; resaleAvgCost: number | null }>);
+
   const isActive = !event.Skip_Scraping;
   const lastUpdated = event.Last_Updated || event.updatedAt;
   const isStale = lastUpdated
@@ -72,15 +77,14 @@ export default async function EventDetailsPage({ params }: EventDetailsProps) {
   const stdAdj = event.standardMarkupAdjustment ?? 0;
   const resAdj = event.resaleMarkupAdjustment ?? 0;
 
-  const inventoryCounts = event.mapping_id
-    ? await getInventoryCountsByType([event.mapping_id])
-    : {};
-  const standardQty = event.mapping_id ? (inventoryCounts[event.mapping_id]?.standard ?? 0) : 0;
-  const resaleQty = event.mapping_id ? (inventoryCounts[event.mapping_id]?.resale ?? 0) : 0;
-  const standardRows = event.mapping_id ? (inventoryCounts[event.mapping_id]?.standardRows ?? 0) : 0;
-  const resaleRows = event.mapping_id ? (inventoryCounts[event.mapping_id]?.resaleRows ?? 0) : 0;
-  const standardAvgCost = event.mapping_id ? (inventoryCounts[event.mapping_id]?.standardAvgCost ?? null) : null;
-  const resaleAvgCost = event.mapping_id ? (inventoryCounts[event.mapping_id]?.resaleAvgCost ?? null) : null;
+  const inventoryCounts = await inventoryPromise;
+  const mid = event.mapping_id;
+  const standardQty = mid ? (inventoryCounts[mid]?.standard ?? 0) : 0;
+  const resaleQty = mid ? (inventoryCounts[mid]?.resale ?? 0) : 0;
+  const standardRows = mid ? (inventoryCounts[mid]?.standardRows ?? 0) : 0;
+  const resaleRows = mid ? (inventoryCounts[mid]?.resaleRows ?? 0) : 0;
+  const standardAvgCost = mid ? (inventoryCounts[mid]?.standardAvgCost ?? null) : null;
+  const resaleAvgCost = mid ? (inventoryCounts[mid]?.resaleAvgCost ?? null) : null;
 
   const includeStandard = event.includeStandardSeats !== false;
   const includeResale = event.includeResaleSeats !== false;

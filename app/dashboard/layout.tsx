@@ -18,6 +18,7 @@ import {
   Search,
   Shield,
   BarChart3,
+  Users,
 } from 'lucide-react';
 
 interface FeatureFlags {
@@ -129,6 +130,12 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
       flagKey: 'orders' as keyof FeatureFlags,
     },
     {
+      path: '/dashboard/orders/accounts',
+      label: 'Accounts',
+      icon: <Users className="w-5 h-5" />,
+      flagKey: 'orders' as keyof FeatureFlags,
+    },
+    {
       path: '/dashboard/stubhub',
       label: 'Market Intelligence',
       icon: <BarChart3 className="w-5 h-5" />,
@@ -177,7 +184,12 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
           <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-2 mb-2">Menu</p>
           <nav className="space-y-0.5">
             {navItems.map((item) => {
-              const active = pathname === item.path || (item.path !== '/dashboard' && pathname.startsWith(item.path));
+              const active = pathname === item.path || (
+                item.path !== '/dashboard' &&
+                pathname.startsWith(item.path) &&
+                // Prevent parent from highlighting when on a child route
+                !navItems.some(other => other.path !== item.path && other.path.startsWith(item.path) && pathname.startsWith(other.path))
+              );
               return (
                 <Link
                   key={item.path}

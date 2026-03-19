@@ -525,3 +525,5 @@ export async function unflagOrderIssue(orderId: string) {
   revalidatePath('/dashboard/orders');
   return { success: true, matched: result.matchedCount, modified: result.modifiedCount };
 }
+
+// Purchasing accounts are now fetched from Sync API via /api/accounts route

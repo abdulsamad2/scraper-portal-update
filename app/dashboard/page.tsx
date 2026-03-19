@@ -158,9 +158,11 @@ export default function DashboardPage() {
   useEffect(() => {
     async function fetchData() {
       try {
-        // Fetch summary data
-        const eventsData = await getAllEvents();
-        const seatsData = await getConsecutiveGroupsPaginated(1000, 1, '', {}); // Get first 1000 records to get total
+        // async-parallel: fetch independent data in parallel
+        const [eventsData, seatsData] = await Promise.all([
+          getAllEvents(),
+          getConsecutiveGroupsPaginated(1000, 1, '', {}),
+        ]);
 
         // Check if any of these returned an error
         if (!Array.isArray(eventsData) || 'error' in seatsData) {
@@ -247,31 +249,18 @@ export default function DashboardPage() {
     fetchAutoDeleteData();
   }, []);
 
-  // Fetch last 4 deleted events
+  // async-parallel: fetch independent data in parallel
   useEffect(() => {
-    async function fetchLastDeleted() {
-      try {
-        const data = await getLastDeletedEvents();
-        setLastDeletedEvents(data || []);
-      } catch (err) {
-        console.error('Error loading last deleted events:', err);
-      }
+    async function fetchParallel() {
+      const [deletedResult, orderResult] = await Promise.allSettled([
+        getLastDeletedEvents(),
+        getMonthlyStats(),
+      ]);
+      if (deletedResult.status === 'fulfilled') setLastDeletedEvents(deletedResult.value || []);
+      if (orderResult.status === 'fulfilled') setOrderStats({ ...orderResult.value, loading: false });
+      else setOrderStats(prev => ({ ...prev, loading: false }));
     }
-    fetchLastDeleted();
-  }, []);
-
-  // Fetch monthly order stats (SeatScouts API — only on page load)
-  useEffect(() => {
-    async function fetchOrderStats() {
-      try {
-        const ms = await getMonthlyStats();
-        setOrderStats({ ...ms, loading: false });
-      } catch (err) {
-        console.error('Error loading monthly order stats:', err);
-        setOrderStats(prev => ({ ...prev, loading: false }));
-      }
-    }
-    fetchOrderStats();
+    fetchParallel();
   }, []);
 
   // Fetch processing time stats

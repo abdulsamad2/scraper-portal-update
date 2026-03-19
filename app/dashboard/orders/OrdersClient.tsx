@@ -10,7 +10,7 @@ import {
   Truck, Send, CheckCircle, RotateCw,
   FileText, Clock, XCircle, Package, Ticket,
   Flag, FlagOff, MessageSquareWarning, Copy, ClipboardCheck,
-  User, Phone, Hash, Calendar, DollarSign, Upload, ImageIcon,
+  User, Phone, Hash, Calendar, DollarSign, Upload, ImageIcon, Users,
 } from 'lucide-react';
 import { flagOrderIssue, unflagOrderIssue } from '@/actions/orderActions';
 import { useOrderAlert } from './useOrderAlert';
@@ -230,6 +230,10 @@ export default function OrdersClient({
   const [drawerLoading, setDrawerLoading] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
+  // Event purchasing accounts state
+  const [eventAccounts, setEventAccounts] = useState<{ email: string; tickets: number; orders: number; lastDate: string; sections: string[] }[]>([]);
+  const [eventAccountsLoading, setEventAccountsLoading] = useState(false);
+
   // Proof upload state
   const [proofFile, setProofFile] = useState<File | null>(null);
   const [proofUploading, setProofUploading] = useState(false);
@@ -335,27 +339,47 @@ export default function OrdersClient({
     setDrawerDetail(null);
     setProofFile(null);
     setProofResult(null);
-    if (order.sync_id) {
-      setDrawerLoading(true);
-      try {
-        const res = await fetch(`/api/orders/detail?syncId=${order.sync_id}`, { cache: 'no-store' });
-        if (res.ok) {
-          const data = await res.json();
-          if (data.detail) {
-            setDrawerDetail(data.detail);
-            // Propagate seat data back to table row
-            if (data.detail.low_seat != null || data.detail.high_seat != null) {
-              setLocalOrders(prev => prev.map(o =>
-                o._id === order._id
-                  ? { ...o, low_seat: data.detail.low_seat ?? o.low_seat, high_seat: data.detail.high_seat ?? o.high_seat }
-                  : o
-              ));
-            }
-          }
-        }
-      } catch { /* ignore */ }
-      finally { setDrawerLoading(false); }
+    setEventAccounts([]);
+
+    // async-parallel: fetch order detail + event accounts in parallel
+    const detailPromise = order.sync_id
+      ? fetch(`/api/orders/detail?syncId=${order.sync_id}`, { cache: 'no-store' })
+          .then(r => r.ok ? r.json() : null).catch(() => null)
+      : Promise.resolve(null);
+
+    const eventName = order.event_name;
+    const eventDate = order.occurs_at;
+    const accountsPromise = eventName
+      ? (setEventAccountsLoading(true),
+         fetch(`/api/accounts/event-accounts?event=${encodeURIComponent(eventName)}${eventDate ? '&date=' + encodeURIComponent(eventDate) : ''}`, {
+           cache: 'no-store',
+           signal: AbortSignal.timeout(120000), // 2 min timeout — first call loads 19k purchases
+         }).then(r => {
+           if (!r.ok) { console.error('[event-accounts] HTTP', r.status); return null; }
+           return r.json();
+         }).catch(err => { console.error('[event-accounts]', err.message); return null; }))
+      : Promise.resolve(null);
+
+    setDrawerLoading(true);
+    const [detailData, accountsData] = await Promise.all([detailPromise, accountsPromise]);
+
+    if (detailData?.detail) {
+      setDrawerDetail(detailData.detail);
+      if (detailData.detail.low_seat != null || detailData.detail.high_seat != null) {
+        setLocalOrders(prev => prev.map(o =>
+          o._id === order._id
+            ? { ...o, low_seat: detailData.detail.low_seat ?? o.low_seat, high_seat: detailData.detail.high_seat ?? o.high_seat }
+            : o
+        ));
+      }
     }
+
+    if (accountsData?.accounts) {
+      setEventAccounts(accountsData.accounts);
+    }
+
+    setDrawerLoading(false);
+    setEventAccountsLoading(false);
   }, []);
 
   const closeDrawer = useCallback(() => {
@@ -1457,6 +1481,54 @@ export default function OrdersClient({
                       </div>
                     </div>
                   </div>
+
+                  {/* Purchasing Accounts — show first so buyer sees immediately */}
+                  {selectedOrder.event_name ? (
+                    <div className="bg-purple-50/50 rounded-xl border border-purple-200/60 p-4">
+                      <h4 className="text-xs font-bold text-purple-700 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                        <Users className="w-3.5 h-3.5" /> Accounts Used on This Event
+                      </h4>
+                      {eventAccountsLoading ? (
+                        <div className="flex items-center gap-2 py-2 text-sm text-gray-400">
+                          <Loader2 className="w-4 h-4 animate-spin" /> Checking purchase history…
+                        </div>
+                      ) : eventAccounts.length > 0 ? (
+                        <div className="space-y-1.5">
+                          {eventAccounts.map(acc => (
+                            <div key={acc.email} className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm ${
+                              acc.tickets >= 8 ? 'bg-red-50 border border-red-200' :
+                              acc.tickets >= 6 ? 'bg-amber-50 border border-amber-200' :
+                              'bg-white border border-gray-100'
+                            }`}>
+                              <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 ${
+                                acc.tickets >= 8 ? 'bg-red-200 text-red-800' :
+                                acc.tickets >= 6 ? 'bg-amber-200 text-amber-800' :
+                                'bg-purple-100 text-purple-600'
+                              }`}>
+                                {acc.email[0].toUpperCase()}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs font-medium text-gray-900 truncate">{acc.email}</p>
+                                <p className="text-[10px] text-gray-500">
+                                  {acc.tickets}/8 tickets · {acc.orders} POs
+                                  {acc.sections.length > 0 ? ` · Sec ${acc.sections.join(', ')}` : ''}
+                                </p>
+                              </div>
+                              {acc.tickets >= 8 ? (
+                                <span className="px-1.5 py-0.5 rounded bg-red-100 text-[9px] font-semibold text-red-700 shrink-0">MAXED</span>
+                              ) : acc.tickets >= 6 ? (
+                                <span className="px-1.5 py-0.5 rounded bg-amber-100 text-[9px] font-semibold text-amber-700 shrink-0">{8 - acc.tickets} left</span>
+                              ) : (
+                                <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-[9px] font-medium text-emerald-600 shrink-0">{8 - acc.tickets} left</span>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-emerald-600 py-1 font-medium">No accounts used yet — safe to purchase</p>
+                      )}
+                    </div>
+                  ) : null}
 
                   {/* Ticket Details Card */}
                   <div className="bg-gray-50 rounded-xl border border-gray-200 p-4">

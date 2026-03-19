@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Shield, Eye, EyeOff, Ban, Lock, Check, AlertTriangle } from 'lucide-react';
 
@@ -114,42 +114,43 @@ export default function AdminPage() {
   const router = useRouter();
   const hasChanges = JSON.stringify(flags) !== JSON.stringify(savedFlags);
 
-  // Block access for non-superadmin users
+  // async-parallel: fetch auth + flags in parallel instead of sequentially
   useEffect(() => {
-    fetch('/api/auth/me')
-      .then(res => res.json())
-      .then(data => {
-        if (data.role !== 'superadmin') {
+    async function init() {
+      try {
+        const [authRes, flagsRes] = await Promise.all([
+          fetch('/api/auth/me'),
+          fetch('/api/feature-flags'),
+        ]);
+        const [authData, flagsData] = await Promise.all([
+          authRes.json(),
+          flagsRes.json(),
+        ]);
+
+        // Auth check
+        if (authData.role !== 'superadmin') {
           router.replace('/dashboard');
-        } else {
-          setRoleChecked(true);
+          return;
         }
-      })
-      .catch(() => router.replace('/dashboard'));
-  }, [router]);
+        setRoleChecked(true);
 
-  const fetchFlags = useCallback(async () => {
-    try {
-      const res = await fetch('/api/feature-flags');
-      const data = await res.json();
-      if (data.success && data.flags) {
-        const merged = { ...DEFAULT_FLAGS };
-        for (const key of Object.keys(DEFAULT_FLAGS) as (keyof FeatureFlags)[]) {
-          merged[key] = normalize(data.flags[key]);
+        // Flags
+        if (flagsData.success && flagsData.flags) {
+          const merged = { ...DEFAULT_FLAGS };
+          for (const key of Object.keys(DEFAULT_FLAGS) as (keyof FeatureFlags)[]) {
+            merged[key] = normalize(flagsData.flags[key]);
+          }
+          setFlags(merged);
+          setSavedFlags(merged);
         }
-        setFlags(merged);
-        setSavedFlags(merged);
+      } catch {
+        router.replace('/dashboard');
+      } finally {
+        setLoading(false);
       }
-    } catch {
-      // Use defaults
-    } finally {
-      setLoading(false);
     }
-  }, []);
-
-  useEffect(() => {
-    fetchFlags();
-  }, [fetchFlags]);
+    init();
+  }, [router]);
 
   const handleAuth = (e: React.FormEvent) => {
     e.preventDefault();

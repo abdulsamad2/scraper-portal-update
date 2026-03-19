@@ -3,6 +3,7 @@ import { revalidatePath } from 'next/cache';
 import dbConnect from '@/lib/dbConnect';
 import { Order } from '@/models/orderModel';
 import { Event } from '@/models/eventModel';
+import { Purchase } from '@/models/purchaseModel';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -110,6 +111,71 @@ async function findEventUrl(o: Record<string, any>): Promise<{ eventId: any; url
   }
 
   return null;
+}
+
+function normalizePurchaseName(s: string): string {
+  return s.toLowerCase().trim()
+    .replace(/\s+/g, ' ').replace(/[''`]/g, "'").replace(/\s*[-–—:]\s*/g, ' ')
+    .replace(/\b(at|vs\.?|versus)\b/g, 'vs');
+}
+
+async function syncPurchasesIncremental(apiToken: string, companyId: string) {
+  const headers = { 'X-Company-Id': companyId, 'X-Api-Token': apiToken, 'Accept': 'application/json' };
+  const t0 = Date.now();
+
+  // Get latest purchase in DB
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const latestDoc = await Purchase.findOne().sort({ purchaseDate: -1 }).select('purchaseDate').lean() as any;
+  const sinceDate = latestDoc?.purchaseDate ? new Date(latestDoc.purchaseDate) : null;
+
+  const countRes = await fetch(`${SYNC_API_BASE}/purchases?limit=1&page=1`, { headers, cache: 'no-store' });
+  if (!countRes.ok) return;
+  const { count: total } = await countRes.json();
+  if (!total) return;
+
+  const limit = 200;
+  const totalPages = Math.ceil(total / limit);
+  let synced = 0;
+
+  // Fetch from newest backward, stop when all are older than our latest
+  for (let page = totalPages; page >= 1; page--) {
+    const res = await fetch(`${SYNC_API_BASE}/purchases?limit=${limit}&page=${page}`, { headers, cache: 'no-store' });
+    if (!res.ok) continue;
+    const data = await res.json();
+    const purchases = data.data || [];
+    if (!purchases.length) continue;
+
+    let allOlder = true;
+    const ops = [];
+    for (const p of purchases) {
+      const pDate = p.purchase_date ? new Date(p.purchase_date) : null;
+      if (sinceDate && pDate && pDate <= sinceDate) continue;
+      allOlder = false;
+      const eventDate = p.event_date ? new Date(p.event_date) : null;
+      ops.push({
+        updateOne: {
+          filter: { purchaseId: p.id },
+          update: { $set: {
+            purchaseId: p.id, accountUser: p.account_user || '', accountId: p.account_id,
+            eventName: p.event_name || '', eventDate, eventDay: eventDate ? eventDate.toISOString().slice(0, 10) : null,
+            eventId: p.event_id, venue: p.venue_name || '', purchaseDate: pDate,
+            section: p.ticket_details?.[0]?.section ?? null, row: p.ticket_details?.[0]?.row ?? null,
+            quantity: p.ticket_details?.[0]?.quantity ?? 0, amount: parseFloat(String(p.payment_amount || 0)),
+            site: p.site_description || '', siteType: p.site_type || '',
+            eventNameNorm: normalizePurchaseName(p.event_name || ''),
+          }},
+          upsert: true,
+        },
+      });
+    }
+    if (ops.length > 0) {
+      const r = await Purchase.bulkWrite(ops, { ordered: false });
+      synced += r.upsertedCount + r.modifiedCount;
+    }
+    if (sinceDate && allOlder) break;
+  }
+
+  console.log(`[purchase-sync] ${synced} synced in ${Date.now() - t0}ms`);
 }
 
 export async function GET(request: NextRequest) {
@@ -552,5 +618,11 @@ export async function GET(request: NextRequest) {
     );
   } finally {
     _syncInProgress = false;
+
+    // Non-blocking: sync purchases in background after order sync
+    syncPurchasesIncremental(
+      process.env.SYNC_API_TOKEN!,
+      process.env.SYNC_COMPANY_ID!
+    ).catch(err => console.error('[purchase-sync]', err.message));
   }
 }
