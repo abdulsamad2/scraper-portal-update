@@ -198,7 +198,7 @@ export interface ComparisonRow {
   atFloor: boolean;
   currentRank: number | null;
   suggestedRank: number | null;
-  pricingStatus: 'OVERPRICED' | 'AT_FLOOR' | 'COMPETITIVE' | 'BELOW_MARKET' | 'NO_COMPETITION' | 'NO_OUR_INVENTORY';
+  pricingStatus: 'OVERPRICED' | 'AT_FLOOR' | 'COMPETITIVE' | 'BELOW_MARKET' | 'UNCOMPETITIVE' | 'NO_COMPETITION' | 'NO_OUR_INVENTORY';
   ourFloorPrice: number | null;
   suggestedPrice: number | null;
   // Derived

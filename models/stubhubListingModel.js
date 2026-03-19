@@ -85,6 +85,7 @@ const stubhubListingSchema = new mongoose.Schema(
     sectionLowest: Number,       // Cheapest price in this section right now
     sectionAvg: Number,          // Average price across section
     sectionCount: Number,        // Total competing listings in section
+    sectionHighest: { type: Number, default: null }, // Highest price in section
     priceRank: { type: Number, default: null },
     bestValueRank: { type: Number, default: null },
     dealZonePrice: Number,       // Price threshold needed for Best Deal badge
@@ -102,7 +103,7 @@ const stubhubListingSchema = new mongoose.Schema(
     suggestedRank: { type: Number, default: null },    // Rank our suggestedPrice would achieve
     pricingStatus: {
       type: String,
-      enum: ['OVERPRICED', 'AT_FLOOR', 'COMPETITIVE', 'BELOW_MARKET', 'NO_COMPETITION', 'NO_OUR_INVENTORY'],
+      enum: ['OVERPRICED', 'AT_FLOOR', 'COMPETITIVE', 'BELOW_MARKET', 'UNCOMPETITIVE', 'NO_COMPETITION', 'NO_OUR_INVENTORY'],
       default: 'NO_COMPETITION',
     },
 

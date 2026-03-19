@@ -38,6 +38,7 @@ const statusCfg: Record<PricingStatus, {
   AT_FLOOR:         { label: 'At Floor',       bg: 'bg-amber-50',  text: 'text-amber-700',  border: 'border-l-amber-500',  icon: ShieldAlert },
   COMPETITIVE:      { label: 'Competitive',    bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-l-emerald-500', icon: CheckCircle },
   BELOW_MARKET:     { label: 'Below Market',   bg: 'bg-blue-50',   text: 'text-blue-700',   border: 'border-l-blue-500',   icon: TrendingUp },
+  UNCOMPETITIVE:    { label: 'Uncompetitive',  bg: 'bg-orange-50', text: 'text-orange-700', border: 'border-l-orange-500', icon: ShieldAlert },
   NO_COMPETITION:   { label: 'No Competition', bg: 'bg-gray-50',   text: 'text-gray-500',   border: 'border-l-gray-300',   icon: XCircle },
   NO_OUR_INVENTORY: { label: 'No Inventory',   bg: 'bg-blue-50',   text: 'text-blue-600',   border: 'border-l-blue-400',   icon: Target },
 };
@@ -198,7 +199,7 @@ function ComparisonTable({ rows }: { rows: ComparisonRow[] }) {
       }
     });
 
-  const statusOrder: PricingStatus[] = ['OVERPRICED', 'AT_FLOOR', 'COMPETITIVE', 'BELOW_MARKET', 'NO_COMPETITION', 'NO_OUR_INVENTORY'];
+  const statusOrder: PricingStatus[] = ['OVERPRICED', 'UNCOMPETITIVE', 'AT_FLOOR', 'COMPETITIVE', 'BELOW_MARKET', 'NO_COMPETITION', 'NO_OUR_INVENTORY'];
 
   return (
     <div className="space-y-3">
