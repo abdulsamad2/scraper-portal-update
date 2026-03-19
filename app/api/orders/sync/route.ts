@@ -115,8 +115,9 @@ async function findEventUrl(o: Record<string, any>): Promise<{ eventId: any; url
 
 function normalizePurchaseName(s: string): string {
   return s.toLowerCase().trim()
-    .replace(/\s+/g, ' ').replace(/[''`]/g, "'").replace(/\s*[-–—:]\s*/g, ' ')
-    .replace(/\b(at|vs\.?|versus)\b/g, 'vs');
+    .replace(/[^a-z0-9 ]/g, '')
+    .replace(/\b(at|versus|vs)\b/g, 'vs')
+    .replace(/\s+/g, ' ').trim();
 }
 
 async function syncPurchasesIncremental(apiToken: string, companyId: string) {

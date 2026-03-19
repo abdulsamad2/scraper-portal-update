@@ -55,6 +55,9 @@ export async function POST(request: Request) {
     // Validate on the server — credentials never leave the server
     const role = validateCredentials(username, password);
 
+    // DEBUG: remove after fixing login
+    console.log('[login] username match:', username === process.env.AUTH_USERNAME, '| role:', role, '| superpass set:', !!process.env.SUPER_ADMIN_PASSWORD, '| superpass length:', process.env.SUPER_ADMIN_PASSWORD?.length);
+
     if (!role) {
       return NextResponse.json(
         { error: 'Invalid username or password' },

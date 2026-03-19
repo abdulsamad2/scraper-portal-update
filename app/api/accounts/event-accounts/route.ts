@@ -7,10 +7,14 @@ export const revalidate = 0;
 
 function normalizeName(s: string): string {
   return s.toLowerCase().trim()
-    .replace(/\s+/g, ' ')
-    .replace(/[''`]/g, "'")
-    .replace(/\s*[-–—:]\s*/g, ' ')
-    .replace(/\b(at|vs\.?|versus)\b/g, 'vs');
+    .replace(/[^a-z0-9 ]/g, '')
+    .replace(/\b(at|versus|vs)\b/g, 'vs')
+    .replace(/\s+/g, ' ').trim();
+}
+
+function coreWords(s: string): string[] {
+  const noise = new Set(['the', 'and', 'tour', 'presents', 'featuring', 'feat', 'live', 'in', 'on', 'of', 'a', 'an', 'vs']);
+  return normalizeName(s).split(' ').filter(w => w.length > 1 && !noise.has(w));
 }
 
 /**
@@ -32,13 +36,34 @@ export async function GET(request: NextRequest) {
 
     const eventNorm = normalizeName(eventName);
     const eventDay = eventDate ? new Date(eventDate).toISOString().slice(0, 10) : null;
+    const words = coreWords(eventName);
 
-    // Build query: normalized name + same day
-    const query: Record<string, unknown> = {
-      eventNameNorm: eventNorm,
-    };
-    if (eventDay) {
-      query.eventDay = eventDay;
+    // Build query: try exact normalized name first, then fall back to core-word regex
+    // Always filter by event day when available (same event name can have many dates)
+    const baseDay = eventDay ? { eventDay } : {};
+
+    // Strategy 1: exact normalized name match
+    let query: Record<string, unknown> = { eventNameNorm: eventNorm, ...baseDay };
+    let count = await Purchase.countDocuments(query);
+
+    // Strategy 2: contains match (order name is shorter than purchase name or vice versa)
+    if (count === 0) {
+      const escaped = eventNorm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      query = {
+        $or: [
+          { eventNameNorm: { $regex: escaped } },
+          { eventNameNorm: { $regex: words.slice(0, 3).map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*') } },
+        ],
+        ...baseDay,
+      };
+      count = await Purchase.countDocuments(query);
+    }
+
+    // Strategy 3: if still nothing and we have a day, try just core words on that day
+    if (count === 0 && eventDay && words.length >= 2) {
+      const pattern = words.slice(0, 2).map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*');
+      query = { eventNameNorm: { $regex: pattern }, eventDay };
+      count = await Purchase.countDocuments(query);
     }
 
     // Fast aggregation: group by account
