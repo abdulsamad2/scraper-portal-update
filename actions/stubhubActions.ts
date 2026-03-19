@@ -292,7 +292,7 @@ export async function getEventComparison(eventId: string) {
       shBySection.set(key, entry);
     }
 
-    // Build one row per consecutive group — derive per-row status from actual row price/cost
+    // Build one row per consecutive group — prefer per-row data from inventory over section-level
     const rows: ComparisonRow[] = ourInventory.map(inv => {
       const sh = shBySection.get(normalizeSection(inv.section)) ?? null;
       const ourPrice = inv.inventory.listPrice;
@@ -300,11 +300,12 @@ export async function getEventComparison(eventId: string) {
       const margin   = ourCost > 0 ? +((ourPrice - ourCost) / ourCost * 100).toFixed(1) : null;
 
       const sectionLowest = sh?.sectionLowest ?? null;
-      const sectionHigh   = sh ? sh.sectionHigh : null;
+      const sectionHigh   = inv.inventory.stubhubSectionHighest ?? (sh ? sh.sectionHigh : null);
       const priceDiff     = sectionLowest !== null ? +(ourPrice - sectionLowest).toFixed(2) : null;
 
-      // Use scraper's pre-computed values directly
-      const ourFloorPrice = sh?.ourFloorPrice ?? null;
+      // Prefer per-row data from inventory (written by scraper per-row) over section-level
+      const ourFloorPrice = inv.inventory.stubhubFloorPrice ?? sh?.ourFloorPrice ?? null;
+      const suggestedPrice = inv.inventory.stubhubSuggestedPrice ?? sh?.suggestedPrice ?? null;
       const atFloor = sh?.atFloor ?? false;
       const pricingStatus = sh?.pricingStatus ?? 'NO_COMPETITION';
 
@@ -328,18 +329,18 @@ export async function getEventComparison(eventId: string) {
         sectionLowest,
         sectionAvg:      sh?.sectionAvg      ?? null,
         sectionHigh,
-        sectionCount:    sh?.sectionCount    ?? 0,
+        sectionCount:    inv.inventory.stubhubSectionCount ?? sh?.sectionCount ?? 0,
         ticketClassName: sh?.ticketClassName ?? '',
-        dealZonePrice:   sh?.dealZonePrice   ?? null,
-        badgeAchievable: (sh?.badgeAchievable ?? false) &&
-          (sh?.suggestedPrice == null || ourFloorPrice == null || sh.suggestedPrice >= ourFloorPrice * 0.97),
+        dealZonePrice:   inv.inventory.stubhubDealZonePrice ?? sh?.dealZonePrice ?? null,
+        badgeAchievable: (inv.inventory.stubhubBadgeAchievable ?? sh?.badgeAchievable ?? false) &&
+          (suggestedPrice == null || ourFloorPrice == null || suggestedPrice >= ourFloorPrice * 0.97),
         badgeName:       sh?.badgeName       ?? null,
         atFloor,
         currentRank:     sh?.currentRank     ?? null,
         suggestedRank:   sh?.suggestedRank   ?? null,
         pricingStatus,
         ourFloorPrice,
-        suggestedPrice:  sh?.suggestedPrice  ?? null,
+        suggestedPrice,
         priceDiff,
         pricePosition,
       };

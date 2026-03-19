@@ -233,6 +233,22 @@ const consecutiveGroupSchema = new mongoose.Schema(
         type: Boolean,
         default: false,
       },
+      stubhubFloorPrice: {
+        type: Number,
+        default: null,
+      },
+      stubhubSoftFloor: {
+        type: Number,
+        default: null,
+      },
+      stubhubSectionHighest: {
+        type: Number,
+        default: null,
+      },
+      stubhubSectionCount: {
+        type: Number,
+        default: null,
+      },
     },
   },
   {
