@@ -1,5 +1,14 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 'use server';
+
+const MLB_TEAMS = [
+  "Yankees", "Red Sox", "Blue Jays", "Orioles", "Rays",
+  "Guardians", "Twins", "Tigers", "White Sox", "Royals",
+  "Astros", "Mariners", "Rangers", "Angels", "Athletics",
+  "Braves", "Phillies", "Mets", "Marlins", "Nationals",
+  "Brewers", "Cubs", "Cardinals", "Pirates", "Reds",
+  "Dodgers", "Padres", "Diamondbacks", "Giants", "Rockies",
+];
 import dbConnect from '../lib/dbConnect';
 import { ConsecutiveGroup } from '../models/seatModel';
 import { Event } from '../models/eventModel';
@@ -768,7 +777,9 @@ async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]
       row: inventory?.row || "",
       seats: seatsString,
       barcodes: inventory?.barcodes || "",
-      internal_notes: "-tnow -tmplus",
+      internal_notes: MLB_TEAMS.some(team => (doc.event_name || "").toLowerCase().includes(team.toLowerCase()))
+        ? "-tnow -tmplus -geek"
+        : "-tnow -tmplus",
       public_notes: publicNotes,
       tags,
       list_price: Number(adjustedListPrice.toFixed(2)),
