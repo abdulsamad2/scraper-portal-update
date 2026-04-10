@@ -9,6 +9,17 @@ const MLB_TEAMS = [
   "Brewers", "Cubs", "Cardinals", "Pirates", "Reds",
   "Dodgers", "Padres", "Diamondbacks", "Giants", "Rockies",
 ];
+
+const NFL_TEAMS = [
+  "Bills", "Dolphins", "Patriots", "Jets",
+  "Ravens", "Bengals", "Browns", "Steelers",
+  "Texans", "Colts", "Jaguars", "Titans",
+  "Broncos", "Chiefs", "Raiders", "Chargers",
+  "Cowboys", "Giants", "Eagles", "Commanders",
+  "Bears", "Lions", "Packers", "Vikings",
+  "Falcons", "Panthers", "Saints", "Buccaneers",
+  "Cardinals", "Rams", "49ers", "Seahawks",
+];
 import dbConnect from '../lib/dbConnect';
 import { ConsecutiveGroup } from '../models/seatModel';
 import { Event } from '../models/eventModel';
@@ -784,7 +795,7 @@ async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]
       row: inventory?.row || "",
       seats: seatsString,
       barcodes: inventory?.barcodes || "",
-      internal_notes: MLB_TEAMS.some(team => (doc.event_name || "").toLowerCase().includes(team.toLowerCase()))
+      internal_notes: [...MLB_TEAMS, ...NFL_TEAMS].some(team => (doc.event_name || "").toLowerCase().includes(team.toLowerCase()))
         ? "-tnow -tmplus -geek"
         : "-tnow -tmplus",
       public_notes: publicNotes,
