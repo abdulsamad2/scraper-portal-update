@@ -660,8 +660,8 @@ interface ConsecutiveGroupDocument {
 // Function to determine split configuration based on ticket type and quantity.
 // For resale, prefers the DB `customSplit` value (written by the scraper from TM's
 // sellableQuantities, clipped to the actual seat-group size). Falls back to the
-// legacy hardcoded table only when the DB value is missing. Standard tickets are
-// always NEVERLEAVEONE.
+// legacy hardcoded table only when the DB value is missing. Standard tickets use
+// the DB `customSplit` when present, otherwise NEVERLEAVEONE — no legacy fallback.
 function calculateSplitConfiguration(
   quantity: number,
   splitType?: string,
@@ -694,7 +694,18 @@ function calculateSplitConfiguration(
     return { finalSplitType: 'NEVERLEAVEONE', customSplit: '' };
   }
 
-  // Standard (primary) — always NEVERLEAVEONE.
+  // Standard (primary) — only apply TM's customSplit when the minimum sellable
+  // quantity is >= 4 (i.e. TM is forcing 4-packs or larger). Anything smaller
+  // falls through to NEVERLEAVEONE. No synthetic splits are generated.
+  if (dbCustomSplit && dbCustomSplit.trim().length > 0) {
+    const parsed = dbCustomSplit
+      .split(',')
+      .map(s => parseInt(s.trim(), 10))
+      .filter(n => Number.isFinite(n) && n > 0);
+    if (parsed.length > 0 && Math.min(...parsed) >= 4) {
+      return { finalSplitType: 'CUSTOM', customSplit: dbCustomSplit.trim() };
+    }
+  }
   return { finalSplitType: 'NEVERLEAVEONE', customSplit: '' };
 }
 
