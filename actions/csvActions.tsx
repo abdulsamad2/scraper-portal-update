@@ -441,7 +441,7 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
       'inventory.instant_transfer': 1,
       'inventory.files_available': 1,
       'inventory.splitType': 1,
-      'inventory.custom_split': 1,
+      'inventory.customSplit': 1,
       'inventory.stockType': 1,
       'inventory.zone': 1,
       'inventory.shown_quantity': 1,
@@ -520,7 +520,13 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
         console.log(`[CSV] Chunk ${chunkNum}: ${chunkDocs.length} docs -> ${records.length} rows in ${chunkMs}ms (${processedCount}/${totalDocs}, ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB heap)`);
 
         // Yield control between chunks
-        await new Promise(resolve => (typeof setImmediate !== 'undefined' ? setImmediate : setTimeout)(resolve, 0));
+        await new Promise(resolve => {
+          if (typeof setImmediate !== 'undefined') {
+            setImmediate(resolve);
+          } else {
+            setTimeout(resolve, 0);
+          }
+        });
       }
 
       console.log(`[CSV] Total records found: ${records.length} (processed ${processedCount} docs in ${Date.now() - startTime}ms)`);
@@ -628,7 +634,7 @@ interface ConsecutiveGroupDocument {
     instant_transfer?: boolean;
     files_available?: boolean;
     splitType?: string;
-    custom_split?: string;
+    customSplit?: string;
     stockType?: string;
     zone?: boolean;
     shown_quantity?: number;
@@ -651,54 +657,45 @@ interface ConsecutiveGroupDocument {
   seats?: Array<{ number: string | number }>;
 }
 
-// Function to determine split configuration based on ticket type and quantity
-function calculateSplitConfiguration(quantity: number, splitType?: string): {
-  finalSplitType: CsvRow['split_type']; 
-  customSplit: string; 
+// Function to determine split configuration based on ticket type and quantity.
+// For resale, prefers the DB `customSplit` value (written by the scraper from TM's
+// sellableQuantities, clipped to the actual seat-group size). Falls back to the
+// legacy hardcoded table only when the DB value is missing. Standard tickets are
+// always NEVERLEAVEONE.
+function calculateSplitConfiguration(
+  quantity: number,
+  splitType?: string,
+  dbCustomSplit?: string,
+): {
+  finalSplitType: CsvRow['split_type'];
+  customSplit: string;
 } {
-  // If splitType is "DEFAULT", it's a resale ticket
-  const isResale = splitType === 'DEFAULT';
-  
+  const isResale = splitType !== 'NEVERLEAVEONE';
+
   if (isResale) {
-    // RESALE logic
-    
-    // For quantities over thresholds, use NEVERLEAVEONE
-    // Even quantities over 10 = NEVERLEAVEONE
-    // Odd quantities over 11 = NEVERLEAVEONE
+    if (dbCustomSplit && dbCustomSplit.trim().length > 0) {
+      return { finalSplitType: 'CUSTOM', customSplit: dbCustomSplit.trim() };
+    }
+
+    // Legacy resale fallback — used only when the scraper didn't provide a split.
     if ((quantity % 2 === 0 && quantity >= 10) || (quantity % 2 === 1 && quantity >= 11)) {
       return { finalSplitType: 'NEVERLEAVEONE', customSplit: '' };
     }
-    
-    // For quantities at or below thresholds, use CUSTOM with appropriate splits
-    // Even quantities 10 and below, Odd quantities 11 and below use CUSTOM
-    if (quantity === 2) {
-      return { finalSplitType: 'CUSTOM', customSplit: '2' };
-    } else if (quantity === 3) {
-      return { finalSplitType: 'CUSTOM', customSplit: '3' };
-    } else if (quantity === 4) {
-      return { finalSplitType: 'CUSTOM', customSplit: '4' };
-    } else if (quantity === 5) {
-      return { finalSplitType: 'CUSTOM', customSplit: '3,5' };
-    } else if (quantity === 6) {
-      return { finalSplitType: 'CUSTOM', customSplit: '2,4,6' };
-    } else if (quantity === 7) {
-      return { finalSplitType: 'CUSTOM', customSplit: '2,3,4,5,7' };
-    } else if (quantity === 8) {
-      return { finalSplitType: 'CUSTOM', customSplit: '2,4,6,8' };
-    } else if (quantity === 9) {
-      return { finalSplitType: 'CUSTOM', customSplit: '2,3,4,5,6,7,9' };
-    } else if (quantity === 10) {
-      return { finalSplitType: 'CUSTOM', customSplit: '2,4,6,8,10' };
-    } else if (quantity === 11) {
-      return { finalSplitType: 'CUSTOM', customSplit: '2,3,4,5,6,7,8,9,11' };
-    } else {
-      // For any other quantities (edge cases or quantities > thresholds), use NEVERLEAVEONE
-      return { finalSplitType: 'NEVERLEAVEONE', customSplit: '' };
-    }
-  } else {
-    // STANDARD ticket logic - all standard tickets use NEVERLEAVEONE
+    if (quantity === 2) return { finalSplitType: 'CUSTOM', customSplit: '2' };
+    if (quantity === 3) return { finalSplitType: 'CUSTOM', customSplit: '3' };
+    if (quantity === 4) return { finalSplitType: 'CUSTOM', customSplit: '4' };
+    if (quantity === 5) return { finalSplitType: 'CUSTOM', customSplit: '3,5' };
+    if (quantity === 6) return { finalSplitType: 'CUSTOM', customSplit: '2,4,6' };
+    if (quantity === 7) return { finalSplitType: 'CUSTOM', customSplit: '2,3,4,5,7' };
+    if (quantity === 8) return { finalSplitType: 'CUSTOM', customSplit: '2,4,6,8' };
+    if (quantity === 9) return { finalSplitType: 'CUSTOM', customSplit: '2,3,4,5,6,7,9' };
+    if (quantity === 10) return { finalSplitType: 'CUSTOM', customSplit: '2,4,6,8,10' };
+    if (quantity === 11) return { finalSplitType: 'CUSTOM', customSplit: '2,3,4,5,6,7,8,9,11' };
     return { finalSplitType: 'NEVERLEAVEONE', customSplit: '' };
   }
+
+  // Standard (primary) — always NEVERLEAVEONE.
+  return { finalSplitType: 'NEVERLEAVEONE', customSplit: '' };
 }
 
 // Helper function to process batches
@@ -762,10 +759,12 @@ async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]
       // No fallback — if timezone can't be detected even with live API, keep the stored inHandDate
     }
 
-    // Calculate split configuration based on quantity and split type
+    // Calculate split configuration. Passes the DB `customSplit` (written by the
+    // scraper from TM's sellableQuantities) as the preferred source for resale.
     const { finalSplitType, customSplit } = calculateSplitConfiguration(
       inventory?.quantity || 0,
-      inventory?.splitType
+      inventory?.splitType,
+      inventory?.customSplit,
     );
 
     // Check if row is SRO and handle public notes accordingly
@@ -850,7 +849,13 @@ async function generateCsvString(records: CsvRow[]): Promise<string> {
     
     // Yield control periodically
     if (i % (CHUNK_SIZE * 5) === 0) {
-      await new Promise(resolve => (typeof setImmediate !== 'undefined' ? setImmediate : setTimeout)(resolve, 0));
+      await new Promise(resolve => {
+        if (typeof setImmediate !== 'undefined') {
+          setImmediate(resolve);
+        } else {
+          setTimeout(resolve, 0);
+        }
+      });
     }
   }
   
@@ -946,7 +951,7 @@ export async function* generateInventoryCsvStream(
       'inventory.hideSeatNumbers': 1, 'inventory.in_hand': 1,
       'inventory.inHandDate': 1, 'inventory.instant_transfer': 1,
       'inventory.files_available': 1, 'inventory.splitType': 1,
-      'inventory.custom_split': 1, 'inventory.stockType': 1,
+      'inventory.customSplit': 1, 'inventory.stockType': 1,
       'inventory.zone': 1, 'inventory.shown_quantity': 1,
       'inventory.passthrough': 1,
       'inventory.stubhubSuggestedPrice': 1, 'inventory.stubhubSectionLowest': 1,
