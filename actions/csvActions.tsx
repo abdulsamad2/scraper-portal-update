@@ -537,8 +537,12 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
       }
 
       // Filter out Rhode Island and Maine events (safety net)
+      const blockedStates = ['ri', 'me', 'rhode island', 'maine'];
       const beforeBlocked = records.length;
-      const nonBlockedRecords = records.filter(r => !/,\s*(RI|ME)$/i.test((r.venue_name || '').trim()));
+      const nonBlockedRecords = records.filter(r => {
+        const v = (r.venue_name || '').trim().toLowerCase();
+        return !blockedStates.some(s => v === s || v.endsWith(', ' + s) || v.endsWith(',' + s));
+      });
       if (beforeBlocked - nonBlockedRecords.length > 0) {
         console.log(`[CSV] Filtered out ${beforeBlocked - nonBlockedRecords.length} Rhode Island/Maine records`);
       }

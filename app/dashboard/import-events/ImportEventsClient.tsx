@@ -517,6 +517,11 @@ export default function ImportEventsClient({
       updateImportState(event.id, { status: 'error', error: 'Mapping ID required' });
       return;
     }
+    const blockedStates = ['RI', 'ME'];
+    if (blockedStates.includes(event.venueState?.toUpperCase())) {
+      updateImportState(event.id, { status: 'error', error: `${event.venueState.toUpperCase()} events are not allowed.` });
+      return;
+    }
     updateImportState(event.id, { status: 'importing', error: undefined });
     try {
       // Use the venue's local date/time from the TM Discovery API — this is what

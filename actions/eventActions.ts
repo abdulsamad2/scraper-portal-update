@@ -31,8 +31,9 @@ function escapeRegex(str: string): string {
  * @returns {Promise<object>} The created event object or an error object.
  */
 export async function createEvent(eventData: Partial<Event>) {
-  const venue = ((eventData as any).Venue || '').trim();
-  if (/,\s*(RI|ME)$/i.test(venue)) {
+  const venue = ((eventData as any).Venue || '').trim().toLowerCase();
+  const blockedStates = ['ri', 'me', 'rhode island', 'maine'];
+  if (blockedStates.some(s => venue === s || venue.endsWith(', ' + s) || venue.endsWith(',' + s))) {
     return { error: 'Rhode Island and Maine events are not allowed.' };
   }
 
