@@ -536,16 +536,16 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
         return { success: false, message: 'No inventory data found. Check if events exist and have inventory data.' };
       }
 
-      // Filter out Rhode Island events (safety net)
-      const beforeRI = records.length;
-      const nonRIRecords = records.filter(r => !/,\s*RI$/i.test((r.venue_name || '').trim()));
-      if (beforeRI - nonRIRecords.length > 0) {
-        console.log(`[CSV] Filtered out ${beforeRI - nonRIRecords.length} Rhode Island records`);
+      // Filter out Rhode Island and Maine events (safety net)
+      const beforeBlocked = records.length;
+      const nonBlockedRecords = records.filter(r => !/,\s*(RI|ME)$/i.test((r.venue_name || '').trim()));
+      if (beforeBlocked - nonBlockedRecords.length > 0) {
+        console.log(`[CSV] Filtered out ${beforeBlocked - nonBlockedRecords.length} Rhode Island/Maine records`);
       }
 
       // Apply exclusion rules
       const exclStart = Date.now();
-      let filteredRecords = await applyExclusionRules(nonRIRecords);
+      let filteredRecords = await applyExclusionRules(nonBlockedRecords);
       console.log(`[CSV] Exclusion rules applied in ${Date.now() - exclStart}ms`);
 
       // Apply min seat filter (row-based or section-based depending on mode)
