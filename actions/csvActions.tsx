@@ -20,6 +20,12 @@ const NFL_TEAMS = [
   "Falcons", "Panthers", "Saints", "Buccaneers",
   "Cardinals", "Rams", "49ers", "Seahawks",
 ];
+
+// Pre-computed lowercase team names — avoids recreating + lowercasing on every CSV row
+const ALL_TEAMS_LOWER = [...MLB_TEAMS, ...NFL_TEAMS].map(t => t.toLowerCase());
+
+// Blocked state values for venue filtering (RI + ME)
+const BLOCKED_STATES = ['ri', 'me', 'rhode island', 'maine'];
 import dbConnect from '../lib/dbConnect';
 import { ConsecutiveGroup } from '../models/seatModel';
 import { Event } from '../models/eventModel';
@@ -537,11 +543,10 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
       }
 
       // Filter out Rhode Island and Maine events (safety net)
-      const blockedStates = ['ri', 'me', 'rhode island', 'maine'];
       const beforeBlocked = records.length;
       const nonBlockedRecords = records.filter(r => {
         const v = (r.venue_name || '').trim().toLowerCase();
-        return !blockedStates.some(s => v === s || v.endsWith(', ' + s) || v.endsWith(',' + s));
+        return !BLOCKED_STATES.some(s => v === s || v.endsWith(', ' + s) || v.endsWith(',' + s));
       });
       if (beforeBlocked - nonBlockedRecords.length > 0) {
         console.log(`[CSV] Filtered out ${beforeBlocked - nonBlockedRecords.length} Rhode Island/Maine records`);
@@ -809,7 +814,7 @@ async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]
       row: inventory?.row || "",
       seats: seatsString,
       barcodes: inventory?.barcodes || "",
-      internal_notes: [...MLB_TEAMS, ...NFL_TEAMS].some(team => (doc.event_name || "").toLowerCase().includes(team.toLowerCase()))
+      internal_notes: ALL_TEAMS_LOWER.some(team => (doc.event_name || "").toLowerCase().includes(team))
         ? "-tnow -tmplus -geek"
         : "-tnow -tmplus",
       public_notes: publicNotes,
@@ -1024,10 +1029,9 @@ export async function* generateInventoryCsvStream(
         if (enrichedDocs.length > 0) {
           const processedBatch = await processBatch(enrichedDocs);
           // Filter out Rhode Island and Maine events (safety net)
-          const streamBlockedStates = ['ri', 'me', 'rhode island', 'maine'];
           const nonBlockedBatch = processedBatch.filter(r => {
             const v = (r.venue_name || '').trim().toLowerCase();
-            return !streamBlockedStates.some(s => v === s || v.endsWith(', ' + s) || v.endsWith(',' + s));
+            return !BLOCKED_STATES.some(s => v === s || v.endsWith(', ' + s) || v.endsWith(',' + s));
           });
           const beforeExclusion = nonBlockedBatch.length;
           let filtered = await applyExclusionRules(nonBlockedBatch);
