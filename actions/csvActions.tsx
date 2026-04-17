@@ -1023,8 +1023,14 @@ export async function* generateInventoryCsvStream(
 
         if (enrichedDocs.length > 0) {
           const processedBatch = await processBatch(enrichedDocs);
-          const beforeExclusion = processedBatch.length;
-          let filtered = await applyExclusionRules(processedBatch);
+          // Filter out Rhode Island and Maine events (safety net)
+          const streamBlockedStates = ['ri', 'me', 'rhode island', 'maine'];
+          const nonBlockedBatch = processedBatch.filter(r => {
+            const v = (r.venue_name || '').trim().toLowerCase();
+            return !streamBlockedStates.some(s => v === s || v.endsWith(', ' + s) || v.endsWith(',' + s));
+          });
+          const beforeExclusion = nonBlockedBatch.length;
+          let filtered = await applyExclusionRules(nonBlockedBatch);
           // Apply min seat filter (row-based or section-based)
           if (minSeatFilter > 0) {
             if (minSeatFilterMode === 'section') {
