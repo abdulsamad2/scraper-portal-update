@@ -997,8 +997,11 @@ export async function* generateInventoryCsvStream(
     // Yield CSV header immediately to keep connection alive
     yield { type: 'header', text: csvColumns.map(col => col.title).join(',') + '\n' };
 
-    let totalRecords = 0;
-    let totalExcluded = 0;
+    // Accumulate all chunks after per-chunk exclusion rules, then apply the
+    // min-seat filter globally so section totals aggregate across chunks
+    // (matches generateInventoryCsv).
+    const accumulated: CsvRow[] = [];
+    let totalCollected = 0;
 
     for (let i = 0; i < totalDocs; i += CHUNK_SIZE) {
       const chunkIds = allIds.slice(i, i + CHUNK_SIZE).map((d: { _id: string }) => d._id);
@@ -1028,39 +1031,47 @@ export async function* generateInventoryCsvStream(
 
         if (enrichedDocs.length > 0) {
           const processedBatch = await processBatch(enrichedDocs);
-          // Filter out Rhode Island and Maine events (safety net)
+          totalCollected += processedBatch.length;
           const nonBlockedBatch = processedBatch.filter(r => {
             const v = (r.venue_name || '').trim().toLowerCase();
             return !BLOCKED_STATES.some(s => v === s || v.endsWith(', ' + s) || v.endsWith(',' + s));
           });
-          const beforeExclusion = nonBlockedBatch.length;
-          let filtered = await applyExclusionRules(nonBlockedBatch);
-          // Apply min seat filter (row-based or section-based)
-          if (minSeatFilter > 0) {
-            if (minSeatFilterMode === 'section') {
-              const sectionTotals = new Map<string, number>();
-              for (const r of filtered) {
-                const key = `${r.event_id}|${r.section}`;
-                sectionTotals.set(key, (sectionTotals.get(key) ?? 0) + r.quantity);
-              }
-              filtered = filtered.filter(r => {
-                const key = `${r.event_id}|${r.section}`;
-                return (sectionTotals.get(key) ?? 0) > minSeatFilter;
-              });
-            } else {
-              filtered = filtered.filter(r => r.quantity > minSeatFilter);
-            }
-          }
-          totalExcluded += beforeExclusion - filtered.length;
-
+          const filtered = await applyExclusionRules(nonBlockedBatch);
           if (filtered.length > 0) {
-            totalRecords += filtered.length;
-            yield { type: 'data', text: recordsToCsvChunk(filtered) + '\n' };
+            for (const r of filtered) accumulated.push(r);
           }
         }
       }
 
-      // Yield control between chunks
+      await new Promise(resolve => (typeof setImmediate !== 'undefined' ? setImmediate : setTimeout)(resolve, 0));
+    }
+
+    let finalRecords: CsvRow[] = accumulated;
+    if (minSeatFilter > 0) {
+      const beforeMinSeat = finalRecords.length;
+      if (minSeatFilterMode === 'section') {
+        const sectionTotals = new Map<string, number>();
+        for (const r of finalRecords) {
+          const key = `${r.event_id}|${r.section}`;
+          sectionTotals.set(key, (sectionTotals.get(key) ?? 0) + r.quantity);
+        }
+        finalRecords = finalRecords.filter(r => {
+          const key = `${r.event_id}|${r.section}`;
+          return (sectionTotals.get(key) ?? 0) > minSeatFilter;
+        });
+      } else {
+        finalRecords = finalRecords.filter(r => r.quantity > minSeatFilter);
+      }
+      console.log(`[CSV Stream] Min seat filter [${minSeatFilterMode}] (<= ${minSeatFilter}): removed ${beforeMinSeat - finalRecords.length} listings`);
+    }
+
+    const totalRecords = finalRecords.length;
+    const totalExcluded = totalCollected - totalRecords;
+
+    const YIELD_CHUNK = 5000;
+    for (let i = 0; i < finalRecords.length; i += YIELD_CHUNK) {
+      const slice = finalRecords.slice(i, i + YIELD_CHUNK);
+      yield { type: 'data', text: recordsToCsvChunk(slice) + '\n' };
       await new Promise(resolve => (typeof setImmediate !== 'undefined' ? setImmediate : setTimeout)(resolve, 0));
     }
 
