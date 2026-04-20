@@ -20,23 +20,43 @@ export async function POST(req: NextRequest) {
 
     const stream = new ReadableStream({
       async start(controller) {
+        let clientClosed = false;
+        const safeEnqueue = (bytes: Uint8Array) => {
+          if (clientClosed) return;
+          try {
+            controller.enqueue(bytes);
+          } catch (e) {
+            if ((e as { code?: string })?.code === 'ERR_INVALID_STATE') {
+              clientClosed = true;
+              console.warn('[generate-csv] client disconnected mid-stream — halting');
+            } else {
+              throw e;
+            }
+          }
+        };
+
         try {
           for await (const chunk of generateInventoryCsvStream(eventUpdateFilterMinutes)) {
+            if (clientClosed) break;
             if (chunk.type === 'header' || chunk.type === 'data') {
               if (chunk.text) {
                 hasData = true;
-                controller.enqueue(encoder.encode(chunk.text));
+                safeEnqueue(encoder.encode(chunk.text));
               }
             } else if (chunk.type === 'done') {
               if (chunk.error && !hasData) {
-                controller.enqueue(encoder.encode(`ERROR: ${chunk.error}`));
+                safeEnqueue(encoder.encode(`ERROR: ${chunk.error}`));
               }
             }
           }
-          controller.close();
+          if (!clientClosed) {
+            try { controller.close(); } catch { /* already closed */ }
+          }
         } catch (error) {
           console.error('Stream error:', error);
-          controller.error(error);
+          if (!clientClosed) {
+            try { controller.error(error); } catch { /* already closed */ }
+          }
         }
       },
     });

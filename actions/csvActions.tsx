@@ -994,14 +994,36 @@ export async function* generateInventoryCsvStream(
       return;
     }
 
+    // Pre-aggregate global section totals in one Mongo pass so the per-chunk
+    // min-seat filter sees the whole section instead of just the current chunk.
+    // This gives parity with generateInventoryCsv while keeping streaming alive.
+    const sectionTotalsMap = new Map<string, number>();
+    if (minSeatFilter > 0 && minSeatFilterMode === 'section') {
+      const aggStart = Date.now();
+      const totals = await ConsecutiveGroup.aggregate(
+        [
+          { $match: eventFilter },
+          {
+            $group: {
+              _id: { eventId: '$eventId', section: '$inventory.section' },
+              total: { $sum: '$inventory.quantity' },
+            },
+          },
+        ] as PipelineStage[],
+        { allowDiskUse: true, maxTimeMS: 60000 }
+      );
+      for (const row of totals) {
+        const key = `${row._id.eventId}|${row._id.section}`;
+        sectionTotalsMap.set(key, row.total);
+      }
+      console.log(`[CSV Stream] Pre-aggregated ${sectionTotalsMap.size} section totals in ${Date.now() - aggStart}ms`);
+    }
+
     // Yield CSV header immediately to keep connection alive
     yield { type: 'header', text: csvColumns.map(col => col.title).join(',') + '\n' };
 
-    // Accumulate all chunks after per-chunk exclusion rules, then apply the
-    // min-seat filter globally so section totals aggregate across chunks
-    // (matches generateInventoryCsv).
-    const accumulated: CsvRow[] = [];
-    let totalCollected = 0;
+    let totalRecords = 0;
+    let totalExcluded = 0;
 
     for (let i = 0; i < totalDocs; i += CHUNK_SIZE) {
       const chunkIds = allIds.slice(i, i + CHUNK_SIZE).map((d: { _id: string }) => d._id);
@@ -1031,47 +1053,32 @@ export async function* generateInventoryCsvStream(
 
         if (enrichedDocs.length > 0) {
           const processedBatch = await processBatch(enrichedDocs);
-          totalCollected += processedBatch.length;
+          const beforeBatchFilters = processedBatch.length;
           const nonBlockedBatch = processedBatch.filter(r => {
             const v = (r.venue_name || '').trim().toLowerCase();
             return !BLOCKED_STATES.some(s => v === s || v.endsWith(', ' + s) || v.endsWith(',' + s));
           });
-          const filtered = await applyExclusionRules(nonBlockedBatch);
+          let filtered = await applyExclusionRules(nonBlockedBatch);
+          if (minSeatFilter > 0) {
+            if (minSeatFilterMode === 'section') {
+              filtered = filtered.filter(r => {
+                const key = `${r.event_id}|${r.section}`;
+                return (sectionTotalsMap.get(key) ?? 0) > minSeatFilter;
+              });
+            } else {
+              filtered = filtered.filter(r => r.quantity > minSeatFilter);
+            }
+          }
+          totalExcluded += beforeBatchFilters - filtered.length;
+
           if (filtered.length > 0) {
-            for (const r of filtered) accumulated.push(r);
+            totalRecords += filtered.length;
+            yield { type: 'data', text: recordsToCsvChunk(filtered) + '\n' };
           }
         }
       }
 
-      await new Promise(resolve => (typeof setImmediate !== 'undefined' ? setImmediate : setTimeout)(resolve, 0));
-    }
-
-    let finalRecords: CsvRow[] = accumulated;
-    if (minSeatFilter > 0) {
-      const beforeMinSeat = finalRecords.length;
-      if (minSeatFilterMode === 'section') {
-        const sectionTotals = new Map<string, number>();
-        for (const r of finalRecords) {
-          const key = `${r.event_id}|${r.section}`;
-          sectionTotals.set(key, (sectionTotals.get(key) ?? 0) + r.quantity);
-        }
-        finalRecords = finalRecords.filter(r => {
-          const key = `${r.event_id}|${r.section}`;
-          return (sectionTotals.get(key) ?? 0) > minSeatFilter;
-        });
-      } else {
-        finalRecords = finalRecords.filter(r => r.quantity > minSeatFilter);
-      }
-      console.log(`[CSV Stream] Min seat filter [${minSeatFilterMode}] (<= ${minSeatFilter}): removed ${beforeMinSeat - finalRecords.length} listings`);
-    }
-
-    const totalRecords = finalRecords.length;
-    const totalExcluded = totalCollected - totalRecords;
-
-    const YIELD_CHUNK = 5000;
-    for (let i = 0; i < finalRecords.length; i += YIELD_CHUNK) {
-      const slice = finalRecords.slice(i, i + YIELD_CHUNK);
-      yield { type: 'data', text: recordsToCsvChunk(slice) + '\n' };
+      // Yield control between chunks
       await new Promise(resolve => (typeof setImmediate !== 'undefined' ? setImmediate : setTimeout)(resolve, 0));
     }
 

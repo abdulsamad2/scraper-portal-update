@@ -1,6 +1,6 @@
-export type EventType = 'NFL' | 'MLB' | 'NHL' | 'NBA' | 'Other';
+export type EventType = 'NFL' | 'MLB' | 'NHL' | 'NBA' | 'MLS' | 'Other';
 
-export const EVENT_TYPES: EventType[] = ['NFL', 'MLB', 'NHL', 'NBA', 'Other'];
+export const EVENT_TYPES: EventType[] = ['NFL', 'MLB', 'NHL', 'NBA', 'MLS', 'Other'];
 
 // Venues used by only one league. Substring match on the lowercased venue.
 // Keep this list conservative — shared arenas (MSG, TD Garden, etc.) deliberately
@@ -126,6 +126,32 @@ const SINGLE_LEAGUE_VENUES: Array<[string, Exclude<EventType, 'Other'>]> = [
   ['xcel energy center', 'NHL'],
   ['amerant bank arena', 'NHL'],
   ['fla live arena', 'NHL'],
+
+  // MLS-only soccer-specific stadiums
+  ['audi field', 'MLS'],
+  ['bmo stadium', 'MLS'],
+  ['bmo field', 'MLS'],
+  ['chase stadium', 'MLS'],
+  ["children's mercy park", 'MLS'],
+  ['children mercy park', 'MLS'],
+  ['dignity health sports park', 'MLS'],
+  ['inter&co stadium', 'MLS'],
+  ['inter co stadium', 'MLS'],
+  ['exploria stadium', 'MLS'],
+  ['geodis park', 'MLS'],
+  ['lower.com field', 'MLS'],
+  ['paypal park', 'MLS'],
+  ['providence park', 'MLS'],
+  ['q2 stadium', 'MLS'],
+  ['red bull arena', 'MLS'],
+  ['saputo stadium', 'MLS'],
+  ['stade saputo', 'MLS'],
+  ['shell energy stadium', 'MLS'],
+  ['snapdragon stadium', 'MLS'],
+  ['subaru park', 'MLS'],
+  ['tql stadium', 'MLS'],
+  ['allianz field', 'MLS'],
+  ['citypark', 'MLS'],
 ];
 
 export function detectSportFromVenue(venue: string | undefined | null): EventType | null {

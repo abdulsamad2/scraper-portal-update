@@ -1,6 +1,6 @@
 'use client';
 import React from 'react';
-import { AlertCircle, CheckCircle, Hash, Tag, Calendar, Clock, MapPin, Ticket, Minus, Plus, Globe, Trophy } from 'lucide-react';
+import { AlertCircle, CheckCircle, Hash, Tag, Calendar, Clock, MapPin, Ticket, Minus, Plus, Globe } from 'lucide-react';
 import { EVENT_TYPES } from '@/lib/venueToSport';
 
 // Explicit validation status variants instead of boolean props
@@ -538,25 +538,20 @@ export const EventFormFields = {
     return (
       <FormField.Root>
         <FormField.Label htmlFor={name} required>Event Type</FormField.Label>
-        <div className="relative">
-          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-            <Trophy className="h-4 w-4 text-gray-400" aria-hidden="true" />
-          </div>
-          <select
-            id={name}
-            name={name}
-            value={value}
-            onChange={onChange}
-            onBlur={onBlur}
-            disabled={disabled}
-            className={`w-full pl-9 pr-8 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-colors bg-white ${borderClass} disabled:bg-gray-50 disabled:text-gray-500`}
-          >
-            <option value="">Select a type…</option>
-            {EVENT_TYPES.map(t => (
-              <option key={t} value={t}>{t}</option>
-            ))}
-          </select>
-        </div>
+        <select
+          id={name}
+          name={name}
+          value={value}
+          onChange={onChange}
+          onBlur={onBlur}
+          disabled={disabled}
+          className={`w-full px-4 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-colors bg-white ${borderClass} disabled:bg-gray-50 disabled:text-gray-500`}
+        >
+          <option value="">Select a type…</option>
+          {EVENT_TYPES.map(t => (
+            <option key={t} value={t}>{t}</option>
+          ))}
+        </select>
         {status === 'invalid' && error ? (
           <p className="mt-1 text-sm text-red-600 flex items-center gap-1">
             <AlertCircle className="h-3 w-3" aria-hidden="true" />

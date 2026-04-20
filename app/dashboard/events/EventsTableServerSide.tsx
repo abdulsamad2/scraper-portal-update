@@ -31,14 +31,15 @@ interface EventData {
   includeStandardSeats?: boolean;
   includeResaleSeats?: boolean;
   stubhubEnabled?: boolean;
-  eventType?: 'NFL' | 'MLB' | 'NHL' | 'NBA' | 'Other' | null;
+  eventType?: 'NFL' | 'MLB' | 'NHL' | 'NBA' | 'MLS' | 'Other' | null;
 }
 
 const EVENT_TYPE_BADGE: Record<string, { cls: string; dot: string }> = {
-  NFL: { cls: 'bg-amber-100 text-amber-800 border-amber-300/80',  dot: 'bg-amber-500' },
-  MLB: { cls: 'bg-blue-100  text-blue-800  border-blue-300/80',   dot: 'bg-blue-500'  },
-  NBA: { cls: 'bg-orange-100 text-orange-800 border-orange-300/80', dot: 'bg-orange-500' },
-  NHL: { cls: 'bg-sky-100   text-sky-800   border-sky-300/80',    dot: 'bg-sky-500'   },
+  NFL: { cls: 'bg-amber-100 text-amber-800 border-amber-300/80',    dot: 'bg-amber-500'   },
+  MLB: { cls: 'bg-blue-100  text-blue-800  border-blue-300/80',     dot: 'bg-blue-500'    },
+  NBA: { cls: 'bg-orange-100 text-orange-800 border-orange-300/80', dot: 'bg-orange-500'  },
+  NHL: { cls: 'bg-sky-100   text-sky-800   border-sky-300/80',      dot: 'bg-sky-500'     },
+  MLS: { cls: 'bg-emerald-100 text-emerald-800 border-emerald-300/80', dot: 'bg-emerald-500' },
   Other: { cls: 'bg-violet-100 text-violet-800 border-violet-300/80', dot: 'bg-violet-500' },
 };
 
