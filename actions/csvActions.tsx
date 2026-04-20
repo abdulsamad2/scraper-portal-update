@@ -1000,12 +1000,15 @@ export async function* generateInventoryCsvStream(
     const sectionTotalsMap = new Map<string, number>();
     if (minSeatFilter > 0 && minSeatFilterMode === 'section') {
       const aggStart = Date.now();
+      // CsvRow.event_id is populated from doc.mapping_id (see processBatch),
+      // so lookups are keyed `${mapping_id}|${section}`. Aggregate by the same
+      // field to keep parity with the non-stream path.
       const totals = await ConsecutiveGroup.aggregate(
         [
           { $match: eventFilter },
           {
             $group: {
-              _id: { eventId: '$eventId', section: '$inventory.section' },
+              _id: { mappingId: '$mapping_id', section: '$inventory.section' },
               total: { $sum: '$inventory.quantity' },
             },
           },
@@ -1013,7 +1016,7 @@ export async function* generateInventoryCsvStream(
         { allowDiskUse: true, maxTimeMS: 60000 }
       );
       for (const row of totals) {
-        const key = `${row._id.eventId}|${row._id.section}`;
+        const key = `${row._id.mappingId}|${row._id.section}`;
         sectionTotalsMap.set(key, row.total);
       }
       console.log(`[CSV Stream] Pre-aggregated ${sectionTotalsMap.size} section totals in ${Date.now() - aggStart}ms`);
