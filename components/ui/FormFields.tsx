@@ -1,6 +1,7 @@
 'use client';
 import React from 'react';
-import { AlertCircle, CheckCircle, Hash, Tag, Calendar, Clock, MapPin, Ticket, Minus, Plus, Globe } from 'lucide-react';
+import { AlertCircle, CheckCircle, Hash, Tag, Calendar, Clock, MapPin, Ticket, Minus, Plus, Globe, Trophy } from 'lucide-react';
+import { EVENT_TYPES } from '@/lib/venueToSport';
 
 // Explicit validation status variants instead of boolean props
 const FieldStatus = {
@@ -516,5 +517,55 @@ export const EventFormFields = {
         <span className="ml-2 text-sm text-gray-700">Initially Paused (Skip Scraping)</span>
       </FormField.Label>
     </div>
-  )
+  ),
+
+  EventType: ({ name, value, status, error, onChange, onBlur, disabled, autoDetected }: {
+    name: string;
+    value: string;
+    status: 'untouched' | 'valid' | 'invalid';
+    error?: string;
+    onChange: (e: React.ChangeEvent<HTMLSelectElement>) => void;
+    onBlur: (e: React.FocusEvent<HTMLSelectElement>) => void;
+    disabled?: boolean;
+    autoDetected?: boolean;
+  }) => {
+    const borderClass = status === 'invalid'
+      ? 'border-red-500 bg-red-50'
+      : 'border-gray-300';
+    const helpText = autoDetected && value
+      ? 'Auto-detected from venue — change if wrong'
+      : 'Required before scraping can start';
+    return (
+      <FormField.Root>
+        <FormField.Label htmlFor={name} required>Event Type</FormField.Label>
+        <div className="relative">
+          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+            <Trophy className="h-4 w-4 text-gray-400" aria-hidden="true" />
+          </div>
+          <select
+            id={name}
+            name={name}
+            value={value}
+            onChange={onChange}
+            onBlur={onBlur}
+            disabled={disabled}
+            className={`w-full pl-9 pr-8 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-colors bg-white ${borderClass} disabled:bg-gray-50 disabled:text-gray-500`}
+          >
+            <option value="">Select a type…</option>
+            {EVENT_TYPES.map(t => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+        </div>
+        {status === 'invalid' && error ? (
+          <p className="mt-1 text-sm text-red-600 flex items-center gap-1">
+            <AlertCircle className="h-3 w-3" aria-hidden="true" />
+            {error}
+          </p>
+        ) : (
+          <FormField.Help>{helpText}</FormField.Help>
+        )}
+      </FormField.Root>
+    );
+  }
 };

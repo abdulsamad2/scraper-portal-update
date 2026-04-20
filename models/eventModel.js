@@ -37,6 +37,11 @@ const eventSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    eventType: {
+      type: String,
+      enum: ["NFL", "MLB", "NHL", "NBA", "Other", null],
+      default: null,
+    },
     inHandDate: {
       type: Date,
       default: Date.now,
@@ -109,5 +114,6 @@ const eventSchema = new mongoose.Schema(
 // Indexes
 eventSchema.index({ URL: 1 }, { unique: true });
 eventSchema.index({ Last_Updated: 1 }); // Index for CSV generation filtering
+eventSchema.index({ eventType: 1 });
 
 export const Event = mongoose.models.Event || mongoose.model("Event", eventSchema);

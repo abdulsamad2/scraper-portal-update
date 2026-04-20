@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import dbConnect from '@/lib/dbConnect';
 import { Event } from '@/models/eventModel';
+import { isValidEventType } from '@/lib/venueToSport';
 
 // Escape special regex characters to prevent ReDoS and injection
 function escapeRegex(str: string): string {
@@ -15,23 +16,24 @@ export async function GET(request: Request) {
     const page = Math.max(1, parseInt(searchParams.get('page') || '1') || 1);
     const limit = Math.min(Math.max(1, parseInt(searchParams.get('limit') || '1000') || 1000), 5000);
     const search = searchParams.get('search') || '';
+    const eventType = searchParams.get('eventType') || '';
 
-    // Build search filter
-    interface SearchFilter {
-      $or?: Array<{
-        Event_Name?: { $regex: string; $options: string };
-        Venue?: { $regex: string; $options: string };
-      }>;
-    }
-
-    const filter: SearchFilter = {};
+    const andConditions: Record<string, unknown>[] = [];
     if (search) {
       const escapedSearch = escapeRegex(search);
-      filter.$or = [
-        { Event_Name: { $regex: escapedSearch, $options: 'i' } },
-        { Venue: { $regex: escapedSearch, $options: 'i' } }
-      ];
+      andConditions.push({
+        $or: [
+          { Event_Name: { $regex: escapedSearch, $options: 'i' } },
+          { Venue: { $regex: escapedSearch, $options: 'i' } },
+        ],
+      });
     }
+    if (eventType === 'unset') {
+      andConditions.push({ $or: [{ eventType: null }, { eventType: { $exists: false } }] });
+    } else if (isValidEventType(eventType)) {
+      andConditions.push({ eventType });
+    }
+    const filter = andConditions.length ? { $and: andConditions } : {};
 
     // Calculate skip value
     const skip = (page - 1) * limit;
@@ -54,6 +56,7 @@ export async function GET(request: Request) {
       resaleMarkupAdjustment: 1,
       includeStandardSeats: 1,
       includeResaleSeats: 1,
+      eventType: 1,
     })
     .sort({ Event_DateTime: -1 })
     .skip(skip)

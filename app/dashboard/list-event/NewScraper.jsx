@@ -5,6 +5,7 @@ import { EventFormProvider, useEventForm } from "@/components/providers/EventFor
 import { EventFormFields } from "@/components/ui/FormFields";
 import { EventFormMode, FormStatusMessages } from "@/components/ui/FormModes";
 import { useNotifications } from "@/components/providers/NotificationProvider";
+import { detectSportFromVenue } from "@/lib/venueToSport";
 
 
 // Explicit mode variants instead of boolean isEdit prop
@@ -187,7 +188,13 @@ const EventFormContent = ({ mode, onCancel, onSuccess, initialData }) => {
         form.actions.updateField('URL', value);
         if (extractedData.eventId) form.actions.updateField('Event_ID', extractedData.eventId);
         if (extractedData.eventName) form.actions.updateField('Event_Name', extractedData.eventName);
-        if (extractedData.venue) form.actions.updateField('Venue', extractedData.venue);
+        if (extractedData.venue) {
+          form.actions.updateField('Venue', extractedData.venue);
+          if (!form.data.eventType.value) {
+            const guess = detectSportFromVenue(extractedData.venue);
+            if (guess) form.actions.updateField('eventType', guess);
+          }
+        }
         if (extractedData.eventDate) form.actions.updateField('Event_DateTime', extractedData.eventDate);
         if (extractedData.inHandDate) form.actions.updateField('inHandDate', extractedData.inHandDate);
       } else {
@@ -197,6 +204,12 @@ const EventFormContent = ({ mode, onCancel, onSuccess, initialData }) => {
         if (extractedId) {
           form.actions.updateField('Event_ID', extractedId);
         }
+      }
+    } else if (name === "Venue") {
+      form.actions.updateField('Venue', value);
+      if (!form.data.eventType.value) {
+        const guess = detectSportFromVenue(value);
+        if (guess) form.actions.updateField('eventType', guess);
       }
     } else if (name === "mapping_id") {
       // Auto-extract production ID from pasted Vivid Seats URLs
@@ -253,6 +266,7 @@ const EventFormContent = ({ mode, onCancel, onSuccess, initialData }) => {
         priceIncreasePercentage: form.data.Percentage_Increase_ListCost.value,
         standardMarkupAdjustment: form.data.standardMarkupAdjustment.value,
         resaleMarkupAdjustment: form.data.resaleMarkupAdjustment.value,
+        eventType: form.data.eventType.value || null,
       };
 
       let result;
@@ -381,6 +395,23 @@ const EventFormContent = ({ mode, onCancel, onSuccess, initialData }) => {
               onBlur={handleBlur}
               disabled={form.meta.isSubmitting}
             />
+
+            {/* Event Type Field */}
+            {(() => {
+              const detected = detectSportFromVenue(form.data.Venue.value);
+              return (
+                <EventFormFields.EventType
+                  name="eventType"
+                  value={form.data.eventType.value}
+                  status={form.data.eventType.status}
+                  error={form.data.eventType.error}
+                  onChange={handleInputChange}
+                  onBlur={handleBlur}
+                  disabled={form.meta.isSubmitting}
+                  autoDetected={!!detected && form.data.eventType.value === detected}
+                />
+              );
+            })()}
 
             {/* Zone Field */}
             <EventFormFields.Zone

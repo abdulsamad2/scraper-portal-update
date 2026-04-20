@@ -1,5 +1,6 @@
 'use client';
 import React, { createContext, useContext, useState, ReactNode } from 'react';
+import { EVENT_TYPES, isValidEventType, type EventType } from '@/lib/venueToSport';
 
 // Define explicit form states instead of multiple boolean flags
 type FormState = 'idle' | 'submitting' | 'success' | 'error';
@@ -28,7 +29,10 @@ interface FormData {
   Percentage_Increase_ListCost: FormField;
   standardMarkupAdjustment: FormField;
   resaleMarkupAdjustment: FormField;
+  eventType: FormField;
 }
+
+export const EVENT_TYPE_OPTIONS: EventType[] = EVENT_TYPES;
 
 interface FormContextInterface {
   state: FormState;
@@ -66,6 +70,7 @@ const validationRules: {
   Percentage_Increase_ListCost: (value: number) => boolean;
   standardMarkupAdjustment: (value: number) => boolean;
   resaleMarkupAdjustment: (value: number) => boolean;
+  eventType: (value: string) => boolean;
 } = {
   URL: (value: string) => {
     try {
@@ -88,6 +93,7 @@ const validationRules: {
   Percentage_Increase_ListCost: (value: number) => value >= 0,
   standardMarkupAdjustment: () => true,
   resaleMarkupAdjustment: () => true,
+  eventType: (value: string) => isValidEventType(value),
 };
 
 const errorMessages = {
@@ -105,6 +111,7 @@ const errorMessages = {
   Percentage_Increase_ListCost: "Please enter a valid percentage (0 or greater)",
   standardMarkupAdjustment: "",
   resaleMarkupAdjustment: "",
+  eventType: "Pick NFL, MLB, NHL, NBA, or Other",
 };
 
 export function EventFormProvider({ children, initialData }: { 
@@ -138,6 +145,7 @@ export function EventFormProvider({ children, initialData }: {
       Percentage_Increase_ListCost: { value: initialData?.priceIncreasePercentage || 0, status: 'untouched' },
       standardMarkupAdjustment: { value: initialData?.standardMarkupAdjustment ?? 0, status: 'untouched' },
       resaleMarkupAdjustment: { value: initialData?.resaleMarkupAdjustment ?? 0, status: 'untouched' },
+      eventType: { value: initialData?.eventType ?? "", status: 'untouched' },
     };
   };
 
@@ -167,6 +175,7 @@ export function EventFormProvider({ children, initialData }: {
       case "Zone":
       case "inHandDate":
       case "mapping_id":
+      case "eventType":
         return validationRules[name](value as string);
       case "Available_Seats":
       case "Percentage_Increase_ListCost":

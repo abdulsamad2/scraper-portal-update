@@ -19,6 +19,7 @@ import dbConnect from '@/lib/dbConnect';
 import { Event } from '@/models/eventModel'; // Assuming models are aliased to @/models
 import { ConsecutiveGroup } from '@/models/seatModel';
 import { deleteConsecutiveGroupsByEventId, deleteConsecutiveGroupsByEventIds } from './seatActions';
+import { isValidEventType, EVENT_TYPES } from '@/lib/venueToSport';
 
 // Escape special regex characters to prevent ReDoS and injection
 function escapeRegex(str: string): string {
@@ -35,6 +36,14 @@ export async function createEvent(eventData: Partial<Event>) {
   const blockedStates = ['ri', 'me', 'rhode island', 'maine'];
   if (blockedStates.some(s => venue === s || venue.endsWith(', ' + s) || venue.endsWith(',' + s))) {
     return { error: 'Rhode Island and Maine events are not allowed.' };
+  }
+
+  const incomingType = (eventData as any).eventType;
+  if (incomingType != null && !isValidEventType(incomingType)) {
+    return { error: `Invalid eventType. Must be one of: ${EVENT_TYPES.join(', ')}.` };
+  }
+  if ((eventData as any).Skip_Scraping === false && !isValidEventType(incomingType)) {
+    return { error: 'Select an event type (NFL, MLB, NHL, NBA, or Other) before starting scraping.' };
   }
 
   await dbConnect();
@@ -101,15 +110,20 @@ export async function getPaginatedEventsAdvanced(page: number = 1, limit: number
     // Build search query
     const searchConditions = [];
     if (search.trim()) {
-      const searchRegex = { $regex: escapeRegex(search.trim()), $options: 'i' };
-      searchConditions.push({
-        $or: [
-          { Event_Name: searchRegex },
-          { Venue: searchRegex },
-          { mapping_id: searchRegex },
-          { Event_ID: searchRegex },
-        ]
-      });
+      const term = search.trim();
+      const searchRegex = { $regex: escapeRegex(term), $options: 'i' };
+      const or: any[] = [
+        { Event_Name: searchRegex },
+        { Venue: searchRegex },
+        { mapping_id: searchRegex },
+        { Event_ID: searchRegex },
+      ];
+      // Typing a league code in the search also filters by eventType
+      const upper = term.toUpperCase();
+      if (isValidEventType(upper)) {
+        or.push({ eventType: upper });
+      }
+      searchConditions.push({ $or: or });
     }
 
     // Build filter conditions
@@ -138,6 +152,15 @@ export async function getPaginatedEventsAdvanced(page: number = 1, limit: number
       filterConditions.push({ $or: [{ Skip_Scraping: false }, { Skip_Scraping: { $exists: false } }] });
     } else if (filters.scrapingStatus === 'inactive') {
       filterConditions.push({ Skip_Scraping: true });
+    }
+
+    // Event type filter (supports "unset" to find legacy events without a type)
+    if (filters.eventType) {
+      if (filters.eventType === 'unset') {
+        filterConditions.push({ $or: [{ eventType: null }, { eventType: { $exists: false } }] });
+      } else if (isValidEventType(filters.eventType)) {
+        filterConditions.push({ eventType: filters.eventType });
+      }
     }
 
     // Available seats filter
@@ -329,6 +352,22 @@ export async function updateEvent(eventId: string, updateData: Partial<Event> & 
     const currentEvent = await Event.findById(eventId).maxTimeMS(5000); // 5 second timeout
     if (!currentEvent) {
       return { error: 'Event not found' };
+    }
+
+    const incomingType = (updateData as any).eventType;
+    if (incomingType !== undefined && incomingType !== null && !isValidEventType(incomingType)) {
+      return { error: `Invalid eventType. Must be one of: ${EVENT_TYPES.join(', ')}.` };
+    }
+
+    // Gate: starting scraping (Skip_Scraping true→false) requires a valid eventType
+    // on the stored doc OR one being set in this same update. Existing events whose
+    // scraping is already on are untouched.
+    const startingScraping = updateData.Skip_Scraping === false && currentEvent.Skip_Scraping !== false;
+    if (startingScraping) {
+      const effectiveType = incomingType !== undefined ? incomingType : currentEvent.eventType;
+      if (!isValidEventType(effectiveType)) {
+        return { error: 'Select an event type (NFL, MLB, NHL, NBA, or Other) before starting scraping.' };
+      }
     }
 
     // Debug logging

@@ -1,7 +1,8 @@
 'use client';
 import React, { useState, useTransition, useEffect, useRef, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Search, Filter, Calendar, MapPin, Users, RefreshCw, ChevronDown } from 'lucide-react';
+import { Search, Filter, Calendar, MapPin, Users, RefreshCw, ChevronDown, Trophy } from 'lucide-react';
+import { EVENT_TYPES } from '@/lib/venueToSport';
 
 const AUTO_REFRESH_INTERVAL = 30; // seconds
 
@@ -24,6 +25,7 @@ interface EventsTableControlsProps {
     dateTo?: string;
     venue?: string;
     scrapingStatus?: string;
+    eventType?: string;
     sortBy?: string;
     seatRange?: {
       min?: string;
@@ -267,6 +269,25 @@ export default function EventsTableControls({
                 <option value="">All Status</option>
                 <option value="active">Active (scraping on)</option>
                 <option value="inactive">Inactive (scraping off)</option>
+              </select>
+            </div>
+
+            {/* Event Type */}
+            <div className="space-y-2">
+              <label className="block text-xs font-semibold text-gray-600 uppercase tracking-wide">
+                <Trophy className="inline h-3.5 w-3.5 mr-1" aria-hidden="true" />
+                Event Type
+              </label>
+              <select
+                className="w-full px-2.5 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
+                value={localFilters.eventType || ''}
+                onChange={(e) => handleFilterChange('eventType', e.target.value)}
+              >
+                <option value="">All Types</option>
+                {EVENT_TYPES.map(t => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+                <option value="unset">— Not set</option>
               </select>
             </div>
 

@@ -13,6 +13,7 @@ interface PageProps {
     sortBy?: string;
     seatMin?: string;
     seatMax?: string;
+    eventType?: string;
   }>;
 }
 

@@ -31,6 +31,33 @@ interface EventData {
   includeStandardSeats?: boolean;
   includeResaleSeats?: boolean;
   stubhubEnabled?: boolean;
+  eventType?: 'NFL' | 'MLB' | 'NHL' | 'NBA' | 'Other' | null;
+}
+
+const EVENT_TYPE_BADGE: Record<string, { cls: string; dot: string }> = {
+  NFL: { cls: 'bg-amber-100 text-amber-800 border-amber-300/80',  dot: 'bg-amber-500' },
+  MLB: { cls: 'bg-blue-100  text-blue-800  border-blue-300/80',   dot: 'bg-blue-500'  },
+  NBA: { cls: 'bg-orange-100 text-orange-800 border-orange-300/80', dot: 'bg-orange-500' },
+  NHL: { cls: 'bg-sky-100   text-sky-800   border-sky-300/80',    dot: 'bg-sky-500'   },
+  Other: { cls: 'bg-violet-100 text-violet-800 border-violet-300/80', dot: 'bg-violet-500' },
+};
+
+function EventTypeBadge({ type }: { type?: string | null }) {
+  if (!type) {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border border-dashed border-slate-300 text-slate-400 bg-white">
+        <span className="w-1.5 h-1.5 rounded-full bg-slate-300" aria-hidden="true" />
+        Unset
+      </span>
+    );
+  }
+  const cfg = EVENT_TYPE_BADGE[type] || EVENT_TYPE_BADGE.Other;
+  return (
+    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border shadow-[inset_0_0_0_1px_rgba(255,255,255,0.5)] ${cfg.cls}`}>
+      <span className={`w-1.5 h-1.5 rounded-full ${cfg.dot}`} aria-hidden="true" />
+      {type}
+    </span>
+  );
 }
 
 interface ResolvedSearchParams {
@@ -45,6 +72,7 @@ interface ResolvedSearchParams {
   sortOrder?: string;
   seatMin?: string;
   seatMax?: string;
+  eventType?: string;
 }
 
 // Sortable column header (server-renderable link)
@@ -76,6 +104,7 @@ function SortableHeader({
   if (sp.scrapingStatus) params.set('scrapingStatus', sp.scrapingStatus);
   if (sp.seatMin) params.set('seatMin', sp.seatMin);
   if (sp.seatMax) params.set('seatMax', sp.seatMax);
+  if (sp.eventType) params.set('eventType', sp.eventType);
   params.set('sortBy', sortKey);
   params.set('sortOrder', nextOrder);
 
@@ -160,6 +189,7 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
     dateTo: sp.dateTo,
     venue: sp.venue,
     scrapingStatus: sp.scrapingStatus || 'all',
+    eventType: sp.eventType,
     sortBy,
     sortOrder,
     seatRange: {
@@ -304,12 +334,15 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                       
                       <td className="px-3 py-2">
                         <div className="min-w-0">
-                          <Link 
-                            href={`/dashboard/events/${event._id}`} 
-                            className="text-gray-900 hover:text-blue-600 font-semibold text-sm transition-[color] duration-150 block truncate"
-                          >
-                            {event.Event_Name}
-                          </Link>
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <Link
+                              href={`/dashboard/events/${event._id}`}
+                              className="text-gray-900 hover:text-blue-600 font-semibold text-sm transition-[color] duration-150 truncate"
+                            >
+                              {event.Event_Name}
+                            </Link>
+                            <EventTypeBadge type={event.eventType} />
+                          </div>
                           <div className="flex items-center gap-2 text-xs text-gray-500 mt-0.5 min-w-0">
                             {event.Venue && (
                               <div className="flex items-center gap-0.5 min-w-0">
@@ -445,14 +478,15 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                     {/* Header Row */}
                     <div className="flex items-start justify-between">
                       <div className="flex-1 min-w-0">
-                        <Link 
-                          href={`/dashboard/events/${event._id}`} 
+                        <Link
+                          href={`/dashboard/events/${event._id}`}
                           className="text-gray-900 hover:text-blue-600 font-semibold text-base transition-colors duration-200 block truncate"
                         >
                           {event.Event_Name}
                         </Link>
                         <div className="flex items-center gap-2 mt-1">
                           <StatusBadge isActive={isActive} />
+                          <EventTypeBadge type={event.eventType} />
                         </div>
                       </div>
                       <EventTableActions
