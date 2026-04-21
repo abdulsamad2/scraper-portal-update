@@ -20,9 +20,17 @@ export async function POST(req: NextRequest) {
     
     if (!generateResult.success || !generateResult.csv) {
       console.error('CSV generation failed:', generateResult.message);
-      return NextResponse.json({ 
-        success: false, 
+      return NextResponse.json({
+        success: false,
         message: generateResult.message || 'Failed to generate CSV'
+      }, { status: 400 });
+    }
+
+    if ((generateResult.recordCount ?? 0) === 0) {
+      console.warn('CSV generation produced zero rows — refusing to upload');
+      return NextResponse.json({
+        success: false,
+        message: 'CSV has 0 records — nothing to upload.'
       }, { status: 400 });
     }
 

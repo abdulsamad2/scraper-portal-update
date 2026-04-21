@@ -152,10 +152,10 @@ async function startScheduler(intervalMinutes: number, uploadToSync: boolean, ev
       const result = await generateInventoryCsv(currentSettings.eventUpdateFilterMinutes || 0);
       generationTime = Date.now() - generationStart;
       
-      if (result.success && result.csv) {
+      if (result.success && result.csv && (result.recordCount ?? 0) > 0) {
         // Skip file saving to prevent storage issues - CSV is uploaded to sync service directly
         console.log(`[${timestamp}] ✅ CSV generated in memory (${result.recordCount} records, generated in ${generationTime}ms)`);
-        
+
         // Upload to sync service if enabled
         if (currentSettings.uploadToSync) {
           const uploadStart = Date.now();
@@ -193,11 +193,24 @@ async function startScheduler(intervalMinutes: number, uploadToSync: boolean, ev
           (schedulerMetrics.averageUploadTime * (schedulerMetrics.totalRuns - 1) + uploadTime) / schedulerMetrics.totalRuns;
         
         console.log(`[${timestamp}] ✅ Scheduled task completed successfully (${totalTime}ms total)`);
+      } else if (result.success && (result.recordCount ?? 0) === 0) {
+        // Generator said "success" but produced zero rows — treat as a failure
+        // and skip the upload. Never push a blank CSV to sync automatically.
+        const msg = `Refusing to upload blank CSV from scheduler (0 records generated)`;
+        console.warn(`[${timestamp}] ⚠️  ${msg}`);
+        schedulerMetrics.failedRuns++;
+        schedulerMetrics.lastError = msg;
+        await createErrorLog({
+          eventUrl: 'CSV_SCHEDULER_GENERATION',
+          errorType: 'DATABASE_ERROR',
+          message: msg,
+          metadata: { operation: 'scheduled_csv_generation', timestamp: new Date() }
+        });
       } else {
         console.error(`[${timestamp}] ❌ CSV generation failed:`, result.message);
         schedulerMetrics.failedRuns++;
         schedulerMetrics.lastError = result.message;
-        
+
         // Log error to database
         await createErrorLog({
           eventUrl: 'CSV_SCHEDULER_GENERATION',

@@ -1118,9 +1118,15 @@ export async function uploadCsvToSyncService(csvContent: string): Promise<{ succ
         throw new Error('Sync service credentials not configured. Please set SYNC_COMPANY_ID and SYNC_API_TOKEN environment variables.');
       }
       
-      // Validate CSV content
+      // Validate CSV content — reject anything with zero data rows (including
+      // header-only uploads). A CSV with just the header is "blank" from the
+      // receiver's perspective and must never be pushed to sync.
       if (!csvContent || csvContent.trim().length === 0) {
         throw new Error('CSV content is empty or invalid');
+      }
+      const nonEmptyLines = csvContent.split('\n').filter(l => l.trim().length > 0);
+      if (nonEmptyLines.length <= 1) {
+        throw new Error(`Refusing to upload blank CSV (${nonEmptyLines.length} line${nonEmptyLines.length === 1 ? '' : 's'} — header only, no data rows).`);
       }
       
       // Initialize sync service
