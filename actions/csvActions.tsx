@@ -1196,62 +1196,6 @@ export async function uploadCsvToSyncService(csvContent: string): Promise<{ succ
   });
 }
 
-export async function clearInventoryFromSync(): Promise<{ success: boolean; message: string; uploadId?: string }> {
-  try {
-    // Get sync service credentials from environment variables
-    const companyId = process.env.SYNC_COMPANY_ID;
-    const apiToken = process.env.SYNC_API_TOKEN;
-    
-    if (!companyId || !apiToken) {
-      throw new Error('Sync service credentials not configured. Please set SYNC_COMPANY_ID and SYNC_API_TOKEN environment variables.');
-    }
-    
-    // Initialize sync service
-    const syncService = new SyncService(companyId, apiToken);
-    
-    // Clear all inventory
-    const result = await syncService.clearAllInventory();
-    
-    if ('success' in result && result.success) {
-      // Update database with clear inventory status
-      await updateSchedulerSettings({
-        lastUploadAt: new Date(),
-        lastUploadStatus: 'cleared',
-        lastUploadId: (result as { uploadId?: string })?.uploadId,
-        lastClearAt: new Date()
-      });
-      
-      console.log('Inventory cleared from sync service successfully');
-      
-      return {
-        success: true,
-        message: 'Inventory cleared from sync service successfully',
-        uploadId: (result as { uploadId?: string })?.uploadId
-      };
-    } else {
-      throw new Error((result as { message?: string })?.message || 'Clear inventory failed');
-    }
-  } catch (error) {
-    console.error('Error clearing inventory from sync service:', error);
-    
-    // Update database with error status
-    try {
-      await updateSchedulerSettings({
-        lastUploadAt: new Date(),
-        lastUploadStatus: 'clear_failed',
-        lastUploadError: error instanceof Error ? error.message : 'Unknown error occurred'
-      });
-    } catch (dbError) {
-      console.error('Error updating database with clear inventory status:', dbError);
-    }
-    
-    return {
-      success: false,
-      message: `Failed to clear inventory from sync service: ${error instanceof Error ? error.message : 'Unknown error'}`
-    };
-  }
-}
-
 export async function deleteInventoryBatchFromSync(inventoryIds: string[]): Promise<{ success: boolean; message: string; successful: string[]; failed: string[] }> {
   try {
     // Get sync service credentials from environment variables

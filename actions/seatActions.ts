@@ -4,7 +4,7 @@ import dbConnect from '@/lib/dbConnect';
 import { ConsecutiveGroup } from '@/models/seatModel'; // Assuming models are aliased to @/models
 import { Event } from '@/models/eventModel'; // Assuming models are aliased to @/models
 import { UpdateQuery } from 'mongoose';
-import { clearInventoryFromSync, deleteInventoryBatchFromSync } from './csvActions';
+import { deleteInventoryBatchFromSync } from './csvActions';
 
 /**
  * Creates a new consecutive seat group.

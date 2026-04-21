@@ -118,13 +118,46 @@ const ExportCsvPage: React.FC = () => {
   });
   const [loading, setLoading] = useState<boolean>(false);
   const [performanceMetrics, setPerformanceMetrics] = useState<PerformanceMetrics | null>(null);
-  const [clearStatus, setClearStatus] = useState('');
-  const [isClearingInventory, setIsClearingInventory] = useState(false);
   const [staleCleanupStatus, setStaleCleanupStatus] = useState('');
   const [isCleaningStaleInventory, setIsCleaningStaleInventory] = useState(false);
-  const [showClearInventoryDialog, setShowClearInventoryDialog] = useState(false);
   const [showStaleCleanupDialog, setShowStaleCleanupDialog] = useState(false);
-  const [clearInventoryCode, setClearInventoryCode] = useState('');
+
+  // Danger-Zone manual CSV upload (only path allowed to push a blank CSV to Sync)
+  const [dangerFile, setDangerFile] = useState<File | null>(null);
+  const [dangerStatus, setDangerStatus] = useState('');
+  const [isDangerUploading, setIsDangerUploading] = useState(false);
+  const dangerUpload = async () => {
+    if (!dangerFile) {
+      setDangerStatus('❌ Pick a .csv file first.');
+      return;
+    }
+    const confirmed = window.confirm(
+      `Upload "${dangerFile.name}" (${dangerFile.size} bytes) directly to Sync?\n\n` +
+      `This is the ONLY path that bypasses the no-blank-CSV safety check. ` +
+      `Scheduler and manual exports will never send empty CSVs.`
+    );
+    if (!confirmed) return;
+
+    setIsDangerUploading(true);
+    setDangerStatus('Uploading…');
+    try {
+      const fd = new FormData();
+      fd.append('file', dangerFile);
+      fd.append('confirm', 'UPLOAD');
+      const res = await fetch('/api/danger-upload-csv', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setDangerStatus(`✅ ${data.message}${data.uploadId ? ` (uploadId ${data.uploadId})` : ''}`);
+        setDangerFile(null);
+      } else {
+        setDangerStatus(`❌ ${data.message || 'Upload failed'}`);
+      }
+    } catch (e) {
+      setDangerStatus(`❌ ${(e as Error).message}`);
+    } finally {
+      setIsDangerUploading(false);
+    }
+  };
 
   // Feature flags — UI visibility (true when "enabled", false when "hidden" or "disabled")
   const [featureFlags, setFeatureFlags] = useState({
@@ -448,59 +481,6 @@ const ExportCsvPage: React.FC = () => {
     } catch (error) {
       showMessage('Error stopping scheduler', 'error');
     }
-  };
-
-  const handleClearInventory = () => {
-    setShowClearInventoryDialog(true);
-  };
-
-  const confirmClearInventory = async () => {
-    setShowClearInventoryDialog(false);
-
-    setIsClearingInventory(true);
-    setClearStatus('Clearing inventory...');
-
-    try {
-      const response = await fetch('/api/clear-inventory', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      });
-
-      const result = await response.json();
-      
-      if (response.ok) {
-        setClearStatus(`✅ ${result.message}`);
-        // Refresh settings to get updated upload status
-        const settingsResponse = await fetch('/api/csv-scheduler');
-        if (settingsResponse.ok) {
-          const settingsData = await settingsResponse.json();
-          setSettings(settingsData);
-          setSchedulerStatus(settingsData.isScheduled ? 'running' : 'stopped');
-          // Create performance metrics from the settings data
-          const metrics = {
-            totalRuns: settingsData.totalRuns || 0,
-            lastGenerated: settingsData.lastCsvGenerated,
-            lastRunTime: settingsData.lastRunAt,
-            nextRunTime: settingsData.nextRunAt
-          };
-          setPerformanceMetrics(metrics);
-        }
-      } else {
-        setClearStatus(`❌ Error: ${result.message}`);
-      }
-    } catch (error) {
-      setClearStatus('❌ Error clearing inventory.');
-      console.error('Error clearing inventory:', error);
-    } finally {
-      setIsClearingInventory(false);
-    }
-  };
-
-  const cancelClearInventory = () => {
-    setShowClearInventoryDialog(false);
-    setClearInventoryCode('');
   };
 
   const handleCleanupStaleInventory = () => {
@@ -1219,21 +1199,42 @@ const ExportCsvPage: React.FC = () => {
               <h3 className="text-lg font-semibold text-slate-800 group-hover:text-red-600 transition-colors">Danger Zone</h3>
               <ChevronDown className="w-4 h-4 text-slate-400 transition-transform group-open:rotate-180 ml-auto" />
             </summary>
-            <div className="p-5">
+            <div className="p-5 space-y-4">
               <div className="border border-red-200 bg-red-50/30 rounded-lg p-4">
-                <h4 className="text-sm font-semibold text-red-800 mb-1">Clear All Inventory</h4>
+                <h4 className="text-sm font-semibold text-red-800 mb-1">Manual CSV Upload (allows empty)</h4>
                 <p className="text-[11px] text-red-600/70 mb-3">
-                  Uploads an empty CSV to remove <strong>ALL</strong> inventory from Sync. Requires security code.
+                  Upload a CSV file directly to Sync. This is the <strong>only</strong> path that can push an empty or header-only CSV.
+                  Scheduled runs and manual exports always refuse blank CSVs.
                 </p>
-                <button onClick={handleClearInventory} disabled={isClearingInventory}
-                  className="flex items-center gap-1.5 bg-red-600 hover:bg-red-700 text-white text-sm font-medium py-2 px-4 rounded-lg transition-colors disabled:bg-slate-300 disabled:cursor-not-allowed">
-                  <Trash2 className="w-4 h-4" />
-                  {isClearingInventory ? 'Clearing...' : 'Clear All Inventory...'}
-                </button>
-                {clearStatus && (
+                <div className="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center">
+                  <input
+                    type="file"
+                    accept=".csv,text/csv"
+                    onChange={e => {
+                      const f = e.target.files?.[0] ?? null;
+                      setDangerFile(f);
+                      setDangerStatus('');
+                    }}
+                    className="flex-1 text-xs text-slate-700 file:mr-3 file:py-2 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-slate-100 file:text-slate-700 hover:file:bg-slate-200"
+                  />
+                  <button
+                    onClick={dangerUpload}
+                    disabled={!dangerFile || isDangerUploading}
+                    className="flex items-center gap-1.5 bg-red-600 hover:bg-red-700 text-white text-sm font-medium py-2 px-4 rounded-lg transition-colors disabled:bg-slate-300 disabled:cursor-not-allowed whitespace-nowrap"
+                  >
+                    <AlertTriangle className="w-4 h-4" />
+                    {isDangerUploading ? 'Uploading…' : 'Upload to Sync'}
+                  </button>
+                </div>
+                {dangerFile && !isDangerUploading && (
+                  <p className="mt-2 text-[11px] text-slate-500">
+                    Selected: <span className="font-mono">{dangerFile.name}</span> ({dangerFile.size.toLocaleString()} bytes)
+                  </p>
+                )}
+                {dangerStatus && (
                   <div className={`mt-3 p-3 rounded-lg text-xs border ${
-                    clearStatus.includes('✅') ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'bg-red-50 text-red-800 border-red-200'
-                  }`}>{clearStatus}</div>
+                    dangerStatus.startsWith('✅') ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'bg-red-50 text-red-800 border-red-200'
+                  }`}>{dangerStatus}</div>
                 )}
               </div>
             </div>
@@ -1241,63 +1242,6 @@ const ExportCsvPage: React.FC = () => {
 
         </div>
       </div>
-
-      {/* Clear All Inventory Confirmation Dialog */}
-      {showClearInventoryDialog && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm overflow-y-auto h-full w-full z-50 flex items-center justify-center" onClick={cancelClearInventory}>
-          <div className="relative bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 border border-slate-200" onClick={e => e.stopPropagation()}>
-            <div className="p-6">
-              <div className="flex items-center justify-center w-14 h-14 mx-auto bg-red-100 rounded-2xl mb-5">
-                <AlertTriangle className="w-7 h-7 text-red-600" />
-              </div>
-              <div className="text-center">
-                <h3 className="text-lg font-bold text-slate-800 mb-2">
-                  Clear All Inventory?
-                </h3>
-                <p className="text-sm text-slate-500 mb-2">
-                  Are you sure you want to clear all inventory from Sync?
-                </p>
-                <p className="text-sm text-red-600 font-medium mb-5">
-                  This action cannot be undone.
-                </p>
-                <div className="mb-5">
-                  <label className="block text-sm font-medium text-slate-700 mb-2">
-                    Enter security code to confirm
-                  </label>
-                  <input
-                    type="text"
-                    value={clearInventoryCode}
-                    onChange={(e) => setClearInventoryCode(e.target.value)}
-                    placeholder="Enter 4-digit code"
-                    className="w-full px-4 py-3 border border-slate-200 rounded-xl text-center text-lg tracking-[0.3em] font-mono focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-transparent transition-shadow"
-                    maxLength={4}
-                    autoFocus
-                  />
-                </div>
-                <div className="flex justify-center gap-3">
-                  <button
-                    onClick={cancelClearInventory}
-                    className="px-5 py-2.5 text-sm font-medium text-slate-700 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-400 transition-colors"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={() => { setClearInventoryCode(''); confirmClearInventory(); }}
-                    disabled={clearInventoryCode !== '7291'}
-                    className={`px-5 py-2.5 text-sm font-medium text-white rounded-xl focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition-all ${
-                      clearInventoryCode === '7291'
-                        ? 'bg-red-600 hover:bg-red-700 shadow-md'
-                        : 'bg-slate-200 text-slate-400 cursor-not-allowed'
-                    }`}
-                  >
-                    Clear All Inventory
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Clear Stale Inventory Confirmation Dialog */}
       {showStaleCleanupDialog && (
