@@ -182,10 +182,12 @@ export async function deleteExpiredEvents(stopBeforeMinutes: number = 120, lowSe
       }
     }
 
-    // Clear inventory (seat data) from DB and Sync — but keep the events themselves
+    // Clear inventory (seat data) from DB and Sync — but keep the events themselves.
+    // ConsecutiveGroup.eventId stores the TM Event_ID (hex), not Mongo _id,
+    // so pass eventMappings to match the stored field and trigger the sync-delete path.
     try {
-      await deleteConsecutiveGroupsByEventIds(eventIds);
-      console.log(`Auto-delete: Cleared inventory for ${eventIds.length} events`);
+      await deleteConsecutiveGroupsByEventIds(eventMappings);
+      console.log(`Auto-delete: Cleared inventory for ${eventMappings.length} events`);
     } catch (error) {
       const errorMsg = `Failed to clear inventory: ${(error as Error).message}`;
       stats.errors.push(errorMsg);
@@ -334,10 +336,11 @@ export async function deleteExpiredEvents(stopBeforeMinutes: number = 120, lowSe
               console.error('Auto-delete low-seat stop error:', error);
             }
 
-            // Clear inventory
+            // Clear inventory — pass TM Event_IDs (match ConsecutiveGroup.eventId)
+            // so the sync-delete path actually runs, same as manual stop.
             try {
-              await deleteConsecutiveGroupsByEventIds(lowSeatIds);
-              console.log(`Auto-delete (low-seat): Cleared inventory for ${lowSeatIds.length} events`);
+              await deleteConsecutiveGroupsByEventIds(lowSeatMappings);
+              console.log(`Auto-delete (low-seat): Cleared inventory for ${lowSeatMappings.length} events`);
             } catch (error) {
               const errorMsg = `Low-seat inventory clear failed: ${(error as Error).message}`;
               stats.errors.push(errorMsg);

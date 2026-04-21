@@ -309,10 +309,12 @@ export async function deleteConsecutiveGroupsByEventIds(eventIds: string[]) {
     const groupsToDelete = await ConsecutiveGroup.find({ eventId: { $in: eventIds } }).lean();
     console.log(`Found ${groupsToDelete.length} consecutive groups for events: ${eventIds.join(', ')}`);
     
-    // Extract inventory IDs (mapping_id field contains the inventory ID)
+    // Extract inventory IDs — use inventory.inventoryId to match the singular
+    // deleteConsecutiveGroupsByEventId and what the Sync API expects. mapping_id
+    // is event-level (Vivid production ID), not the per-row inventory ID.
     const inventoryIdsToDelete = groupsToDelete
-      .map(group => group.mapping_id)
-      .filter(id => id && id.trim() !== ''); // Filter out empty or null IDs
+      .map(group => group.inventory?.inventoryId?.toString())
+      .filter((id): id is string => !!id && id.trim() !== '');
     
     console.log(`Inventory IDs to delete from sync: ${inventoryIdsToDelete.length} items`);
     
