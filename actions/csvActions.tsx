@@ -131,87 +131,74 @@ function getPriceAdjustmentPercentage(): number {
   return isNaN(percentage) ? 0 : percentage;
 }
 
-// Apply exclusion rules to filter out unwanted records
-async function applyExclusionRules(records: CsvRow[]): Promise<CsvRow[]> {
-  if (records.length === 0) return records;
-  
+// Build a per-record exclusion filter once for a CSV run. Both the streaming
+// and non-streaming paths used to call this per chunk, which fired 2 DB
+// queries per chunk (Event.find + ExclusionRules.find). Hoisting those reads
+// to a single round each removes O(chunks) redundant queries.
+type ExclusionFilter = (record: CsvRow) => boolean;
+const ALLOW_ALL: ExclusionFilter = () => true;
+
+interface SectionRowExclusion {
+  section?: string;
+  excludeEntireSection?: boolean;
+  excludedRows?: string[];
+}
+
+async function buildExclusionFilter(mappingIds: string[]): Promise<ExclusionFilter> {
+  if (mappingIds.length === 0) return ALLOW_ALL;
+
   try {
-    // Group records by event_id (mapping_id) to batch exclusion rule lookups
-    const mappingIds = [...new Set(records.map(record => record.event_id))];
-    
-    // First, get events to create mapping between _id and mapping_id
-    const events = await Event.find({
-      mapping_id: { $in: mappingIds }
-    }, { _id: 1, mapping_id: 1 }).lean();
-    
-    if (events.length === 0) {
-      return records;
-    }
-    
-    // Create mapping from mapping_id to _id
-    const mappingToIdMap = new Map();
+    const events = await Event.find(
+      { mapping_id: { $in: mappingIds } },
+      { _id: 1, mapping_id: 1 }
+    ).lean();
+    if (events.length === 0) return ALLOW_ALL;
+
+    const objectIdToMappingId = new Map<string, string>();
     const eventIds: string[] = [];
-    events.forEach(event => {
-      mappingToIdMap.set(event.mapping_id, String(event._id));
-      eventIds.push(String(event._id));
-    });
-    
-    // Get all exclusion rules for these events (using _id)
-    const exclusionRules = await ExclusionRules.find({
-      eventId: { $in: eventIds },
-      isActive: true
-    }).lean();
-    
-    if (exclusionRules.length === 0) {
-      return records;
+    for (const e of events) {
+      const oid = String(e._id);
+      objectIdToMappingId.set(oid, e.mapping_id);
+      eventIds.push(oid);
     }
-    
-    // Create a map for quick lookup (eventId -> exclusion rules)
-    const rulesMap = new Map();
-    exclusionRules.forEach(rule => {
-      rulesMap.set(rule.eventId, rule);
-    });
-    
-    // Apply exclusions
-    const filteredRecords = records.filter(record => {
-      // Get the _id for this mapping_id
-      const eventObjectId = mappingToIdMap.get(record.event_id);
-      if (!eventObjectId) return true;
-      
-      const rules = rulesMap.get(eventObjectId);
-      if (!rules) return true;
-      
-      // Apply section/row exclusions
-      if (rules.sectionRowExclusions && rules.sectionRowExclusions.length > 0) {
-        for (const exclusion of rules.sectionRowExclusions) {
-          if (exclusion.section === record.section) {
-            if (exclusion.excludeEntireSection) {
-              return false; // Exclude entire section
-            }
-            if (exclusion.excludedRows && exclusion.excludedRows.includes(record.row)) {
-              return false; // Exclude specific row
-            }
-          }
-        }
+
+    const rules = await ExclusionRules.find(
+      { eventId: { $in: eventIds }, isActive: true }
+    ).lean();
+    if (rules.length === 0) return ALLOW_ALL;
+
+    // Key by mapping_id so per-record lookup is one Map.get against the value
+    // already stored in CsvRow.event_id.
+    const rulesByMappingId = new Map<string, SectionRowExclusion[]>();
+    for (const rule of rules) {
+      const mid = objectIdToMappingId.get(String(rule.eventId));
+      const sectionRules = (rule as { sectionRowExclusions?: SectionRowExclusion[] }).sectionRowExclusions;
+      if (mid && sectionRules && sectionRules.length > 0) {
+        rulesByMappingId.set(mid, sectionRules);
       }
-      
-      return true;
-    });
-    
-    const finalRecords = filteredRecords;
-    
-    const excludedCount = records.length - finalRecords.length;
-    if (excludedCount > 0) {
-      console.log(`Exclusion rules applied: ${excludedCount} records excluded from ${records.length} total records`);
     }
-    
-    return finalRecords;
+    if (rulesByMappingId.size === 0) return ALLOW_ALL;
+
+    return (record) => {
+      const sectionRules = rulesByMappingId.get(record.event_id);
+      if (!sectionRules) return true;
+      for (const exclusion of sectionRules) {
+        if (exclusion.section !== record.section) continue;
+        if (exclusion.excludeEntireSection) return false;
+        if (exclusion.excludedRows && exclusion.excludedRows.includes(record.row)) return false;
+      }
+      return true;
+    };
   } catch (error) {
-    console.error('Error applying exclusion rules:', error);
-    // Return original records if exclusion fails to avoid breaking CSV generation
-    return records;
+    console.error('Error loading exclusion rules:', error);
+    return ALLOW_ALL;
   }
 }
+
+const isBlockedVenueState = (record: CsvRow): boolean => {
+  const v = (record.venue_name || '').trim().toLowerCase();
+  return BLOCKED_STATES.some(s => v === s || v.endsWith(', ' + s) || v.endsWith(',' + s));
+};
 
 // Apply price adjustment (increase or decrease) to a price value
 function applyPriceAdjustment(originalPrice: number): number {
@@ -264,6 +251,42 @@ async function withRetry<T>(
 
 // Cache for resolved venue timezones within a CSV generation run
 const _venueTzCache = new Map<string, string | null>();
+
+// Shared Mongo projection for CSV chunk fetches. Only includes fields the row
+// mapper actually reads — six previously-projected fields were unused
+// (inventory.notes, inventory.in_hand, inventory.files_available,
+// inventory.stubhubAtFloor, inventory.stubhubPricedAt,
+// inventory.stubhubSectionLowest). Pruning them shrinks every chunk's BSON
+// payload and parse cost.
+const CSV_PROJECTION = {
+  'inventory.inventoryId': 1,
+  'event_name': 1,
+  'venue_name': 1,
+  'event_date': 1,
+  'eventId': 1,
+  'mapping_id': 1,
+  'inventory.quantity': 1,
+  'inventory.section': 1,
+  'inventory.row': 1,
+  'seats.number': 1,
+  'inventory.barcodes': 1,
+  'inventory.tags': 1,
+  'inventory.publicNotes': 1,
+  'inventory.listPrice': 1,
+  'inventory.face_price': 1,
+  'inventory.taxed_cost': 1,
+  'inventory.cost': 1,
+  'inventory.hideSeatNumbers': 1,
+  'inventory.inHandDate': 1,
+  'inventory.instant_transfer': 1,
+  'inventory.splitType': 1,
+  'inventory.customSplit': 1,
+  'inventory.stockType': 1,
+  'inventory.zone': 1,
+  'inventory.shown_quantity': 1,
+  'inventory.passthrough': 1,
+  'inventory.stubhubSuggestedPrice': 1,
+} as const;
 
 // ── Global: stop events with seats <= threshold & clear their inventory ──
 export async function stopLowSeatEvents(): Promise<{ stopped: number; eventIds: string[] }> {
@@ -421,46 +444,26 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
       }
       console.log(`[CSV] Pre-fetched details for ${eventDetailsMap.size} events`);
 
-    // Projection — no longer need event_std_adj etc from $lookup
-    const projection = {
-      'inventory.inventoryId': 1,
-      'event_name': 1,
-      'venue_name': 1,
-      'event_date': 1,
-      'eventId': 1,
-      'mapping_id': 1,
-      'inventory.quantity': 1,
-      'inventory.section': 1,
-      'inventory.row': 1,
-      'seats.number': 1,
-      'inventory.barcodes': 1,
-      'inventory.tags': 1,
-      'inventory.notes': 1,
-      'inventory.publicNotes': 1,
-      'inventory.listPrice': 1,
-      'inventory.face_price': 1,
-      'inventory.taxed_cost': 1,
-      'inventory.cost': 1,
-      'inventory.hideSeatNumbers': 1,
-      'inventory.in_hand': 1,
-      'inventory.inHandDate': 1,
-      'inventory.instant_transfer': 1,
-      'inventory.files_available': 1,
-      'inventory.splitType': 1,
-      'inventory.customSplit': 1,
-      'inventory.stockType': 1,
-      'inventory.zone': 1,
-      'inventory.shown_quantity': 1,
-      'inventory.passthrough': 1,
-      'inventory.stubhubSuggestedPrice': 1,
-      'inventory.stubhubSectionLowest': 1,
-      'inventory.stubhubAtFloor': 1,
-      'inventory.stubhubPricedAt': 1,
-    };
+    // Projection — only fields actually read by the row mapper. Six fields
+    // (inventory.notes, inventory.in_hand, inventory.files_available, and the
+    // three secondary stubhub.* fields) used to be projected but were never
+    // referenced; pruning them shrinks every chunk's BSON payload.
+    const projection = CSV_PROJECTION;
 
       // Chunked processing: first get all _ids (fast, no $lookup), then process
       // in batches. Event data is joined in JS from the pre-fetched map.
       const CHUNK_SIZE = 10000;
+
+      // Hoist exclusion-rule + scheduler reads out of the chunk loop. The
+      // exclusion-rules DB query used to run inside every chunk; doing it
+      // once removes O(chunks) redundant round-trips. Section-mode min-seat
+      // is still computed in JS after the loop over post-exclusion records,
+      // matching the original behaviour exactly.
+      const exclusionFilter = await buildExclusionFilter(eventMappingIds);
+
+      const schedulerSettings = await SchedulerSettings.findOne({}).lean() as any;
+      const minSeatFilter: number = schedulerSettings?.minSeatFilter ?? 0;
+      const minSeatFilterMode: 'section' | 'row' = schedulerSettings?.minSeatFilterMode ?? 'section';
 
       // Step 1: Get all matching _ids quickly (no $lookup, very fast)
       const idPipeline: PipelineStage[] = [
@@ -480,9 +483,18 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
         return { success: false, message: 'No inventory data found. Check if events exist and have inventory data.' };
       }
 
-      const records: CsvRow[] = [];
+      // Per-chunk we apply blocked-states + exclusion rules + (if row mode)
+      // min-seat. Section-mode min-seat needs the full post-exclusion record
+      // set to compute totals, so it runs after the loop — same as before.
+      let filteredRecords: CsvRow[] = [];
       let processedCount = 0;
+      let producedCount = 0;
+      let excludedCount = 0;
       let chunkNum = 0;
+
+      const rowModeMinSeat = minSeatFilter > 0 && minSeatFilterMode === 'row'
+        ? (r: CsvRow) => r.quantity > minSeatFilter
+        : null;
 
       // Step 2: Process in chunks — simple find by _ids, no $lookup needed
       for (let i = 0; i < totalDocs; i += CHUNK_SIZE) {
@@ -517,13 +529,19 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
           }
           if (enrichedDocs.length > 0) {
             const processedBatch = await processBatch(enrichedDocs);
-            records.push(...processedBatch);
+            producedCount += processedBatch.length;
+            for (const r of processedBatch) {
+              if (isBlockedVenueState(r)) { excludedCount++; continue; }
+              if (!exclusionFilter(r)) { excludedCount++; continue; }
+              if (rowModeMinSeat && !rowModeMinSeat(r)) { excludedCount++; continue; }
+              filteredRecords.push(r);
+            }
           }
         }
         processedCount += chunkIds.length;
 
         const chunkMs = Date.now() - chunkStart;
-        console.log(`[CSV] Chunk ${chunkNum}: ${chunkDocs.length} docs -> ${records.length} rows in ${chunkMs}ms (${processedCount}/${totalDocs}, ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB heap)`);
+        console.log(`[CSV] Chunk ${chunkNum}: ${chunkDocs.length} docs -> ${filteredRecords.length} kept in ${chunkMs}ms (${processedCount}/${totalDocs}, ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB heap)`);
 
         // Yield control between chunks
         await new Promise(resolve => {
@@ -535,57 +553,30 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
         });
       }
 
-      console.log(`[CSV] Total records found: ${records.length} (processed ${processedCount} docs in ${Date.now() - startTime}ms)`);
-      
-      if (records.length === 0) {
-        console.log('[CSV] No inventory data found — aborting');
-        return { success: false, message: 'No inventory data found. Check if events exist and have inventory data.' };
-      }
-
-      // Filter out Rhode Island and Maine events (safety net)
-      const beforeBlocked = records.length;
-      const nonBlockedRecords = records.filter(r => {
-        const v = (r.venue_name || '').trim().toLowerCase();
-        return !BLOCKED_STATES.some(s => v === s || v.endsWith(', ' + s) || v.endsWith(',' + s));
-      });
-      if (beforeBlocked - nonBlockedRecords.length > 0) {
-        console.log(`[CSV] Filtered out ${beforeBlocked - nonBlockedRecords.length} Rhode Island/Maine records`);
-      }
-
-      // Apply exclusion rules
-      const exclStart = Date.now();
-      let filteredRecords = await applyExclusionRules(nonBlockedRecords);
-      console.log(`[CSV] Exclusion rules applied in ${Date.now() - exclStart}ms`);
-
-      // Apply min seat filter (row-based or section-based depending on mode)
-      const schedulerSettings = await SchedulerSettings.findOne({}).lean() as any;
-      const minSeatFilter = schedulerSettings?.minSeatFilter ?? 0;
-      const minSeatFilterMode = schedulerSettings?.minSeatFilterMode ?? 'section';
-      if (minSeatFilter > 0) {
+      // Section-mode min-seat: totals are summed across the post-exclusion
+      // records (matches the original behaviour exactly — sections whose
+      // surviving rows total <= threshold are dropped).
+      if (minSeatFilter > 0 && minSeatFilterMode === 'section') {
         const beforeMinSeat = filteredRecords.length;
-        if (minSeatFilterMode === 'section') {
-          // Section-based: sum all seats per event+section, exclude entire section if total <= threshold
-          const sectionTotals = new Map<string, number>();
-          for (const r of filteredRecords) {
-            const key = `${r.event_id}|${r.section}`;
-            sectionTotals.set(key, (sectionTotals.get(key) ?? 0) + r.quantity);
-          }
-          filteredRecords = filteredRecords.filter(r => {
-            const key = `${r.event_id}|${r.section}`;
-            return (sectionTotals.get(key) ?? 0) > minSeatFilter;
-          });
-        } else {
-          // Row-based: exclude individual listings where quantity <= threshold
-          filteredRecords = filteredRecords.filter(r => r.quantity > minSeatFilter);
+        const sectionTotals = new Map<string, number>();
+        for (const r of filteredRecords) {
+          const key = `${r.event_id}|${r.section}`;
+          sectionTotals.set(key, (sectionTotals.get(key) ?? 0) + r.quantity);
         }
-        console.log(`[CSV] Min seat filter [${minSeatFilterMode}] (<= ${minSeatFilter}): removed ${beforeMinSeat - filteredRecords.length} listings`);
+        filteredRecords = filteredRecords.filter(r => {
+          const key = `${r.event_id}|${r.section}`;
+          return (sectionTotals.get(key) ?? 0) > minSeatFilter;
+        });
+        const removed = beforeMinSeat - filteredRecords.length;
+        excludedCount += removed;
+        console.log(`[CSV] Min seat filter [section] (<= ${minSeatFilter}): removed ${removed} listings`);
       }
+
+      console.log(`[CSV] Done: ${filteredRecords.length} kept / ${producedCount} produced / ${excludedCount} excluded (processed ${processedCount} docs in ${Date.now() - startTime}ms)`);
 
       if (filteredRecords.length === 0) {
         return { success: false, message: 'No inventory data found after applying exclusion rules. All records were filtered out.' };
       }
-
-      console.log(`[CSV] Records after exclusion filtering: ${filteredRecords.length} (${records.length - filteredRecords.length} excluded)`);
 
       // Optimized CSV generation using streaming approach
       const csvString = await generateCsvString(filteredRecords);
@@ -600,7 +591,7 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
         success: true, 
         csv: csvString,
         recordCount: filteredRecords.length,
-        excludedCount: records.length - filteredRecords.length,
+        excludedCount,
         generationTime: duration,
         memoryUsage
       };
@@ -844,61 +835,103 @@ async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]
   });
 }
 
-// Optimized CSV string generation
+// CSV cell encoders — one regex pass instead of four .includes() calls per
+// cell, and known-safe columns (numbers, Y/N enums, ISO dates) skip the
+// escape check entirely. With ~28 columns × N rows the old encoder did
+// ~112×N substring scans; this brings it to ~10×N regex tests on the
+// columns that can actually contain commas/quotes/newlines.
+const CSV_NEEDS_ESCAPE_RE = /[",\r\n]/;
+
+function escapeMaybe(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  const s = typeof value === 'string' ? value : String(value);
+  if (CSV_NEEDS_ESCAPE_RE.test(s)) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
+}
+
+function asNumberOrEmpty(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  return typeof value === 'number' ? (value as number).toString() : String(value);
+}
+
+function asSafeString(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  return value as string;
+}
+
+type ColEncoder = (value: unknown) => string;
+const COLUMN_ENCODERS: Array<{ id: keyof CsvRow; encode: ColEncoder }> = [
+  { id: 'inventory_id', encode: asNumberOrEmpty },
+  { id: 'event_name', encode: escapeMaybe },
+  { id: 'venue_name', encode: escapeMaybe },
+  { id: 'event_date', encode: asSafeString },
+  { id: 'event_id', encode: escapeMaybe },
+  { id: 'quantity', encode: asNumberOrEmpty },
+  { id: 'section', encode: escapeMaybe },
+  { id: 'row', encode: escapeMaybe },
+  { id: 'seats', encode: escapeMaybe },
+  { id: 'barcodes', encode: escapeMaybe },
+  { id: 'internal_notes', encode: escapeMaybe },
+  { id: 'public_notes', encode: escapeMaybe },
+  { id: 'tags', encode: escapeMaybe },
+  { id: 'list_price', encode: asNumberOrEmpty },
+  { id: 'face_price', encode: asNumberOrEmpty },
+  { id: 'taxed_cost', encode: asNumberOrEmpty },
+  { id: 'cost', encode: asNumberOrEmpty },
+  { id: 'hide_seats', encode: asSafeString },
+  { id: 'in_hand', encode: asSafeString },
+  { id: 'in_hand_date', encode: asSafeString },
+  { id: 'instant_transfer', encode: asSafeString },
+  { id: 'files_available', encode: asSafeString },
+  { id: 'split_type', encode: asSafeString },
+  { id: 'custom_split', encode: escapeMaybe },
+  { id: 'stock_type', encode: asSafeString },
+  { id: 'zone', encode: asSafeString },
+  { id: 'shown_quantity', encode: asNumberOrEmpty },
+  { id: 'passthrough', encode: escapeMaybe },
+];
+const CSV_HEADER_LINE = csvColumns.map(c => c.title).join(',');
+
+function encodeRow(record: CsvRow): string {
+  const cells = new Array<string>(COLUMN_ENCODERS.length);
+  for (let i = 0; i < COLUMN_ENCODERS.length; i++) {
+    const col = COLUMN_ENCODERS[i];
+    cells[i] = col.encode(record[col.id]);
+  }
+  return cells.join(',');
+}
+
+// Build the full CSV in memory for the non-stream path. Single header push,
+// per-chunk row encoding, periodic event-loop yields.
 async function generateCsvString(records: CsvRow[]): Promise<string> {
-  const chunks: string[] = [];
-  
-  // Add headers
-  chunks.push(csvColumns.map(col => col.title).join(','));
-  
-  // Process records in chunks to avoid string concatenation performance issues
+  const out: string[] = [CSV_HEADER_LINE];
   const CHUNK_SIZE = 1000;
   for (let i = 0; i < records.length; i += CHUNK_SIZE) {
-    const chunk = records.slice(i, i + CHUNK_SIZE);
-    const csvChunk = chunk.map(record => {
-      return csvColumns.map(col => {
-        const value = record[col.id as keyof CsvRow];
-        // Proper CSV escaping
-        if (value === null || value === undefined) {
-          return '';
-        }
-        const stringValue = String(value);
-        if (stringValue.includes(',') || stringValue.includes('"') || stringValue.includes('\n') || stringValue.includes('\r')) {
-          return `"${stringValue.replace(/"/g, '""')}"`;
-        }
-        return stringValue;
-      }).join(',');
-    }).join('\n');
-    
-    chunks.push(csvChunk);
-    
-    // Yield control periodically
-    if (i % (CHUNK_SIZE * 5) === 0) {
+    const end = Math.min(i + CHUNK_SIZE, records.length);
+    const lines = new Array<string>(end - i);
+    for (let j = i; j < end; j++) {
+      lines[j - i] = encodeRow(records[j]);
+    }
+    out.push(lines.join('\n'));
+
+    if (i > 0 && (i / CHUNK_SIZE) % 5 === 0) {
       await new Promise(resolve => {
-        if (typeof setImmediate !== 'undefined') {
-          setImmediate(resolve);
-        } else {
-          setTimeout(resolve, 0);
-        }
+        if (typeof setImmediate !== 'undefined') setImmediate(resolve);
+        else setTimeout(resolve, 0);
       });
     }
   }
-  
-  return chunks.join('\n');
+  return out.join('\n');
 }
 
 function recordsToCsvChunk(records: CsvRow[]): string {
-  return records.map(record => {
-    return csvColumns.map(col => {
-      const value = record[col.id as keyof CsvRow];
-      if (value === null || value === undefined) return '';
-      const stringValue = String(value);
-      if (stringValue.includes(',') || stringValue.includes('"') || stringValue.includes('\n') || stringValue.includes('\r')) {
-        return `"${stringValue.replace(/"/g, '""')}"`;
-      }
-      return stringValue;
-    }).join(',');
-  }).join('\n');
+  const lines = new Array<string>(records.length);
+  for (let i = 0; i < records.length; i++) {
+    lines[i] = encodeRow(records[i]);
+  }
+  return lines.join('\n');
 }
 
 // Streaming CSV generator — yields CSV text chunks as they're produced.
@@ -965,23 +998,12 @@ export async function* generateInventoryCsvStream(
       });
     }
 
-    const projection = {
-      'inventory.inventoryId': 1, 'event_name': 1, 'venue_name': 1,
-      'event_date': 1, 'eventId': 1, 'mapping_id': 1,
-      'inventory.quantity': 1, 'inventory.section': 1, 'inventory.row': 1,
-      'seats.number': 1, 'inventory.barcodes': 1, 'inventory.tags': 1,
-      'inventory.notes': 1, 'inventory.publicNotes': 1,
-      'inventory.listPrice': 1, 'inventory.face_price': 1,
-      'inventory.taxed_cost': 1, 'inventory.cost': 1,
-      'inventory.hideSeatNumbers': 1, 'inventory.in_hand': 1,
-      'inventory.inHandDate': 1, 'inventory.instant_transfer': 1,
-      'inventory.files_available': 1, 'inventory.splitType': 1,
-      'inventory.customSplit': 1, 'inventory.stockType': 1,
-      'inventory.zone': 1, 'inventory.shown_quantity': 1,
-      'inventory.passthrough': 1,
-      'inventory.stubhubSuggestedPrice': 1, 'inventory.stubhubSectionLowest': 1,
-      'inventory.stubhubAtFloor': 1, 'inventory.stubhubPricedAt': 1,
-    };
+    const projection = CSV_PROJECTION;
+
+    // Build the per-record exclusion filter once. This used to be re-fetched
+    // (Event.find + ExclusionRules.find) inside every chunk iteration; for an
+    // export with N chunks that was 2N redundant DB round-trips.
+    const exclusionFilter = await buildExclusionFilter(eventMappingIds);
 
     const CHUNK_SIZE = 10000;
     const idPipeline: PipelineStage[] = [
@@ -1028,7 +1050,7 @@ export async function* generateInventoryCsvStream(
     }
 
     // Yield CSV header immediately to keep connection alive
-    yield { type: 'header', text: csvColumns.map(col => col.title).join(',') + '\n' };
+    yield { type: 'header', text: CSV_HEADER_LINE + '\n' };
 
     let totalRecords = 0;
     let totalExcluded = 0;
@@ -1062,20 +1084,21 @@ export async function* generateInventoryCsvStream(
         if (enrichedDocs.length > 0) {
           const processedBatch = await processBatch(enrichedDocs);
           const beforeBatchFilters = processedBatch.length;
-          const nonBlockedBatch = processedBatch.filter(r => {
-            const v = (r.venue_name || '').trim().toLowerCase();
-            return !BLOCKED_STATES.some(s => v === s || v.endsWith(', ' + s) || v.endsWith(',' + s));
-          });
-          let filtered = await applyExclusionRules(nonBlockedBatch);
-          if (minSeatFilter > 0) {
-            if (minSeatFilterMode === 'section') {
-              filtered = filtered.filter(r => {
-                const key = `${r.event_id}|${r.section}`;
-                return (sectionTotalsMap.get(key) ?? 0) > minSeatFilter;
-              });
-            } else {
-              filtered = filtered.filter(r => r.quantity > minSeatFilter);
+          // Single-pass filter: blocked states + exclusion rules + min-seat.
+          // Avoids walking the batch three times and the per-chunk DB query
+          // that the old applyExclusionRules() was doing.
+          const filtered: CsvRow[] = [];
+          for (const r of processedBatch) {
+            if (isBlockedVenueState(r)) continue;
+            if (!exclusionFilter(r)) continue;
+            if (minSeatFilter > 0) {
+              if (minSeatFilterMode === 'section') {
+                if ((sectionTotalsMap.get(`${r.event_id}|${r.section}`) ?? 0) <= minSeatFilter) continue;
+              } else if (r.quantity <= minSeatFilter) {
+                continue;
+              }
             }
+            filtered.push(r);
           }
           totalExcluded += beforeBatchFilters - filtered.length;
 
