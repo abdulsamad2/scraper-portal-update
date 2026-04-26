@@ -794,14 +794,19 @@ async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]
       ? (existingPublicNotes ? `${existingPublicNotes} - STANDING ROOM ONLY` : 'STANDING ROOM ONLY')
       : existingPublicNotes;
 
-    // Tags: GA tickets get GA_STANDARD / GA_RESALE, regular tickets get STANDARD / RESALE
+    // Tags: GA tickets get GA_STANDARD / GA_RESALE, regular tickets get STANDARD / RESALE.
+    // Any extra tags stored on the inventory (anything other than the reserved
+    // STANDARD/RESALE/GA_* values) are appended so they survive the export.
     const isStandard = inventory?.splitType === 'NEVERLEAVEONE';
-    let tags: string;
-    if (isGALawn) {
-      tags = isStandard ? 'GA_STANDARD' : 'GA_RESALE';
-    } else {
-      tags = isStandard ? 'STANDARD' : 'RESALE';
-    }
+    const baseTag = isGALawn
+      ? (isStandard ? 'GA_STANDARD' : 'GA_RESALE')
+      : (isStandard ? 'STANDARD' : 'RESALE');
+    const RESERVED_TAGS = new Set(['STANDARD', 'RESALE', 'GA_STANDARD', 'GA_RESALE']);
+    const extraTags = (inventory?.tags || '')
+      .split(',')
+      .map(t => t.trim())
+      .filter(t => t.length > 0 && !RESERVED_TAGS.has(t.toUpperCase()));
+    const tags = [baseTag, ...extraTags].join(',');
 
     return {
       inventory_id: inventory?.inventoryId || 0,
