@@ -267,14 +267,14 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
           <div className="hidden md:block overflow-x-auto">
             <table className="w-full divide-y divide-gray-200 table-fixed">
               <colgroup>
-                <col className="w-[80px]" />
+                <col className="w-[70px]" />
                 <col />
-                <col className="w-[110px]" />
-                <col className="w-[170px]" />
-                <col className="w-[170px]" />
-                <col className="w-[130px]" />
                 <col className="w-[100px]" />
-                <col className="w-[130px]" />
+                <col className="w-[140px]" />
+                <col className="w-[140px]" />
+                <col className="w-[120px]" />
+                <col className="w-[90px]" />
+                <col className="w-[110px]" />
               </colgroup>
               <thead className="bg-gradient-to-r from-gray-50 to-gray-100">
                 <tr>

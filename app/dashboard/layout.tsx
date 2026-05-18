@@ -19,6 +19,8 @@ import {
   Shield,
   Users,
   Bell,
+  ChevronsLeft,
+  ChevronsRight,
 } from 'lucide-react';
 
 interface FeatureFlags {
@@ -51,8 +53,32 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
   const pathname = usePathname();
   const router = useRouter();
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isCollapsed, setIsCollapsed] = useState(false);
   const [flags, setFlags] = useState<FeatureFlags>(DEFAULT_FLAGS);
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
+
+  // Auto-collapse on small desktop widths (< xl). User manual toggle persists in localStorage and wins.
+  useEffect(() => {
+    const stored = localStorage.getItem('sidebarCollapsed_v2');
+    if (stored !== null) {
+      setIsCollapsed(stored === '1');
+      return;
+    }
+    // Auto-collapse on anything narrower than a wide desktop so wide tables
+    // (events page) don't truncate the Event Name column.
+    const apply = () => setIsCollapsed(window.innerWidth < 1536 && window.innerWidth >= 1024);
+    apply();
+    window.addEventListener('resize', apply);
+    return () => window.removeEventListener('resize', apply);
+  }, []);
+
+  const toggleCollapsed = () => {
+    setIsCollapsed(prev => {
+      const next = !prev;
+      localStorage.setItem('sidebarCollapsed_v2', next ? '1' : '0');
+      return next;
+    });
+  };
 
   useEffect(() => {
     fetch('/api/feature-flags')
@@ -163,39 +189,49 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
   return (
     <div className="flex h-screen bg-gradient-to-br from-slate-50 to-slate-100">
       {/* Sidebar */}
-      <aside className={`bg-white w-64 max-w-[90vw] min-h-screen shadow-xl transition-all duration-300 ease-in-out border-r border-slate-200 overflow-hidden ${
+      <aside className={`bg-white ${isCollapsed ? 'lg:w-16' : 'lg:w-64'} w-64 max-w-[90vw] min-h-screen shadow-xl transition-all duration-300 ease-in-out border-r border-slate-200 overflow-hidden ${
         isSidebarOpen ? 'translate-x-0' : '-translate-x-full'
       } fixed lg:relative lg:translate-x-0 z-50 flex flex-col`}>
 
-        {/* Logo */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100 shrink-0">
-          <div className="flex items-center gap-3 min-w-0">
+        {/* Logo + collapse toggle */}
+        <div className={`flex items-center justify-between gap-2 ${isCollapsed ? 'lg:px-2' : 'px-5'} py-4 border-b border-slate-100 shrink-0`}>
+          <div className={`flex items-center gap-3 min-w-0 ${isCollapsed ? 'lg:hidden' : ''}`}>
             <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center shadow-md shadow-purple-200 shrink-0">
               <Package className="w-4 h-4 text-white" />
             </div>
             <span className="text-base font-bold text-slate-800 truncate">TMC Portal</span>
           </div>
+          {/* Desktop collapse toggle */}
+          <button
+            onClick={toggleCollapsed}
+            title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            className={`hidden lg:flex items-center justify-center p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors ${isCollapsed ? 'lg:mx-auto' : ''}`}
+          >
+            {isCollapsed ? <ChevronsRight className="w-4 h-4" /> : <ChevronsLeft className="w-4 h-4" />}
+          </button>
+          {/* Mobile close */}
           <button onClick={() => setIsSidebarOpen(false)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 transition-colors lg:hidden">
             <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Nav */}
-        <div className="flex-1 overflow-y-auto px-3 py-4 min-h-0">
-          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-2 mb-2">Menu</p>
+        <div className={`flex-1 overflow-y-auto ${isCollapsed ? 'lg:px-2' : 'px-3'} py-4 min-h-0`}>
+          <p className={`text-[10px] font-bold text-slate-400 uppercase tracking-widest px-2 mb-2 ${isCollapsed ? 'lg:hidden' : ''}`}>Menu</p>
           <nav className="space-y-0.5">
             {navItems.map((item) => {
               const active = pathname === item.path || (
                 item.path !== '/dashboard' &&
                 pathname.startsWith(item.path) &&
-                // Prevent parent from highlighting when on a child route
                 !navItems.some(other => other.path !== item.path && other.path.startsWith(item.path) && pathname.startsWith(other.path))
               );
               return (
                 <Link
                   key={item.path}
                   href={item.path}
-                  className={`flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all duration-150 group ${
+                  title={isCollapsed ? item.label : undefined}
+                  className={`flex items-center gap-3 ${isCollapsed ? 'lg:justify-center lg:px-2' : 'px-3'} py-2.5 rounded-xl transition-all duration-150 group ${
                     active
                       ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-md shadow-purple-200'
                       : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
@@ -204,13 +240,13 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
                   <span className={`shrink-0 transition-transform duration-150 ${active ? '' : 'group-hover:scale-105'}`}>
                     {item.icon}
                   </span>
-                  <span className="font-medium text-sm truncate flex-1">{item.label}</span>
+                  <span className={`font-medium text-sm truncate flex-1 ${isCollapsed ? 'lg:hidden' : ''}`}>{item.label}</span>
                 </Link>
               );
             })}
           </nav>
 
-          {comingSoonItems.length > 0 && (
+          {comingSoonItems.length > 0 && !isCollapsed && (
             <div className="mt-5 pt-4 border-t border-slate-100">
               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-2 mb-2">Coming Soon</p>
               {comingSoonItems.map((item, index) => (
@@ -225,28 +261,30 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
         </div>
 
         {/* Footer */}
-        <div className="px-3 py-4 border-t border-slate-100 shrink-0">
+        <div className={`${isCollapsed ? 'lg:px-2' : 'px-3'} py-4 border-t border-slate-100 shrink-0`}>
           {isSuperAdmin && (
             <Link
               href="/dashboard/admin"
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-xl w-full transition-colors mb-1 ${
+              title={isCollapsed ? 'Admin' : undefined}
+              className={`flex items-center gap-3 ${isCollapsed ? 'lg:justify-center lg:px-2' : 'px-3'} py-2.5 rounded-xl w-full transition-colors mb-1 ${
                 pathname === '/dashboard/admin'
                   ? 'bg-gradient-to-r from-red-600 to-rose-600 text-white shadow-md'
                   : 'text-slate-400 hover:text-red-600 hover:bg-red-50'
               }`}
             >
               <Shield className="w-5 h-5 shrink-0" />
-              <span className="font-medium text-sm">Admin</span>
+              <span className={`font-medium text-sm ${isCollapsed ? 'lg:hidden' : ''}`}>Admin</span>
             </Link>
           )}
           <button
             onClick={handleLogout}
-            className="flex items-center gap-3 px-3 py-2.5 rounded-xl w-full text-slate-500 hover:text-red-600 hover:bg-red-50 transition-colors"
+            title={isCollapsed ? 'Logout' : undefined}
+            className={`flex items-center gap-3 ${isCollapsed ? 'lg:justify-center lg:px-2' : 'px-3'} py-2.5 rounded-xl w-full text-slate-500 hover:text-red-600 hover:bg-red-50 transition-colors`}
           >
             <LogOut className="w-5 h-5 shrink-0" />
-            <span className="font-medium text-sm">Logout</span>
+            <span className={`font-medium text-sm ${isCollapsed ? 'lg:hidden' : ''}`}>Logout</span>
           </button>
-          <p className="text-[10px] text-slate-300 text-center mt-3">Made in dark mode 🌙</p>
+          <p className={`text-[10px] text-slate-300 text-center mt-3 ${isCollapsed ? 'lg:hidden' : ''}`}>Made in dark mode 🌙</p>
         </div>
       </aside>
 
