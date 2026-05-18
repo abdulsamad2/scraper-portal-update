@@ -266,60 +266,65 @@ export async function getEventCounts(): Promise<{ total: number; active: number 
  * Returns per-event standard and resale inventory quantities for a set of mapping_ids.
  * Standard = splitType 'NEVERLEAVEONE', Resale = everything else.
  */
+export type InventoryCounts = {
+  standard: number; resale: number; broker: number;
+  standardRows: number; resaleRows: number; brokerRows: number;
+  standardAvgCost: number | null; resaleAvgCost: number | null; brokerAvgCost: number | null;
+};
+
 export async function getInventoryCountsByType(
   mappingIds: string[]
-): Promise<Record<string, { standard: number; resale: number; standardRows: number; resaleRows: number; standardAvgCost: number | null; resaleAvgCost: number | null }>> {
+): Promise<Record<string, InventoryCounts>> {
   if (!mappingIds.length) return {};
   await dbConnect();
   try {
+    // isBroker = resale AND tag contains "broker" (case-insensitive). Mirrors the
+    // pricing branch in actions/csvActions.tsx so badge counts match what the CSV
+    // export treats as broker.
+    const isResale = { $ne: ['$inventory.splitType', 'NEVERLEAVEONE'] };
+    const isBroker = {
+      $and: [
+        isResale,
+        {
+          $regexMatch: {
+            input: { $ifNull: ['$inventory.tags', ''] },
+            regex: 'broker',
+            options: 'i',
+          },
+        },
+      ],
+    };
     const result = await ConsecutiveGroup.aggregate([
       { $match: { mapping_id: { $in: mappingIds } } },
       {
         $group: {
           _id: '$mapping_id',
-          standard: {
-            $sum: {
-              $cond: [{ $eq: ['$inventory.splitType', 'NEVERLEAVEONE'] }, '$inventory.quantity', 0],
-            },
-          },
-          resale: {
-            $sum: {
-              $cond: [{ $ne: ['$inventory.splitType', 'NEVERLEAVEONE'] }, '$inventory.quantity', 0],
-            },
-          },
-          standardRows: {
-            $sum: {
-              $cond: [{ $eq: ['$inventory.splitType', 'NEVERLEAVEONE'] }, 1, 0],
-            },
-          },
-          resaleRows: {
-            $sum: {
-              $cond: [{ $ne: ['$inventory.splitType', 'NEVERLEAVEONE'] }, 1, 0],
-            },
-          },
+          standard: { $sum: { $cond: [{ $eq: ['$inventory.splitType', 'NEVERLEAVEONE'] }, '$inventory.quantity', 0] } },
+          resale: { $sum: { $cond: [isResale, '$inventory.quantity', 0] } },
+          broker: { $sum: { $cond: [isBroker, '$inventory.quantity', 0] } },
+          standardRows: { $sum: { $cond: [{ $eq: ['$inventory.splitType', 'NEVERLEAVEONE'] }, 1, 0] } },
+          resaleRows: { $sum: { $cond: [isResale, 1, 0] } },
+          brokerRows: { $sum: { $cond: [isBroker, 1, 0] } },
           // $avg ignores nulls, so non-matching rows become null and are excluded
-          standardAvgCost: {
-            $avg: {
-              $cond: [{ $eq: ['$inventory.splitType', 'NEVERLEAVEONE'] }, '$inventory.cost', null],
-            },
-          },
-          resaleAvgCost: {
-            $avg: {
-              $cond: [{ $ne: ['$inventory.splitType', 'NEVERLEAVEONE'] }, '$inventory.cost', null],
-            },
-          },
+          standardAvgCost: { $avg: { $cond: [{ $eq: ['$inventory.splitType', 'NEVERLEAVEONE'] }, '$inventory.cost', null] } },
+          resaleAvgCost: { $avg: { $cond: [isResale, '$inventory.cost', null] } },
+          brokerAvgCost: { $avg: { $cond: [isBroker, '$inventory.cost', null] } },
         },
       },
     ]);
-    const map: Record<string, { standard: number; resale: number; standardRows: number; resaleRows: number; standardAvgCost: number | null; resaleAvgCost: number | null }> = {};
+    const round2 = (v: number | null | undefined) => (v != null ? Math.round(v * 100) / 100 : null);
+    const map: Record<string, InventoryCounts> = {};
     for (const row of result) {
       map[row._id] = {
         standard: row.standard,
         resale: row.resale,
+        broker: row.broker,
         standardRows: row.standardRows,
         resaleRows: row.resaleRows,
-        standardAvgCost: row.standardAvgCost != null ? Math.round(row.standardAvgCost * 100) / 100 : null,
-        resaleAvgCost: row.resaleAvgCost != null ? Math.round(row.resaleAvgCost * 100) / 100 : null,
+        brokerRows: row.brokerRows,
+        standardAvgCost: round2(row.standardAvgCost),
+        resaleAvgCost: round2(row.resaleAvgCost),
+        brokerAvgCost: round2(row.brokerAvgCost),
       };
     }
     return map;

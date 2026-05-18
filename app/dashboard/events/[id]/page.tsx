@@ -66,7 +66,7 @@ export default async function EventDetailsPage({ params }: EventDetailsProps) {
   /* async-defer-await: start inventory fetch immediately, await late */
   const inventoryPromise = event.mapping_id
     ? getInventoryCountsByType([event.mapping_id])
-    : Promise.resolve({} as Record<string, { standard: number; resale: number; standardRows: number; resaleRows: number; standardAvgCost: number | null; resaleAvgCost: number | null }>);
+    : Promise.resolve({} as Record<string, { standard: number; resale: number; broker: number; standardRows: number; resaleRows: number; brokerRows: number; standardAvgCost: number | null; resaleAvgCost: number | null; brokerAvgCost: number | null }>);
 
   const isActive = !event.Skip_Scraping;
   const lastUpdated = event.Last_Updated || event.updatedAt;
@@ -83,8 +83,10 @@ export default async function EventDetailsPage({ params }: EventDetailsProps) {
   const mid = event.mapping_id;
   const standardQty = mid ? (inventoryCounts[mid]?.standard ?? 0) : 0;
   const resaleQty = mid ? (inventoryCounts[mid]?.resale ?? 0) : 0;
+  const brokerQty = mid ? (inventoryCounts[mid]?.broker ?? 0) : 0;
   const standardRows = mid ? (inventoryCounts[mid]?.standardRows ?? 0) : 0;
   const resaleRows = mid ? (inventoryCounts[mid]?.resaleRows ?? 0) : 0;
+  const brokerRows = mid ? (inventoryCounts[mid]?.brokerRows ?? 0) : 0;
   const standardAvgCost = mid ? (inventoryCounts[mid]?.standardAvgCost ?? null) : null;
   const resaleAvgCost = mid ? (inventoryCounts[mid]?.resaleAvgCost ?? null) : null;
 
@@ -201,6 +203,12 @@ export default async function EventDetailsPage({ params }: EventDetailsProps) {
               </p>
               <span className="text-[10px] text-slate-400 font-medium">{resaleRows} rows</span>
             </div>
+            {brokerQty > 0 && (
+              <p className="text-[10px] text-amber-700 font-medium mt-0.5">
+                <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded bg-amber-100 text-amber-700 text-[9px] font-bold mr-1">B</span>
+                {brokerQty.toLocaleString()} broker · {brokerRows} rows
+              </p>
+            )}
             {resaleAvgCost != null && (
               <p className="text-[10px] text-slate-500 mt-0.5">
                 avg cost <span className="font-bold text-slate-700">${resaleAvgCost.toFixed(2)}</span>

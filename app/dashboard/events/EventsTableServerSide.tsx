@@ -27,8 +27,10 @@ interface EventData {
   brokerMarkupAdjustment?: number;
   standardQty?: number;
   resaleQty?: number;
+  brokerQty?: number;
   standardRows?: number;
   resaleRows?: number;
+  brokerRows?: number;
   includeStandardSeats?: boolean;
   includeResaleSeats?: boolean;
   eventType?: 'NFL' | 'MLB' | 'NHL' | 'NBA' | 'MLS' | 'Other' | null;
@@ -216,8 +218,10 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
     ...e,
     standardQty: e.mapping_id ? (inventoryCounts[e.mapping_id]?.standard ?? 0) : 0,
     resaleQty: e.mapping_id ? (inventoryCounts[e.mapping_id]?.resale ?? 0) : 0,
+    brokerQty: e.mapping_id ? (inventoryCounts[e.mapping_id]?.broker ?? 0) : 0,
     standardRows: e.mapping_id ? (inventoryCounts[e.mapping_id]?.standardRows ?? 0) : 0,
     resaleRows: e.mapping_id ? (inventoryCounts[e.mapping_id]?.resaleRows ?? 0) : 0,
+    brokerRows: e.mapping_id ? (inventoryCounts[e.mapping_id]?.brokerRows ?? 0) : 0,
   }));
   const total = eventsResult.total || 0;
   const totalPages = eventsResult.totalPages || 1;
@@ -263,49 +267,47 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
           <div className="hidden md:block overflow-x-auto">
             <table className="w-full divide-y divide-gray-200 table-fixed">
               <colgroup>
-                <col className="w-[90px]" />
+                <col className="w-[80px]" />
                 <col />
+                <col className="w-[110px]" />
+                <col className="w-[170px]" />
+                <col className="w-[170px]" />
                 <col className="w-[130px]" />
-                <col className="w-[72px]" />
-                <col className="w-[72px]" />
-                <col className="w-[72px]" />
+                <col className="w-[100px]" />
                 <col className="w-[130px]" />
-                <col className="w-[160px]" />
               </colgroup>
               <thead className="bg-gradient-to-r from-gray-50 to-gray-100">
                 <tr>
-                  <th className="px-3 py-2.5 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">
+                  <th className="px-2 py-2 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">
                     Status
                   </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">
+                  <th className="px-2 py-2 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">
                     <SortableHeader sortKey="name" currentSortBy={sortBy} currentSortOrder={sortOrder} sp={sp}>
                       Event Details
                     </SortableHeader>
                   </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">
+                  <th className="px-2 py-2 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">
                     <SortableHeader sortKey="date" currentSortBy={sortBy} currentSortOrder={sortOrder} sp={sp}>
                       Date
                     </SortableHeader>
                   </th>
-                  <th className="px-3 py-2.5 text-right text-xs font-bold text-gray-600 uppercase tracking-wider">
+                  <th className="px-2 py-2 text-right text-xs font-bold text-gray-600 uppercase tracking-wider">
                     <SortableHeader sortKey="seats" currentSortBy={sortBy} currentSortOrder={sortOrder} sp={sp} className="justify-end">
                       Qty
                     </SortableHeader>
                   </th>
-                  <th className="px-3 py-2.5 text-right text-xs font-bold text-gray-600 uppercase tracking-wider">
-                    Rows
-                  </th>
-                  <th className="px-3 py-2.5 text-right text-xs font-bold text-gray-600 uppercase tracking-wider">
+                  <th className="px-2 py-2 text-right text-xs font-bold text-gray-600 uppercase tracking-wider">Rows</th>
+                  <th className="px-2 py-2 text-right text-xs font-bold text-gray-600 uppercase tracking-wider">
                     <SortableHeader sortKey="markup" currentSortBy={sortBy} currentSortOrder={sortOrder} sp={sp} className="justify-end">
                       Markup
                     </SortableHeader>
                   </th>
-                  <th className="px-3 py-2.5 text-center text-xs font-bold text-gray-600 uppercase tracking-wider">
+                  <th className="px-2 py-2 text-center text-xs font-bold text-gray-600 uppercase tracking-wider">
                     <SortableHeader sortKey="updated" currentSortBy={sortBy} currentSortOrder={sortOrder} sp={sp} className="justify-center">
                       Updated
                     </SortableHeader>
                   </th>
-                  <th className="px-3 py-2.5 text-right text-xs font-bold text-gray-600 uppercase tracking-wider">
+                  <th className="px-2 py-2 text-right text-xs font-bold text-gray-600 uppercase tracking-wider">
                     Actions
                   </th>
                 </tr>
@@ -329,7 +331,7 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                         'bg-gray-50/60 border-l-2 border-gray-300 opacity-75'
                       }`}
                     >
-                      <td className="px-3 py-2 whitespace-nowrap">
+                      <td className="px-2 py-1.5 whitespace-nowrap">
                         <StatusBadge isActive={isActive} />
                       </td>
                       
@@ -356,7 +358,7 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                         </div>
                       </td>
                       
-                      <td className="px-3 py-2 whitespace-nowrap">
+                      <td className="px-2 py-1.5 whitespace-nowrap">
                         <div className="font-medium text-gray-900 text-xs tabular-nums">
                           {formatDate(event.Event_DateTime)}
                         </div>
@@ -365,37 +367,34 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                         </div>
                       </td>
                       
-                      <td className="px-3 py-2 whitespace-nowrap text-right">
-                        <div className="flex flex-col items-end gap-0.5">
-                          <span className={`inline-flex items-center text-[11px] font-semibold px-1.5 py-0.5 rounded border tabular-nums ${
+                      <td className="px-2 py-1.5 whitespace-nowrap text-right">
+                        <div className="inline-flex items-center gap-1 whitespace-nowrap">
+                          <span className={`inline-flex items-center text-[10px] font-semibold px-1 py-0 rounded border tabular-nums ${
                             stdIncluded ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-slate-200 bg-slate-50 text-slate-400 line-through opacity-50'
-                          }`}>
-                            <span className="mr-0.5 opacity-50 text-[9px]">S</span>{(event.standardQty ?? 0).toLocaleString()}
-                          </span>
-                          <span className={`inline-flex items-center text-[11px] font-semibold px-1.5 py-0.5 rounded border tabular-nums ${
+                          }`}><span className="mr-0.5 opacity-60 text-[9px]">S</span>{(event.standardQty ?? 0).toLocaleString()}</span>
+                          <span className={`inline-flex items-center text-[10px] font-semibold px-1 py-0 rounded border tabular-nums ${
                             resIncluded ? 'border-red-200 bg-red-50 text-red-700' : 'border-slate-200 bg-slate-50 text-slate-400 line-through opacity-50'
-                          }`}>
-                            <span className="mr-0.5 opacity-50 text-[9px]">R</span>{(event.resaleQty ?? 0).toLocaleString()}
-                          </span>
+                          }`}><span className="mr-0.5 opacity-60 text-[9px]">F</span>{Math.max(0, (event.resaleQty ?? 0) - (event.brokerQty ?? 0)).toLocaleString()}</span>
+                          <span className={`inline-flex items-center text-[10px] font-semibold px-1 py-0 rounded border tabular-nums ${
+                            resIncluded ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-slate-200 bg-slate-50 text-slate-400 line-through opacity-50'
+                          }`}><span className="mr-0.5 opacity-60 text-[9px]">B</span>{(event.brokerQty ?? 0).toLocaleString()}</span>
                         </div>
                       </td>
-
-                      <td className="px-3 py-2 whitespace-nowrap text-right">
-                        <div className="flex flex-col items-end gap-0.5">
-                          <span className={`inline-flex items-center text-[11px] font-semibold px-1.5 py-0.5 rounded border tabular-nums ${
+                      <td className="px-2 py-1.5 whitespace-nowrap text-right">
+                        <div className="inline-flex items-center gap-1 whitespace-nowrap">
+                          <span className={`inline-flex items-center text-[10px] font-semibold px-1 py-0 rounded border tabular-nums ${
                             stdIncluded ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-slate-200 bg-slate-50 text-slate-400 line-through opacity-50'
-                          }`}>
-                            <span className="mr-0.5 opacity-50 text-[9px]">S</span>{(event.standardRows ?? 0).toLocaleString()}
-                          </span>
-                          <span className={`inline-flex items-center text-[11px] font-semibold px-1.5 py-0.5 rounded border tabular-nums ${
+                          }`}><span className="mr-0.5 opacity-60 text-[9px]">S</span>{(event.standardRows ?? 0).toLocaleString()}</span>
+                          <span className={`inline-flex items-center text-[10px] font-semibold px-1 py-0 rounded border tabular-nums ${
                             resIncluded ? 'border-red-200 bg-red-50 text-red-700' : 'border-slate-200 bg-slate-50 text-slate-400 line-through opacity-50'
-                          }`}>
-                            <span className="mr-0.5 opacity-50 text-[9px]">R</span>{(event.resaleRows ?? 0).toLocaleString()}
-                          </span>
+                          }`}><span className="mr-0.5 opacity-60 text-[9px]">F</span>{Math.max(0, (event.resaleRows ?? 0) - (event.brokerRows ?? 0)).toLocaleString()}</span>
+                          <span className={`inline-flex items-center text-[10px] font-semibold px-1 py-0 rounded border tabular-nums ${
+                            resIncluded ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-slate-200 bg-slate-50 text-slate-400 line-through opacity-50'
+                          }`}><span className="mr-0.5 opacity-60 text-[9px]">B</span>{(event.brokerRows ?? 0).toLocaleString()}</span>
                         </div>
                       </td>
                       
-                      <td className="px-3 py-2 whitespace-nowrap text-right">
+                      <td className="px-2 py-1.5 whitespace-nowrap text-right">
                         <div className="inline-flex flex-col items-end gap-1.5">
                           {/* Base markup */}
                           <span className={`font-bold text-xs px-2 py-0.5 rounded-full tabular-nums ${
@@ -413,7 +412,7 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                             const resAdj = event.resaleMarkupAdjustment ?? 0;
                             const brkAdj = event.brokerMarkupAdjustment ?? 0;
                             return (
-                              <div className="flex items-center gap-1">
+                              <div className="flex items-center gap-1 whitespace-nowrap">
                                 <span className={`inline-flex items-center text-[10px] font-semibold px-1.5 py-0.5 rounded border tabular-nums ${
                                   stdAdj > 0 ? 'border-orange-200 bg-orange-50 text-orange-600'
                                   : stdAdj < 0 ? 'border-sky-200 bg-sky-50 text-sky-700'
@@ -441,7 +440,7 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                         </div>
                       </td>
 
-                      <td className="px-3 py-2 whitespace-nowrap text-center">
+                      <td className="px-2 py-1.5 whitespace-nowrap text-center">
                         {lastUpdated ? (
                           <TimeAgo iso={lastUpdated} dateLabel={formatDate(lastUpdated)} />
                         ) : (
@@ -449,7 +448,7 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                         )}
                       </td>
                       
-                      <td className="px-3 py-2 whitespace-nowrap text-right">
+                      <td className="px-2 py-1.5 whitespace-nowrap text-right">
                         <EventTableActions
                           eventId={event._id}
                           eventName={event.Event_Name}
@@ -537,6 +536,11 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                           }`}>
                             <span className="mr-0.5 opacity-50 text-[9px]">R</span>{(event.resaleQty ?? 0).toLocaleString()}
                           </span>
+                          <span className={`inline-flex items-center text-[11px] font-semibold px-1.5 py-0.5 rounded border tabular-nums ${
+                            resIncluded ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-slate-200 bg-slate-50 text-slate-400 line-through opacity-50'
+                          }`} title="Broker subset (incl. in R)">
+                            <span className="mr-0.5 opacity-50 text-[9px]">B</span>{(event.brokerQty ?? 0).toLocaleString()}
+                          </span>
                         </div>
                         <div className="flex items-center justify-end gap-1">
                           <span className="text-[10px] text-gray-400 mr-0.5">rows</span>
@@ -549,6 +553,11 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                             resIncluded ? 'border-red-200 bg-red-50 text-red-700' : 'border-slate-200 bg-slate-50 text-slate-400 line-through opacity-50'
                           }`}>
                             <span className="mr-0.5 opacity-50 text-[9px]">R</span>{(event.resaleRows ?? 0).toLocaleString()}
+                          </span>
+                          <span className={`inline-flex items-center text-[11px] font-semibold px-1.5 py-0.5 rounded border tabular-nums ${
+                            resIncluded ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-slate-200 bg-slate-50 text-slate-400 line-through opacity-50'
+                          }`} title="Broker subset (incl. in R)">
+                            <span className="mr-0.5 opacity-50 text-[9px]">B</span>{(event.brokerRows ?? 0).toLocaleString()}
                           </span>
                         </div>
                         
@@ -570,7 +579,7 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                             const resAdj = event.resaleMarkupAdjustment ?? 0;
                             const brkAdj = event.brokerMarkupAdjustment ?? 0;
                             return (
-                              <div className="flex items-center gap-1">
+                              <div className="flex items-center gap-1 whitespace-nowrap">
                                 <span className={`inline-flex items-center text-[10px] font-semibold px-1.5 py-0.5 rounded border tabular-nums ${
                                   stdAdj > 0 ? 'border-orange-200 bg-orange-50 text-orange-600'
                                   : stdAdj < 0 ? 'border-sky-200 bg-sky-50 text-sky-700'
