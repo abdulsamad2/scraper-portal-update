@@ -937,6 +937,13 @@ export async function* generateInventoryCsvStream(
   const startTime = Date.now();
   _venueTzCache.clear();
 
+  // Emit the header line first thing so the browser receives bytes within
+  // milliseconds. The prep work below (stopLowSeatEvents, event lookups,
+  // exclusion filter, id pipeline, section-total pre-aggregation) can take
+  // 10s+; without an early byte the client/iframe connection times out and
+  // disconnects mid-stream before any data flows.
+  yield { type: 'header', text: CSV_HEADER_LINE + '\n' };
+
   // ── Stop low-seat events before streaming CSV ──
   const lowSeatResult = await stopLowSeatEvents();
   if (lowSeatResult.stopped > 0) {
@@ -960,9 +967,12 @@ export async function* generateInventoryCsvStream(
       .maxTimeMS(30000);
 
     if (activeEvents.length === 0) {
-      yield { type: 'done', error: eventUpdateFilterMinutes > 0
+      const msg = eventUpdateFilterMinutes > 0
         ? `No active events updated within the last ${eventUpdateFilterMinutes} minutes.`
-        : 'No active events found (all events have Skip_Scraping enabled).' };
+        : 'No active events found (all events have Skip_Scraping enabled).';
+      // Header already streamed — surface the reason as a visible line in the file.
+      yield { type: 'data', text: `ERROR: ${msg}\n` };
+      yield { type: 'done', error: msg };
       return;
     }
 
@@ -1010,6 +1020,7 @@ export async function* generateInventoryCsvStream(
     const totalDocs = allIds.length;
 
     if (totalDocs === 0) {
+      yield { type: 'data', text: 'ERROR: No inventory data found.\n' };
       yield { type: 'done', error: 'No inventory data found.' };
       return;
     }
@@ -1041,9 +1052,6 @@ export async function* generateInventoryCsvStream(
       }
       console.log(`[CSV Stream] Pre-aggregated ${sectionTotalsMap.size} section totals in ${Date.now() - aggStart}ms`);
     }
-
-    // Yield CSV header immediately to keep connection alive
-    yield { type: 'header', text: CSV_HEADER_LINE + '\n' };
 
     let totalRecords = 0;
     let totalExcluded = 0;
@@ -1110,6 +1118,7 @@ export async function* generateInventoryCsvStream(
     console.log(`[CSV Stream] Completed in ${duration}ms: ${totalRecords} records, ${totalExcluded} excluded`);
 
     if (totalRecords === 0) {
+      yield { type: 'data', text: 'ERROR: No inventory data found after applying exclusion rules.\n' };
       yield { type: 'done', error: 'No inventory data found after applying exclusion rules.' };
       return;
     }
@@ -1124,6 +1133,8 @@ export async function* generateInventoryCsvStream(
       stack: error instanceof Error ? error.stack : undefined,
       metadata: { operation: 'generateInventoryCsvStream', timestamp: new Date() }
     });
+    // Header already streamed — surface the failure inside the file too.
+    yield { type: 'data', text: 'ERROR: Failed to generate CSV.\n' };
     yield { type: 'done', error: 'Failed to generate CSV.' };
   }
 }
