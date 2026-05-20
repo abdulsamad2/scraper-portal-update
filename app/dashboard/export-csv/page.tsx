@@ -90,7 +90,7 @@ interface PerformanceMetrics {
   lastRunAt?: string;
   nextRunAt?: string;
   lastManualGeneration?: {
-    recordCount: number;
+    recordCount?: number; // omitted for native browser downloads (JS never sees the bytes)
     generationTime: number;
     totalTime?: number;
     timestamp: string;
@@ -287,94 +287,66 @@ const ExportCsvPage: React.FC = () => {
   }, []);
 
 
-  const handleGenerateCsv = async () => {
+  const handleGenerateCsv = () => {
+    // Browser-native streaming download to bypass JS memory pressure on large CSVs.
+    // Previously we did fetch() → response.blob() → response.text() → re-blob, which
+    // could hold 4× the CSV size in heap and crash the tab. Hidden form POST to a
+    // hidden iframe lets the browser stream the response straight to disk via the
+    // Content-Disposition header from /api/generate-csv.
     setLoading(true);
     setCsvStatus(prev => ({ ...prev, status: 'Generating...' }));
     const startTime = Date.now();
 
-    try {
-      // Use API route instead of server action to avoid payload size limits
-      // for large CSVs (100+ events). The API route streams the CSV as a file.
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 minute timeout
+    const iframe = document.createElement('iframe');
+    iframe.name = `csv-dl-${Date.now()}`;
+    iframe.style.display = 'none';
+    document.body.appendChild(iframe);
 
-      const response = await fetch('/api/generate-csv', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ eventUpdateFilterMinutes: settings.eventUpdateFilterMinutes }),
-        signal: controller.signal,
-      });
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = '/api/generate-csv';
+    form.target = iframe.name;
+    form.style.display = 'none';
 
-      clearTimeout(timeoutId);
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = 'eventUpdateFilterMinutes';
+    input.value = String(settings.eventUpdateFilterMinutes ?? 0);
+    form.appendChild(input);
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => null);
-        throw new Error(errorData?.message || `Server error: ${response.status}`);
-      }
+    document.body.appendChild(form);
+    form.submit();
 
-      const contentType = response.headers.get('Content-Type') || '';
-      if (contentType.includes('application/json')) {
-        const errorData = await response.json();
-        setCsvStatus(prev => ({ ...prev, status: 'Generation failed' }));
-        showMessage(errorData.message || 'Failed to generate CSV', 'error');
-        return;
-      }
+    // Form node is no longer needed once submitted; iframe must stay for the
+    // duration of the stream so the browser can complete the download.
+    document.body.removeChild(form);
+    setTimeout(() => {
+      try { document.body.removeChild(iframe); } catch { /* already gone */ }
+    }, 10 * 60 * 1000); // 10 min cap matches the server-side maxDuration headroom
 
-      // Stream response as blob for download
-      const blob = await response.blob();
-      const csvText = await blob.text();
-
-      // Check if stream returned an error instead of CSV data
-      if (csvText.startsWith('ERROR:')) {
-        setCsvStatus(prev => ({ ...prev, status: 'Generation failed' }));
-        showMessage(csvText.replace('ERROR: ', ''), 'error');
-        return;
-      }
-
-      // Count records from CSV content (lines - 1 for header)
-      const lineCount = csvText.split('\n').filter(l => l.trim()).length;
-      const records = Math.max(0, lineCount - 1);
-
-      const downloadBlob = new Blob([csvText], { type: 'text/csv' });
-      const url = window.URL.createObjectURL(downloadBlob);
-      const a = document.createElement('a');
-      a.style.display = 'none';
-      a.href = url;
-      a.download = `inventory-${moment().format('YYYY-MM-DD-HH-mm-ss')}.csv`;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-
+    // We can't observe the streaming download from JS, so optimistically clear
+    // loading state after a short delay. The actual file appears in the browser's
+    // download manager when the server finishes streaming.
+    setTimeout(() => {
       const totalTime = Date.now() - startTime;
       setCsvStatus(prev => ({
         ...prev,
         lastGenerated: moment().toISOString(),
-        status: `Generated successfully! (${records} records in ${totalTime}ms)`
+        status: `Download started in ${(totalTime / 1000).toFixed(1)}s — check your browser downloads`,
       }));
-      showMessage(`CSV generated and downloaded successfully! ${records} records in ${totalTime}ms`, 'success');
+      showMessage('CSV download started — check your browser downloads bar', 'success');
+      setLoading(false);
 
       setPerformanceMetrics((prev: PerformanceMetrics | null) => ({
         ...prev,
         lastManualGeneration: {
-          recordCount: records,
+          // recordCount omitted — native browser download, JS never sees the rows
           generationTime: totalTime,
           totalTime: totalTime,
-          timestamp: new Date().toISOString()
-        }
+          timestamp: new Date().toISOString(),
+        },
       }));
-    } catch (error) {
-      console.error('CSV Generation Error:', error);
-      setCsvStatus(prev => ({ ...prev, status: 'Generation failed' }));
-      if (error instanceof Error && error.name === 'AbortError') {
-        showMessage('CSV generation timed out. The dataset may be too large — try using the Event Update Filter to limit results.', 'error');
-      } else {
-        const errorMessage = error instanceof Error ? error.message : 'Unknown error generating CSV';
-        showMessage(`Error generating CSV: ${errorMessage}`, 'error');
-      }
-    } finally {
-      setLoading(false);
-    }
+    }, 1500);
   };
 
   const handleUploadCsv = async () => {
@@ -800,11 +772,17 @@ const ExportCsvPage: React.FC = () => {
               {performanceMetrics?.lastManualGeneration ? (
                 <>
                   <div className="text-3xl font-bold text-slate-800 tabular-nums">
-                    {performanceMetrics.lastManualGeneration.recordCount}
+                    {performanceMetrics.lastManualGeneration.recordCount != null
+                      ? performanceMetrics.lastManualGeneration.recordCount.toLocaleString()
+                      : moment(performanceMetrics.lastManualGeneration.timestamp).format('HH:mm')}
                   </div>
                   <div className="flex items-center mt-2 text-sm">
                     <Download className="w-4 h-4 text-blue-500 mr-1" />
-                    <span className="text-slate-500">records &middot; {(performanceMetrics.lastManualGeneration.generationTime / 1000).toFixed(1)}s &middot; {moment(performanceMetrics.lastManualGeneration.timestamp).fromNow()}</span>
+                    <span className="text-slate-500">
+                      {performanceMetrics.lastManualGeneration.recordCount != null
+                        ? `records · ${(performanceMetrics.lastManualGeneration.generationTime / 1000).toFixed(1)}s · ${moment(performanceMetrics.lastManualGeneration.timestamp).fromNow()}`
+                        : `downloaded · ${moment(performanceMetrics.lastManualGeneration.timestamp).fromNow()}`}
+                    </span>
                   </div>
                 </>
               ) : performanceMetrics?.lastRunAt ? (
@@ -843,7 +821,11 @@ const ExportCsvPage: React.FC = () => {
           <span>Last run: <span className="text-slate-700 font-medium">{moment(performanceMetrics.lastRunAt).format('MMM D, HH:mm')}</span></span>
           {performanceMetrics.lastCsvGenerated && <span>CSV: <span className="text-slate-700 font-medium">{performanceMetrics.lastCsvGenerated}</span></span>}
           {performanceMetrics.lastManualGeneration && (
-            <span>Manual: <span className="text-slate-700 font-medium">{performanceMetrics.lastManualGeneration.recordCount} records in {performanceMetrics.lastManualGeneration.generationTime}ms</span></span>
+            <span>Manual: <span className="text-slate-700 font-medium">
+              {performanceMetrics.lastManualGeneration.recordCount != null
+                ? `${performanceMetrics.lastManualGeneration.recordCount.toLocaleString()} records in ${performanceMetrics.lastManualGeneration.generationTime}ms`
+                : `downloaded ${moment(performanceMetrics.lastManualGeneration.timestamp).fromNow()}`}
+            </span></span>
           )}
         </div>
       )}
@@ -1011,17 +993,23 @@ const ExportCsvPage: React.FC = () => {
                   <div className="flex items-center gap-2 px-4 py-3 bg-emerald-50 border border-emerald-100 rounded-xl text-xs text-emerald-700">
                     <CheckCircle2 className="w-4 h-4 shrink-0" />
                     <div>
-                      <span className="font-medium">{performanceMetrics.lastManualGeneration.recordCount} records</span>
-                      <span className="text-emerald-500 mx-1">&middot;</span>
-                      <span>Generated in {(performanceMetrics.lastManualGeneration.generationTime / 1000).toFixed(1)}s</span>
-                      {performanceMetrics.lastManualGeneration.totalTime && performanceMetrics.lastManualGeneration.totalTime > performanceMetrics.lastManualGeneration.generationTime && (
+                      {performanceMetrics.lastManualGeneration.recordCount != null ? (
                         <>
+                          <span className="font-medium">{performanceMetrics.lastManualGeneration.recordCount.toLocaleString()} records</span>
                           <span className="text-emerald-500 mx-1">&middot;</span>
-                          <span>Total to sync: {(performanceMetrics.lastManualGeneration.totalTime / 1000).toFixed(1)}s</span>
+                          <span>Generated in {(performanceMetrics.lastManualGeneration.generationTime / 1000).toFixed(1)}s</span>
+                          {performanceMetrics.lastManualGeneration.totalTime && performanceMetrics.lastManualGeneration.totalTime > performanceMetrics.lastManualGeneration.generationTime && (
+                            <>
+                              <span className="text-emerald-500 mx-1">&middot;</span>
+                              <span>Total to sync: {(performanceMetrics.lastManualGeneration.totalTime / 1000).toFixed(1)}s</span>
+                            </>
+                          )}
                         </>
+                      ) : (
+                        <span className="font-medium">CSV download started</span>
                       )}
                       <span className="text-emerald-500 mx-1">&middot;</span>
-                      <span>Started {moment(performanceMetrics.lastManualGeneration.timestamp).format('MMM D, HH:mm:ss')}</span>
+                      <span>{moment(performanceMetrics.lastManualGeneration.timestamp).format('MMM D, HH:mm:ss')}</span>
                     </div>
                   </div>
                 )}

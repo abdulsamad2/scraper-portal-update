@@ -10,8 +10,21 @@ export async function POST(req: NextRequest) {
   if (blocked) return blocked;
 
   try {
-    const body = await req.json();
-    const { eventUpdateFilterMinutes = 0 } = body;
+    // Accept both JSON (legacy fetch path) and form-encoded (browser-native form
+    // POST used for streaming downloads of large CSVs — see handleGenerateCsv in
+    // app/dashboard/export-csv/page.tsx).
+    const contentType = req.headers.get('content-type') || '';
+    let eventUpdateFilterMinutes = 0;
+    if (contentType.includes('application/json')) {
+      const body = await req.json();
+      eventUpdateFilterMinutes = Number(body.eventUpdateFilterMinutes ?? 0) || 0;
+    } else if (contentType.includes('form-urlencoded') || contentType.includes('multipart/form-data')) {
+      const form = await req.formData();
+      eventUpdateFilterMinutes = Number(form.get('eventUpdateFilterMinutes') ?? 0) || 0;
+    } else {
+      // No body or unknown content type — accept defaults
+      eventUpdateFilterMinutes = 0;
+    }
 
     console.log('Starting streaming CSV generation...');
 
