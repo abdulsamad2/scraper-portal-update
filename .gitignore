@@ -13,6 +13,13 @@
 # testing
 /coverage
 
+# inventory watcher snapshot cache
+.inventory-snapshot.json
+.inventory-snapshot.json.tmp
+
+# generated CSV exports (served from disk, pruned after 1h)
+/csv-exports/
+
 # next.js
 /.next/
 /out/

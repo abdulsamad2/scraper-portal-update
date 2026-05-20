@@ -1,94 +1,99 @@
 import { NextRequest } from 'next/server';
+import fs from 'fs';
+import path from 'path';
 import { generateInventoryCsvStream } from '../../../actions/csvActions';
 import { requireFeatureFlag } from '@/lib/featureFlags';
+import { EXPORT_DIR } from '@/lib/csvExportPaths';
 
-// Allow up to 5 minutes for large CSV generation
+// POST returns immediately; generation runs in the background and writes the
+// CSV to a file on disk. The client then polls /api/csv-status and downloads
+// the finished file from /api/download-csv. This avoids holding a long
+// streaming connection open through nginx (which buffers the response and
+// drops the download mid-stream on large exports).
 export const maxDuration = 300;
+
+// Delete export files (and sidecars) older than 1 hour.
+async function pruneOld() {
+  const cutoff = Date.now() - 60 * 60 * 1000;
+  try {
+    await fs.promises.mkdir(EXPORT_DIR, { recursive: true });
+    for (const f of await fs.promises.readdir(EXPORT_DIR)) {
+      const fp = path.join(EXPORT_DIR, f);
+      const st = await fs.promises.stat(fp).catch(() => null);
+      if (st && st.mtimeMs < cutoff) await fs.promises.unlink(fp).catch(() => {});
+    }
+  } catch { /* ignore */ }
+}
+
+async function generateToFile(fileName: string, minutes: number) {
+  const finalPath = path.join(EXPORT_DIR, fileName);
+  const partPath = `${finalPath}.partial`;
+  const errPath = `${finalPath}.error`;
+  const ws = fs.createWriteStream(partPath);
+  let recordCount = 0;
+  let errorMsg: string | null = null;
+  try {
+    for await (const chunk of generateInventoryCsvStream(minutes)) {
+      if ((chunk.type === 'header' || chunk.type === 'data') && chunk.text) {
+        if (!ws.write(chunk.text)) {
+          await new Promise<void>(res => ws.once('drain', () => res()));
+        }
+      } else if (chunk.type === 'done') {
+        recordCount = chunk.recordCount ?? 0;
+        if (chunk.error) errorMsg = chunk.error;
+      }
+    }
+    await new Promise<void>((res, rej) => ws.end((e?: Error | null) => (e ? rej(e) : res())));
+    if (errorMsg && recordCount === 0) {
+      await fs.promises.unlink(partPath).catch(() => {});
+      await fs.promises.writeFile(errPath, errorMsg);
+    } else {
+      await fs.promises.rename(partPath, finalPath);
+      await fs.promises.writeFile(`${finalPath}.meta`, JSON.stringify({ recordCount })).catch(() => {});
+    }
+  } catch (error) {
+    try { ws.destroy(); } catch { /* ignore */ }
+    await fs.promises.unlink(partPath).catch(() => {});
+    await fs.promises.writeFile(
+      errPath,
+      error instanceof Error ? error.message : 'CSV generation failed',
+    ).catch(() => {});
+  }
+}
 
 export async function POST(req: NextRequest) {
   const blocked = await requireFeatureFlag('csvDownload');
   if (blocked) return blocked;
 
   try {
-    // Accept both JSON (legacy fetch path) and form-encoded (browser-native form
-    // POST used for streaming downloads of large CSVs — see handleGenerateCsv in
-    // app/dashboard/export-csv/page.tsx).
+    // Accept JSON or form-encoded body.
     const contentType = req.headers.get('content-type') || '';
     let eventUpdateFilterMinutes = 0;
     if (contentType.includes('application/json')) {
-      const body = await req.json();
+      const body = await req.json().catch(() => ({}));
       eventUpdateFilterMinutes = Number(body.eventUpdateFilterMinutes ?? 0) || 0;
     } else if (contentType.includes('form-urlencoded') || contentType.includes('multipart/form-data')) {
       const form = await req.formData();
       eventUpdateFilterMinutes = Number(form.get('eventUpdateFilterMinutes') ?? 0) || 0;
-    } else {
-      // No body or unknown content type — accept defaults
-      eventUpdateFilterMinutes = 0;
     }
 
-    console.log('Starting streaming CSV generation...');
+    await fs.promises.mkdir(EXPORT_DIR, { recursive: true });
+    await pruneOld();
 
-    const encoder = new TextEncoder();
-    let hasData = false;
+    const fileName = `inventory-${new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-')}.csv`;
 
-    const stream = new ReadableStream({
-      async start(controller) {
-        let clientClosed = false;
-        const safeEnqueue = (bytes: Uint8Array) => {
-          if (clientClosed) return;
-          try {
-            controller.enqueue(bytes);
-          } catch (e) {
-            if ((e as { code?: string })?.code === 'ERR_INVALID_STATE') {
-              clientClosed = true;
-              console.warn('[generate-csv] client disconnected mid-stream — halting');
-            } else {
-              throw e;
-            }
-          }
-        };
-
-        try {
-          for await (const chunk of generateInventoryCsvStream(eventUpdateFilterMinutes)) {
-            if (clientClosed) break;
-            if (chunk.type === 'header' || chunk.type === 'data') {
-              if (chunk.text) {
-                hasData = true;
-                safeEnqueue(encoder.encode(chunk.text));
-              }
-            } else if (chunk.type === 'done') {
-              if (chunk.error && !hasData) {
-                safeEnqueue(encoder.encode(`ERROR: ${chunk.error}`));
-              }
-            }
-          }
-          if (!clientClosed) {
-            try { controller.close(); } catch { /* already closed */ }
-          }
-        } catch (error) {
-          console.error('Stream error:', error);
-          if (!clientClosed) {
-            try { controller.error(error); } catch { /* already closed */ }
-          }
-        }
-      },
+    // Fire-and-forget. The PM2 Node process stays alive, so this background
+    // promise runs to completion after the response is sent.
+    generateToFile(fileName, eventUpdateFilterMinutes).catch(err => {
+      console.error('[generate-csv] background generation failed:', err);
     });
 
-    // We must set headers before streaming starts — use trailer-like approach
-    // by embedding metadata in custom headers. Record count won't be exact
-    // in headers (set before streaming), so client reads from trailer comment or uses what it gets.
-    const headers = new Headers();
-    headers.set('Content-Type', 'text/csv; charset=utf-8');
-    headers.set('Content-Disposition', `attachment; filename="inventory-${new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-')}.csv"`);
-    headers.set('Transfer-Encoding', 'chunked');
-    headers.set('X-Content-Type-Options', 'nosniff');
-
-    return new Response(stream, { status: 200, headers });
+    return Response.json({ success: true, fileName });
   } catch (error) {
-    console.error('Error in streaming CSV generation API:', error);
-    return new Response(
-      JSON.stringify({ success: false, message: 'Internal server error during CSV generation' }),
-      { status: 500, headers: { 'Content-Type': 'application/json' } }
+    console.error('[generate-csv] failed to start generation:', error);
+    return Response.json(
+      { success: false, message: 'Failed to start CSV generation' },
+      { status: 500 },
     );
   }
 }

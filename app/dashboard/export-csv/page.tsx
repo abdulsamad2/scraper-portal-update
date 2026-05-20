@@ -287,66 +287,96 @@ const ExportCsvPage: React.FC = () => {
   }, []);
 
 
-  const handleGenerateCsv = () => {
-    // Browser-native streaming download to bypass JS memory pressure on large CSVs.
-    // Previously we did fetch() → response.blob() → response.text() → re-blob, which
-    // could hold 4× the CSV size in heap and crash the tab. Hidden form POST to a
-    // hidden iframe lets the browser stream the response straight to disk via the
-    // Content-Disposition header from /api/generate-csv.
+  const handleGenerateCsv = async () => {
+    // Generate the CSV to a file on the server, poll until it's ready, then
+    // download the finished file. This avoids holding a long streaming
+    // connection open (which a reverse proxy buffers and drops mid-stream on
+    // large exports). The download itself is a complete file with a fixed
+    // Content-Length, so it behaves like any normal file download.
     setLoading(true);
-    setCsvStatus(prev => ({ ...prev, status: 'Generating...' }));
+    setCsvStatus(prev => ({ ...prev, status: 'Generating…' }));
     const startTime = Date.now();
 
-    const iframe = document.createElement('iframe');
-    iframe.name = `csv-dl-${Date.now()}`;
-    iframe.style.display = 'none';
-    document.body.appendChild(iframe);
+    try {
+      const startRes = await fetch('/api/generate-csv', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ eventUpdateFilterMinutes: settings.eventUpdateFilterMinutes ?? 0 }),
+      });
+      if (!startRes.ok) {
+        const err = await startRes.json().catch(() => null);
+        throw new Error(err?.message || `Server error: ${startRes.status}`);
+      }
+      const { fileName } = await startRes.json();
+      if (!fileName) throw new Error('Server did not return a file name');
 
-    const form = document.createElement('form');
-    form.method = 'POST';
-    form.action = '/api/generate-csv';
-    form.target = iframe.name;
-    form.style.display = 'none';
+      // Poll for completion — small, fast requests, no long-held connection.
+      const pollDeadline = Date.now() + 20 * 60 * 1000; // 20 min cap
+      let downloadUrl: string | null = null;
+      let recordCount: number | undefined;
+      while (Date.now() < pollDeadline) {
+        await new Promise(res => setTimeout(res, 2000));
+        const elapsed = Math.round((Date.now() - startTime) / 1000);
+        setCsvStatus(prev => ({ ...prev, status: `Generating… (${elapsed}s)` }));
 
-    const input = document.createElement('input');
-    input.type = 'hidden';
-    input.name = 'eventUpdateFilterMinutes';
-    input.value = String(settings.eventUpdateFilterMinutes ?? 0);
-    form.appendChild(input);
+        const statusRes = await fetch(`/api/csv-status?file=${encodeURIComponent(fileName)}`);
+        const data = await statusRes.json();
+        if (data.status === 'done') {
+          downloadUrl = data.url;
+          recordCount = data.recordCount;
+          break;
+        }
+        if (data.status === 'error') {
+          throw new Error(data.message || 'CSV generation failed');
+        }
+        // status === 'running' → keep polling
+      }
 
-    document.body.appendChild(form);
-    form.submit();
+      if (!downloadUrl) {
+        throw new Error('CSV generation timed out. Try the Event Update Filter to limit results.');
+      }
 
-    // Form node is no longer needed once submitted; iframe must stay for the
-    // duration of the stream so the browser can complete the download.
-    document.body.removeChild(form);
-    setTimeout(() => {
-      try { document.body.removeChild(iframe); } catch { /* already gone */ }
-    }, 10 * 60 * 1000); // 10 min cap matches the server-side maxDuration headroom
+      // Trigger the download of the finished file.
+      const a = document.createElement('a');
+      a.href = downloadUrl;
+      a.download = fileName;
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
 
-    // We can't observe the streaming download from JS, so optimistically clear
-    // loading state after a short delay. The actual file appears in the browser's
-    // download manager when the server finishes streaming.
-    setTimeout(() => {
       const totalTime = Date.now() - startTime;
       setCsvStatus(prev => ({
         ...prev,
         lastGenerated: moment().toISOString(),
-        status: `Download started in ${(totalTime / 1000).toFixed(1)}s — check your browser downloads`,
+        status: recordCount != null
+          ? `Generated ${recordCount.toLocaleString()} records in ${(totalTime / 1000).toFixed(1)}s`
+          : `Generated in ${(totalTime / 1000).toFixed(1)}s`,
       }));
-      showMessage('CSV download started — check your browser downloads bar', 'success');
-      setLoading(false);
+      showMessage(
+        recordCount != null
+          ? `CSV ready — ${recordCount.toLocaleString()} records downloaded`
+          : 'CSV ready — downloaded',
+        'success',
+      );
 
       setPerformanceMetrics((prev: PerformanceMetrics | null) => ({
         ...prev,
         lastManualGeneration: {
-          // recordCount omitted — native browser download, JS never sees the rows
+          recordCount,
           generationTime: totalTime,
           totalTime: totalTime,
           timestamp: new Date().toISOString(),
         },
       }));
-    }, 1500);
+    } catch (error) {
+      console.error('CSV Generation Error:', error);
+      setCsvStatus(prev => ({ ...prev, status: 'Generation failed' }));
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error generating CSV';
+      showMessage(`Error generating CSV: ${errorMessage}`, 'error');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleUploadCsv = async () => {
