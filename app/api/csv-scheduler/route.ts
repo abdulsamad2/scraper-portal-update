@@ -148,25 +148,40 @@ async function startScheduler(intervalMinutes: number, uploadToSync: boolean, ev
       });
 
       // Generate CSV with performance tracking
+      const filterLabel = currentSettings.eventUpdateFilterMinutes
+        ? `last ${currentSettings.eventUpdateFilterMinutes}min`
+        : 'all active events';
+      console.log(`[${timestamp}] ⏳ [generate] starting CSV generation (filter: ${filterLabel}, run #${schedulerMetrics.totalRuns})`);
       const generationStart = Date.now();
       const result = await generateInventoryCsv(currentSettings.eventUpdateFilterMinutes || 0);
       generationTime = Date.now() - generationStart;
-      
+
       if (result.success && result.csv && (result.recordCount ?? 0) > 0) {
-        // Skip file saving to prevent storage issues - CSV is uploaded to sync service directly
-        console.log(`[${timestamp}] ✅ CSV generated in memory (${result.recordCount} records, generated in ${generationTime}ms)`);
+        const csvBytes = Buffer.byteLength(result.csv, 'utf8');
+        const csvSizeMb = (csvBytes / 1024 / 1024).toFixed(2);
+        console.log(
+          `[${timestamp}] ✅ [generate] done — ${result.recordCount?.toLocaleString()} records, ` +
+          `${csvSizeMb} MB, took ${(generationTime / 1000).toFixed(1)}s`,
+        );
 
         // Upload to sync service if enabled
         if (currentSettings.uploadToSync) {
+          console.log(
+            `[${timestamp}] ⏳ [upload] sending CSV to sync service ` +
+            `(${result.recordCount?.toLocaleString()} records, ${csvSizeMb} MB)…`,
+          );
           const uploadStart = Date.now();
           const uploadResult = await uploadCsvToSyncService(result.csv);
           uploadTime = Date.now() - uploadStart;
-          
+
           if (uploadResult.success) {
-            console.log(`[${timestamp}] ☁️ CSV uploaded to sync service successfully (${uploadTime}ms)`);
+            console.log(
+              `[${timestamp}] ☁️  [upload] done — sync accepted ${csvSizeMb} MB in ${(uploadTime / 1000).toFixed(1)}s` +
+              (uploadResult.uploadId ? ` (uploadId: ${uploadResult.uploadId})` : ''),
+            );
             schedulerMetrics.successfulRuns++;
           } else {
-            console.error(`[${timestamp}] ❌ Failed to upload CSV:`, uploadResult.message);
+            console.error(`[${timestamp}] ❌ [upload] failed after ${(uploadTime / 1000).toFixed(1)}s:`, uploadResult.message);
             schedulerMetrics.failedRuns++;
             schedulerMetrics.lastError = uploadResult.message;
             
@@ -182,6 +197,7 @@ async function startScheduler(intervalMinutes: number, uploadToSync: boolean, ev
             });
           }
         } else {
+          console.log(`[${timestamp}] ⏭️  [upload] skipped — uploadToSync is disabled in scheduler settings`);
           schedulerMetrics.successfulRuns++;
         }
         
@@ -197,7 +213,7 @@ async function startScheduler(intervalMinutes: number, uploadToSync: boolean, ev
         // Generator said "success" but produced zero rows — treat as a failure
         // and skip the upload. Never push a blank CSV to sync automatically.
         const msg = `Refusing to upload blank CSV from scheduler (0 records generated)`;
-        console.warn(`[${timestamp}] ⚠️  ${msg}`);
+        console.warn(`[${timestamp}] ⚠️  [generate] done in ${(generationTime / 1000).toFixed(1)}s but produced 0 records — ${msg}`);
         schedulerMetrics.failedRuns++;
         schedulerMetrics.lastError = msg;
         await createErrorLog({
@@ -207,7 +223,7 @@ async function startScheduler(intervalMinutes: number, uploadToSync: boolean, ev
           metadata: { operation: 'scheduled_csv_generation', timestamp: new Date() }
         });
       } else {
-        console.error(`[${timestamp}] ❌ CSV generation failed:`, result.message);
+        console.error(`[${timestamp}] ❌ [generate] failed after ${(generationTime / 1000).toFixed(1)}s:`, result.message);
         schedulerMetrics.failedRuns++;
         schedulerMetrics.lastError = result.message;
 
