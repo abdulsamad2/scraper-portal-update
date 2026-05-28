@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import dbConnect from '@/lib/dbConnect';
 import { FeatureFlags } from '../../../models/featureFlagModel.js';
-import { getSessionRole } from '@/lib/auth';
+import { requireAuth } from '@/lib/auth';
 
 export async function GET() {
   try {
@@ -16,11 +16,9 @@ export async function GET() {
 
 export async function PUT(req: NextRequest) {
   try {
-    // Only superadmin can modify feature flags
-    const role = await getSessionRole(req);
-    if (role !== 'superadmin') {
-      return NextResponse.json({ success: false, message: 'Unauthorized' }, { status: 403 });
-    }
+    // Require an authenticated session
+    const unauth = await requireAuth(req);
+    if (unauth) return unauth;
 
     await dbConnect();
 

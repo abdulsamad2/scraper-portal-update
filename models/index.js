@@ -5,3 +5,4 @@ export { SchedulerSettings } from "./schedulerModel.js";
 export { ExclusionRules } from "./exclusionRulesModel.js";
 export { VenueTimezone } from "./venueTimezoneModel.js";
 export { FeatureFlags } from "./featureFlagModel.js";
+export { Proxy } from "./proxyModel.js";

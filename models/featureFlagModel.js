@@ -1,7 +1,6 @@
 import mongoose from "mongoose";
 
 const flagType = { type: String, enum: ["enabled", "hidden", "disabled"], default: "enabled" };
-const flagTypeOff = { type: String, enum: ["enabled", "hidden", "disabled"], default: "disabled" };
 
 const featureFlagSchema = new mongoose.Schema(
   {
@@ -28,7 +27,7 @@ const featureFlagSchema = new mongoose.Schema(
 
     // Other features
     autoDelete: flagType,
-    proxies: flagTypeOff,
+    proxies: flagType,
   },
   {
     timestamps: true,
