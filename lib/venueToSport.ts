@@ -1,6 +1,6 @@
-export type EventType = 'NFL' | 'MLB' | 'NHL' | 'NBA' | 'MLS' | 'Other';
+export type EventType = 'NFL' | 'MLB' | 'NHL' | 'NBA' | 'MLS' | 'Tennis' | 'Other';
 
-export const EVENT_TYPES: EventType[] = ['NFL', 'MLB', 'NHL', 'NBA', 'MLS', 'Other'];
+export const EVENT_TYPES: EventType[] = ['NFL', 'MLB', 'NHL', 'NBA', 'MLS', 'Tennis', 'Other'];
 
 // Venues used by only one league. Substring match on the lowercased venue.
 // Keep this list conservative — shared arenas (MSG, TD Garden, etc.) deliberately
