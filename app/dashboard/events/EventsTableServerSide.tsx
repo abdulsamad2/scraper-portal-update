@@ -33,7 +33,7 @@ interface EventData {
   brokerRows?: number;
   includeStandardSeats?: boolean;
   includeResaleSeats?: boolean;
-  eventType?: 'NFL' | 'MLB' | 'NHL' | 'NBA' | 'MLS' | 'Other' | null;
+  eventType?: 'NFL' | 'MLB' | 'NHL' | 'NBA' | 'MLS' | 'Tennis' | 'Other' | null;
 }
 
 const EVENT_TYPE_BADGE: Record<string, { cls: string; dot: string }> = {
@@ -42,6 +42,7 @@ const EVENT_TYPE_BADGE: Record<string, { cls: string; dot: string }> = {
   NBA: { cls: 'bg-orange-100 text-orange-800 border-orange-300/80', dot: 'bg-orange-500'  },
   NHL: { cls: 'bg-sky-100   text-sky-800   border-sky-300/80',      dot: 'bg-sky-500'     },
   MLS: { cls: 'bg-emerald-100 text-emerald-800 border-emerald-300/80', dot: 'bg-emerald-500' },
+  Tennis: { cls: 'bg-lime-100 text-lime-800 border-lime-300/80', dot: 'bg-lime-500' },
   Other: { cls: 'bg-violet-100 text-violet-800 border-violet-300/80', dot: 'bg-violet-500' },
 };
 
