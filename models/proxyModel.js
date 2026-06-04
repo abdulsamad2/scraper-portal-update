@@ -2,6 +2,11 @@ import mongoose from "mongoose";
 
 const proxySchema = new mongoose.Schema(
   {
+    // Stable per-proxy id. The shared scrapers' `proxies` collection carries a
+    // unique index on `proxy_id`; without a value every portal insert defaults
+    // to proxy_id:null and the 2nd+ collide (E11000). We set it to the proxy
+    // identity so it is unique and idempotent across re-adds.
+    proxy_id: { type: String },
     ip: { type: String, required: true },
     port: { type: String, required: true },
     username: { type: String, required: true },

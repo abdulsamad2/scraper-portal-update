@@ -122,29 +122,29 @@ export async function bulkAddProxies(rawText: string, clientId = 'default') {
       skipped++;
       continue;
     }
+    // Full identity. Doubles as proxy_id so the shared collection's unique
+    // proxy_id index gets a non-null, stable value instead of colliding on null.
     const key = `${ip}:${port}:${username}`;
+    const op = {
+      updateOne: {
+        // Match on the full identity so gateway proxies that share an ip:port
+        // across rotating sessions are each stored separately instead of
+        // overwriting one another / colliding on the unique index.
+        filter: { ip, port, username },
+        update: { $set: { proxy_id: key, ip, port, username, password, clientId, enabled: true } },
+        upsert: true,
+      },
+    };
+    // Collapse duplicate identities within a single paste. Two upserts with the
+    // same filter in one unordered bulkWrite would race into a duplicate-key
+    // error ("can't be added"); last line wins instead.
     const existingIdx = seen.get(key);
     if (existingIdx !== undefined) {
-      ops[existingIdx] = {
-        updateOne: {
-          filter: { ip, port, username },
-          update: { $set: { ip, port, username, password, clientId, enabled: true } },
-          upsert: true,
-        },
-      };
+      ops[existingIdx] = op;
       continue;
     }
     seen.set(key, ops.length);
-    ops.push({
-      updateOne: {
-        // Match on the full identity (ip:port:username) so gateway proxies that
-        // share an ip:port across rotating sessions are each stored separately
-        // instead of overwriting one another / colliding on the unique index.
-        filter: { ip, port, username },
-        update: { $set: { ip, port, username, password, clientId, enabled: true } },
-        upsert: true,
-      },
-    });
+    ops.push(op);
   }
 
   if (!ops.length) {
