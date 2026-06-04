@@ -16,7 +16,10 @@ const proxySchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-proxySchema.index({ ip: 1, port: 1 }, { unique: true });
+// A proxy's identity is ip:port:username — many providers share one gateway
+// ip:port across rotating sessions distinguished only by the username, so the
+// username must be part of the unique key or those rows collapse/collide.
+proxySchema.index({ ip: 1, port: 1, username: 1 }, { unique: true });
 
 export const Proxy = mongoose.models.Proxy || mongoose.model("Proxy", proxySchema);
 export default Proxy;

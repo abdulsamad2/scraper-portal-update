@@ -111,6 +111,10 @@ export async function bulkAddProxies(rawText: string, clientId = 'default') {
 
   const ops: Parameters<typeof Proxy.bulkWrite>[0] = [];
   let skipped = 0;
+  // Collapse duplicate identities within a single paste. Two upserts with the
+  // same {ip,port,username} filter in one unordered bulkWrite would race and
+  // throw a duplicate-key error ("can't be added"); last line wins instead.
+  const seen = new Map<string, number>();
 
   for (const line of lines) {
     const [ip, port, username, password] = line.split(':');
@@ -118,9 +122,25 @@ export async function bulkAddProxies(rawText: string, clientId = 'default') {
       skipped++;
       continue;
     }
+    const key = `${ip}:${port}:${username}`;
+    const existingIdx = seen.get(key);
+    if (existingIdx !== undefined) {
+      ops[existingIdx] = {
+        updateOne: {
+          filter: { ip, port, username },
+          update: { $set: { ip, port, username, password, clientId, enabled: true } },
+          upsert: true,
+        },
+      };
+      continue;
+    }
+    seen.set(key, ops.length);
     ops.push({
       updateOne: {
-        filter: { ip, port },
+        // Match on the full identity (ip:port:username) so gateway proxies that
+        // share an ip:port across rotating sessions are each stored separately
+        // instead of overwriting one another / colliding on the unique index.
+        filter: { ip, port, username },
         update: { $set: { ip, port, username, password, clientId, enabled: true } },
         upsert: true,
       },
