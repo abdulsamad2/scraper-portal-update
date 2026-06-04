@@ -26,6 +26,79 @@ export async function listProxies(clientId?: string): Promise<ProxyRecord[]> {
   return JSON.parse(JSON.stringify(rows));
 }
 
+export type ProxyListQuery = {
+  clientId?: string;
+  search?: string;
+  enabled?: 'all' | 'enabled' | 'disabled';
+  sortBy?: 'createdAt' | 'lastUsedAt' | 'failureCount' | 'ip' | 'clientId';
+  sortDir?: 'asc' | 'desc';
+  page?: number;
+  limit?: number;
+};
+
+export type ProxyListResult = {
+  rows: ProxyRecord[];
+  total: number;
+  page: number;
+  limit: number;
+  stats: { total: number; enabled: number; disabled: number; clients: number };
+};
+
+export async function listProxiesPaged(q: ProxyListQuery = {}): Promise<ProxyListResult> {
+  await dbConnect();
+  const page = Math.max(1, q.page ?? 1);
+  const limit = Math.min(500, Math.max(5, q.limit ?? 50));
+  const skip = (page - 1) * limit;
+
+  const filter: Record<string, unknown> = {};
+  if (q.clientId) filter.clientId = q.clientId;
+  if (q.enabled === 'enabled') filter.enabled = true;
+  if (q.enabled === 'disabled') filter.enabled = false;
+  if (q.search?.trim()) {
+    const safe = q.search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const rx = new RegExp(safe, 'i');
+    filter.$or = [
+      { ip: rx },
+      { port: rx },
+      { username: rx },
+      { clientId: rx },
+      { notes: rx },
+    ];
+  }
+
+  const sortBy = q.sortBy ?? 'createdAt';
+  const sortDir = q.sortDir === 'asc' ? 1 : -1;
+
+  const [rows, total, statsAgg] = await Promise.all([
+    Proxy.find(filter).sort({ [sortBy]: sortDir }).skip(skip).limit(limit).lean(),
+    Proxy.countDocuments(filter),
+    Proxy.aggregate([
+      { $match: q.clientId ? { clientId: q.clientId } : {} },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: 1 },
+          enabled: { $sum: { $cond: ['$enabled', 1, 0] } },
+          clients: { $addToSet: '$clientId' },
+        },
+      },
+    ]),
+  ]);
+
+  const s = statsAgg[0];
+  const stats = s
+    ? { total: s.total, enabled: s.enabled, disabled: s.total - s.enabled, clients: s.clients.length }
+    : { total: 0, enabled: 0, disabled: 0, clients: 0 };
+
+  return {
+    rows: JSON.parse(JSON.stringify(rows)),
+    total,
+    page,
+    limit,
+    stats,
+  };
+}
+
 export async function listClientIds(): Promise<string[]> {
   await dbConnect();
   const ids = await Proxy.distinct('clientId');

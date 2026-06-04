@@ -33,7 +33,7 @@ interface EventData {
   brokerRows?: number;
   includeStandardSeats?: boolean;
   includeResaleSeats?: boolean;
-  eventType?: 'NFL' | 'MLB' | 'NHL' | 'NBA' | 'MLS' | 'Tennis' | 'Other' | null;
+  eventType?: 'NFL' | 'MLB' | 'NHL' | 'NBA' | 'WNBA' | 'MLS' | 'Tennis' | 'WWE' | 'Monster Jam' | 'Disney' | 'Other' | null;
 }
 
 const EVENT_TYPE_BADGE: Record<string, { cls: string; dot: string }> = {
@@ -41,8 +41,12 @@ const EVENT_TYPE_BADGE: Record<string, { cls: string; dot: string }> = {
   MLB: { cls: 'bg-blue-100  text-blue-800  border-blue-300/80',     dot: 'bg-blue-500'    },
   NBA: { cls: 'bg-orange-100 text-orange-800 border-orange-300/80', dot: 'bg-orange-500'  },
   NHL: { cls: 'bg-sky-100   text-sky-800   border-sky-300/80',      dot: 'bg-sky-500'     },
+  WNBA: { cls: 'bg-purple-100 text-purple-800 border-purple-300/80', dot: 'bg-purple-500' },
   MLS: { cls: 'bg-emerald-100 text-emerald-800 border-emerald-300/80', dot: 'bg-emerald-500' },
   Tennis: { cls: 'bg-lime-100 text-lime-800 border-lime-300/80', dot: 'bg-lime-500' },
+  WWE: { cls: 'bg-red-100 text-red-800 border-red-300/80', dot: 'bg-red-500' },
+  'Monster Jam': { cls: 'bg-yellow-100 text-yellow-800 border-yellow-300/80', dot: 'bg-yellow-500' },
+  Disney: { cls: 'bg-pink-100 text-pink-800 border-pink-300/80', dot: 'bg-pink-500' },
   Other: { cls: 'bg-violet-100 text-violet-800 border-violet-300/80', dot: 'bg-violet-500' },
 };
 

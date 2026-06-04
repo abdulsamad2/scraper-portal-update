@@ -115,7 +115,7 @@ const errorMessages = {
   standardMarkupAdjustment: "",
   resaleMarkupAdjustment: "",
   brokerMarkupAdjustment: "",
-  eventType: "Pick NFL, MLB, NHL, NBA, MLS, Tennis, or Other",
+  eventType: "Pick NFL, MLB, NHL, NBA, WNBA, MLS, Tennis, WWE, Monster Jam, Disney, or Other",
 };
 
 export function EventFormProvider({ children, initialData }: { 

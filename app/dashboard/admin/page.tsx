@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Shield, Eye, EyeOff, Ban, Check, AlertTriangle } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { Shield, Eye, EyeOff, Ban, Lock, Check, AlertTriangle } from 'lucide-react';
 
 type FlagState = 'enabled' | 'hidden' | 'disabled';
 
@@ -103,18 +104,40 @@ const STATE_CONFIG: Record<FlagState, { label: string; color: string; bg: string
 };
 
 export default function AdminPage() {
+  const [authenticated, setAuthenticated] = useState(false);
+  const [roleChecked, setRoleChecked] = useState(false);
+  const [password, setPassword] = useState('');
+  const [authError, setAuthError] = useState('');
   const [flags, setFlags] = useState<FeatureFlags>(DEFAULT_FLAGS);
   const [savedFlags, setSavedFlags] = useState<FeatureFlags>(DEFAULT_FLAGS);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
+  const router = useRouter();
   const hasChanges = JSON.stringify(flags) !== JSON.stringify(savedFlags);
 
+  // async-parallel: fetch auth + flags in parallel instead of sequentially
   useEffect(() => {
-    fetch('/api/feature-flags')
-      .then(res => res.json())
-      .then(flagsData => {
+    async function init() {
+      try {
+        const [authRes, flagsRes] = await Promise.all([
+          fetch('/api/auth/me'),
+          fetch('/api/feature-flags'),
+        ]);
+        const [authData, flagsData] = await Promise.all([
+          authRes.json(),
+          flagsRes.json(),
+        ]);
+
+        // Auth check
+        if (authData.role !== 'superadmin') {
+          router.replace('/dashboard');
+          return;
+        }
+        setRoleChecked(true);
+
+        // Flags
         if (flagsData.success && flagsData.flags) {
           const merged = { ...DEFAULT_FLAGS };
           for (const key of Object.keys(DEFAULT_FLAGS) as (keyof FeatureFlags)[]) {
@@ -123,10 +146,24 @@ export default function AdminPage() {
           setFlags(merged);
           setSavedFlags(merged);
         }
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, []);
+      } catch {
+        router.replace('/dashboard');
+      } finally {
+        setLoading(false);
+      }
+    }
+    init();
+  }, [router]);
+
+  const handleAuth = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (password.length >= 4) {
+      setAuthenticated(true);
+      setAuthError('');
+    } else {
+      setAuthError('Password too short');
+    }
+  };
 
   const handleSave = async () => {
     setSaving(true);
@@ -164,6 +201,52 @@ export default function AdminPage() {
   const enabledCount = Object.values(flags).filter(v => v === 'enabled').length;
   const hiddenCount = Object.values(flags).filter(v => v === 'hidden').length;
   const disabledCount = Object.values(flags).filter(v => v === 'disabled').length;
+
+  if (!roleChecked) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-red-600"></div>
+      </div>
+    );
+  }
+
+  if (!authenticated) {
+    return (
+      <div className="max-w-md mx-auto mt-20">
+        <div className="bg-white rounded-2xl shadow-lg border border-slate-200 p-8">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-red-500 to-rose-600 flex items-center justify-center shadow-md">
+              <Shield className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <h1 className="text-lg font-bold text-slate-800">Super Admin</h1>
+              <p className="text-xs text-slate-500">Enter admin password to continue</p>
+            </div>
+          </div>
+          <form onSubmit={handleAuth}>
+            <div className="relative">
+              <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => { setPassword(e.target.value); setAuthError(''); }}
+                placeholder="Admin password"
+                className="w-full pl-10 pr-4 py-3 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-transparent"
+                autoFocus
+              />
+            </div>
+            {authError && <p className="text-xs text-red-500 mt-2">{authError}</p>}
+            <button
+              type="submit"
+              className="w-full mt-4 py-3 bg-gradient-to-r from-red-600 to-rose-600 text-white font-medium rounded-xl hover:from-red-700 hover:to-rose-700 transition-all shadow-md"
+            >
+              Unlock
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
 
   if (loading) {
     return (

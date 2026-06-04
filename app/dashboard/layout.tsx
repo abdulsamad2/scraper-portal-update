@@ -55,6 +55,7 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [flags, setFlags] = useState<FeatureFlags>(DEFAULT_FLAGS);
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
 
   // Auto-collapse on small desktop widths (< xl). User manual toggle persists in localStorage and wins.
   useEffect(() => {
@@ -92,6 +93,13 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
           }
           setFlags(merged);
         }
+      })
+      .catch(() => {});
+
+    fetch('/api/auth/me')
+      .then(res => res.json())
+      .then(data => {
+        if (data.role === 'superadmin') setIsSuperAdmin(true);
       })
       .catch(() => {});
   }, []);
@@ -260,18 +268,20 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
 
         {/* Footer */}
         <div className={`${isCollapsed ? 'lg:px-2' : 'px-3'} py-4 border-t border-slate-100 shrink-0`}>
-          <Link
-            href="/dashboard/admin"
-            title={isCollapsed ? 'Admin' : undefined}
-            className={`flex items-center gap-3 ${isCollapsed ? 'lg:justify-center lg:px-2' : 'px-3'} py-2.5 rounded-xl w-full transition-colors mb-1 ${
-              pathname === '/dashboard/admin'
-                ? 'bg-gradient-to-r from-red-600 to-rose-600 text-white shadow-md'
-                : 'text-slate-400 hover:text-red-600 hover:bg-red-50'
-            }`}
-          >
-            <Shield className="w-5 h-5 shrink-0" />
-            <span className={`font-medium text-sm ${isCollapsed ? 'lg:hidden' : ''}`}>Admin</span>
-          </Link>
+          {isSuperAdmin && (
+            <Link
+              href="/dashboard/admin"
+              title={isCollapsed ? 'Admin' : undefined}
+              className={`flex items-center gap-3 ${isCollapsed ? 'lg:justify-center lg:px-2' : 'px-3'} py-2.5 rounded-xl w-full transition-colors mb-1 ${
+                pathname === '/dashboard/admin'
+                  ? 'bg-gradient-to-r from-red-600 to-rose-600 text-white shadow-md'
+                  : 'text-slate-400 hover:text-red-600 hover:bg-red-50'
+              }`}
+            >
+              <Shield className="w-5 h-5 shrink-0" />
+              <span className={`font-medium text-sm ${isCollapsed ? 'lg:hidden' : ''}`}>Admin</span>
+            </Link>
+          )}
           <button
             onClick={handleLogout}
             title={isCollapsed ? 'Logout' : undefined}
