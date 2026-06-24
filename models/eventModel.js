@@ -39,7 +39,7 @@ const eventSchema = new mongoose.Schema(
     },
     eventType: {
       type: String,
-      enum: ["NFL", "MLB", "NHL", "NBA", "WNBA", "MLS", "Tennis", "WWE", "Monster Jam", "Disney", "Other", null],
+      enum: ["NFL", "MLB", "NHL", "NBA", "WNBA", "MLS", "College Football", "Tennis", "WWE", "Monster Jam", "Disney", "Other", null],
       default: null,
     },
     inHandDate: {
