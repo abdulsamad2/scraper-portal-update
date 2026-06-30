@@ -122,15 +122,18 @@ export async function bulkAddProxies(rawText: string, clientId = 'default') {
       skipped++;
       continue;
     }
-    // Full identity. Doubles as proxy_id so the shared collection's unique
+    // Full identity INCLUDES the password — gateway providers share one
+    // ip:port:username across many rotating sessions that differ only by a
+    // token in the password, so password must be in the key or they collapse
+    // onto a single row. Doubles as proxy_id so the shared collection's unique
     // proxy_id index gets a non-null, stable value instead of colliding on null.
-    const key = `${ip}:${port}:${username}`;
+    const key = `${ip}:${port}:${username}:${password}`;
     const op = {
       updateOne: {
-        // Match on the full identity so gateway proxies that share an ip:port
-        // across rotating sessions are each stored separately instead of
-        // overwriting one another / colliding on the unique index.
-        filter: { ip, port, username },
+        // Match on the full identity (incl. password) so each rotating session
+        // is stored separately instead of overwriting one another / colliding
+        // on the unique index.
+        filter: { ip, port, username, password },
         update: { $set: { proxy_id: key, ip, port, username, password, clientId, enabled: true } },
         upsert: true,
       },

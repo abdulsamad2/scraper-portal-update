@@ -21,10 +21,11 @@ const proxySchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// A proxy's identity is ip:port:username — many providers share one gateway
-// ip:port across rotating sessions distinguished only by the username, so the
-// username must be part of the unique key or those rows collapse/collide.
-proxySchema.index({ ip: 1, port: 1, username: 1 }, { unique: true });
+// A proxy's identity is ip:port:username:password. Gateway providers (e.g. IPRoyal)
+// share ONE ip:port:username across hundreds of rotating sticky sessions that differ
+// only by a token embedded in the password (…_session-XXXX_…). The password must
+// therefore be part of the unique key, or every session collapses onto a single row.
+proxySchema.index({ ip: 1, port: 1, username: 1, password: 1 }, { unique: true });
 
 export const Proxy = mongoose.models.Proxy || mongoose.model("Proxy", proxySchema);
 export default Proxy;
