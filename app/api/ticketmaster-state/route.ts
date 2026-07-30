@@ -19,10 +19,12 @@ import { requireApiKey } from '@/lib/apiKey';
  *                   (storeId e.g. "firefox-default").
  *   mintdatas       reCAPTCHA/mint tokens captured per store.
  *
- * Primary cookie source is the freshest HEALTHY seed jar (source:"seed_jars").
- * If none is healthy we fall back to the latest per-name cookie snapshots
- * (source:"snapshots"). `tmpt` is always resolved from the returned cookie set,
- * pulling the newest snapshot value if the jar itself lacks one.
+ * Primary cookie source is the freshest USABLE seed jar (source:"seed_jars") —
+ * status:"healthy" AND unexpired AND under its per-token call budget (useCount),
+ * matching what the scrapers themselves will accept. If none qualifies we fall back
+ * to the latest per-name cookie snapshots (source:"snapshots"). `tmpt` is always
+ * resolved from the returned cookie set, pulling the newest snapshot value if the
+ * jar itself lacks one.
  *
  * The extension sends storeId=default, but snapshots/mint are stored under a
  * concrete id like "firefox-default"; when the requested id has no data we
@@ -99,9 +101,18 @@ export async function GET(req: NextRequest) {
       if (latest?.storeId) storeId = latest.storeId;
     }
 
-    // Primary source: freshest healthy seed jar.
+    // Primary source: freshest USABLE seed jar. `status:"healthy"` alone is not enough —
+    // nothing ever flips status on expiry, and the scrapers retire a token by call budget
+    // (useCount) without always winning the race to mark it dead. Both conditions are
+    // enforced here exactly as the scrapers enforce them in their own read query, so the
+    // extension can never be handed an expired or budget-spent jar.
+    const jarBudget = parseInt(process.env.JAR_CALL_BUDGET || '', 10) || 400;
     const jar = await seedJars.findOne(
-      { status: 'healthy' },
+      {
+        status: 'healthy',
+        expiresAt: { $gt: new Date() },
+        $or: [{ useCount: { $exists: false } }, { useCount: { $lt: jarBudget } }],
+      },
       { sort: { mintedAt: -1 } }
     );
 
