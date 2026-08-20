@@ -6,6 +6,7 @@ import { EventFormFields } from "@/components/ui/FormFields";
 import { EventFormMode, FormStatusMessages } from "@/components/ui/FormModes";
 import { useNotifications } from "@/components/providers/NotificationProvider";
 import { detectSportFromVenue } from "@/lib/venueToSport";
+import { isEvenueUrl } from "@/lib/evenue";
 
 
 // Explicit mode variants instead of boolean isEdit prop
@@ -39,6 +40,10 @@ const EventFormContent = ({ mode, onCancel, onSuccess, initialData }) => {
   const form = useEventForm();
   const notifications = useNotifications();
 
+  // eVenue events are registered by URL alone, so most of this form does not
+  // apply to them — see EVENUE_RESOLVED_FIELDS in EventFormProvider.
+  const isEvenue = isEvenueUrl(String(form.data.URL.value || ""));
+
   // Helper function to extract Event ID from URL
   const extractEventIdFromUrl = (url) => {
     try {
@@ -62,6 +67,11 @@ const EventFormContent = ({ mode, onCancel, onSuccess, initialData }) => {
 
   // Helper function to extract event data from Ticketmaster URL
   const extractEventDataFromUrl = (url) => {
+    // Runs on every keystroke, so most calls see a half-typed value like
+    // "htt". new URL() throws on those, and logging it made the dev overlay
+    // pop an "Invalid URL" panel per character — bail before constructing one.
+    if (!/^https?:\/\/\S+$/i.test(String(url || "").trim())) return null;
+
     try {
       const parsed = new URL(url);
       if (
@@ -170,8 +180,8 @@ const EventFormContent = ({ mode, onCancel, onSuccess, initialData }) => {
         };
       }
       return null;
-    } catch (error) {
-      console.error('Error parsing URL:', error);
+    } catch {
+      // Not a URL we can read anything out of — the user is still typing.
       return null;
     }
   };
@@ -182,6 +192,15 @@ const EventFormContent = ({ mode, onCancel, onSuccess, initialData }) => {
 
     // Special handling for URL changes - try to extract all event data
     if (name === "URL" && form.actions.validateField) {
+      // eVenue links carry none of this in the URL — the path is
+      // /event/<seasonCd>/<itemCd>, so the Ticketmaster parsing below would
+      // read a season code as an event name. Store the URL and let the eVenue
+      // scraper resolve the name, date and venue from the live site.
+      if (isEvenueUrl(value)) {
+        form.actions.updateField('URL', value);
+        return;
+      }
+
       const extractedData = extractEventDataFromUrl(value);
       if (extractedData) {
         // Update multiple fields at once
@@ -340,6 +359,17 @@ const EventFormContent = ({ mode, onCancel, onSuccess, initialData }) => {
                 onBlur={handleBlur}
                 disabled={form.meta.isSubmitting}
               />
+
+              {/* An eVenue link needs nothing else — say so, otherwise the
+                  blank fields below read as something the operator forgot. */}
+              {isEvenue && (
+                <div className="mt-2 rounded-md bg-blue-50 border border-blue-200 px-3 py-2 text-sm text-blue-800">
+                  <span className="font-medium">eVenue event.</span>{" "}
+                  Only the markup below is needed — the event name, date, venue and
+                  seating details are read from the box-office site on the first
+                  scrape, usually within a couple of minutes.
+                </div>
+              )}
             </div>
 
             {/* Event ID Field */}

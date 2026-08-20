@@ -10,6 +10,7 @@ import EventsTableControls from './EventsTableControls';
 import EventTableActions from './EventTableActions';
 import PaginationControls from './PaginationControls';
 import TimeAgo from './TimeAgo';
+import { isEvenueEvent } from '@/lib/evenue';
 
 interface EventData {
   _id: string;
@@ -34,6 +35,49 @@ interface EventData {
   includeStandardSeats?: boolean;
   includeResaleSeats?: boolean;
   eventType?: 'NFL' | 'MLB' | 'NHL' | 'NBA' | 'WNBA' | 'MLS' | 'College Football' | 'Tennis' | 'WWE' | 'Monster Jam' | 'Disney' | 'Other' | null;
+  // Set on eVenue rows; absent on Ticketmaster ones, which predate it.
+  Source?: string;
+  URL?: string;
+}
+
+/**
+ * Marks which scraper owns the row.
+ *
+ * The table lists both rosters together, so without this an operator cannot
+ * tell why an eVenue row has no event type and a single markup — it just looks
+ * like a Ticketmaster event with fields missing.
+ */
+function SourceBadge({ event }: { event: EventData }) {
+  if (!isEvenueEvent(event)) return null;
+  return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border shadow-[inset_0_0_0_1px_rgba(255,255,255,0.5)] bg-violet-100 text-violet-800 border-violet-300/80 shrink-0">
+      <span className="w-1.5 h-1.5 rounded-full bg-violet-500" aria-hidden="true" />
+      eVenue
+    </span>
+  );
+}
+
+/** Single combined count, for rows with no standard/resale/broker split. */
+function TotalBadge({ value }: { value?: number }) {
+  return (
+    <span className="inline-flex items-center text-[10px] font-semibold px-1 py-0 rounded border tabular-nums border-violet-200 bg-violet-50 text-violet-700">
+      {(value ?? 0).toLocaleString()}
+    </span>
+  );
+}
+
+/**
+ * An eVenue row is registered by URL alone — the scraper resolves the name,
+ * date and venue on its first pass, usually within a couple of minutes. Until
+ * then Event_Name is genuinely absent, and rendering it bare gives an empty
+ * link that reads as a broken row rather than a pending one.
+ */
+function EventTitle({ event }: { event: EventData }) {
+  if (event.Event_Name) return <>{event.Event_Name}</>;
+  if (isEvenueEvent(event)) {
+    return <span className="italic text-gray-500 font-normal">Awaiting first scrape…</span>;
+  }
+  return <span className="text-gray-400">—</span>;
 }
 
 const EVENT_TYPE_BADGE: Record<string, { cls: string; dot: string }> = {
@@ -325,11 +369,12 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                     ? Date.now() - new Date(lastUpdated).getTime() < 4 * 60 * 1000
                     : false;
                   const isActive = !event.Skip_Scraping;
+                  const isEvenue = isEvenueEvent(event);
                   const stdIncluded = event.includeStandardSeats !== false;
                   const resIncluded = event.includeResaleSeats !== false;
 
                   return (
-                    <tr 
+                    <tr
                       key={event._id}
                       className={`hover:bg-gray-50 transition-[background-color] duration-150 ${
                         isActive && fresh ? 'bg-blue-50 border-l-2 border-blue-400' : 
@@ -348,9 +393,10 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                               href={`/dashboard/events/${event._id}`}
                               className="text-gray-900 hover:text-blue-600 font-semibold text-sm transition-[color] duration-150 truncate"
                             >
-                              {event.Event_Name}
+                              <EventTitle event={event} />
                             </Link>
-                            <EventTypeBadge type={event.eventType} />
+                            <SourceBadge event={event} />
+                            {!isEvenue && <EventTypeBadge type={event.eventType} />}
                           </div>
                           <div className="flex items-center gap-2 text-xs text-gray-500 mt-0.5 min-w-0">
                             {event.Venue && (
@@ -374,6 +420,12 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                       </td>
                       
                       <td className="px-2 py-1.5 whitespace-nowrap text-right">
+                        {/* eVenue is primary box-office inventory sold at a price
+                            level — there is no resale/broker split to show, so a
+                            single total is the honest reading. */}
+                        {isEvenue ? (
+                          <TotalBadge value={event.standardQty} />
+                        ) : (
                         <div className="inline-flex items-center gap-1 whitespace-nowrap">
                           <span className={`inline-flex items-center text-[10px] font-semibold px-1 py-0 rounded border tabular-nums ${
                             stdIncluded ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-slate-200 bg-slate-50 text-slate-400 line-through opacity-50'
@@ -385,8 +437,12 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                             resIncluded ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-slate-200 bg-slate-50 text-slate-400 line-through opacity-50'
                           }`}><span className="mr-0.5 opacity-60 text-[9px]">B</span>{(event.brokerQty ?? 0).toLocaleString()}</span>
                         </div>
+                        )}
                       </td>
                       <td className="px-2 py-1.5 whitespace-nowrap text-right">
+                        {isEvenue ? (
+                          <TotalBadge value={event.standardRows} />
+                        ) : (
                         <div className="inline-flex items-center gap-1 whitespace-nowrap">
                           <span className={`inline-flex items-center text-[10px] font-semibold px-1 py-0 rounded border tabular-nums ${
                             stdIncluded ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-slate-200 bg-slate-50 text-slate-400 line-through opacity-50'
@@ -398,6 +454,7 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                             resIncluded ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-slate-200 bg-slate-50 text-slate-400 line-through opacity-50'
                           }`}><span className="mr-0.5 opacity-60 text-[9px]">B</span>{(event.brokerRows ?? 0).toLocaleString()}</span>
                         </div>
+                        )}
                       </td>
                       
                       <td className="px-2 py-1.5 whitespace-nowrap text-right">
@@ -412,8 +469,11 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                           }`}>
                             {(event.priceIncreasePercentage || 0) > 0 ? '+' : ''}{event.priceIncreasePercentage || 0}%
                           </span>
-                          {/* S / R adjustments */}
-                          {(() => {
+                          {/* S / R adjustments — Ticketmaster only. eVenue sells at
+                              one price level, so per-channel adjustments do not
+                              exist there and rendering them as 0% would imply a
+                              knob the operator can turn. */}
+                          {!isEvenue && (() => {
                             const stdAdj = event.standardMarkupAdjustment ?? 0;
                             const resAdj = event.resaleMarkupAdjustment ?? 0;
                             const brkAdj = event.brokerMarkupAdjustment ?? 0;
@@ -457,7 +517,7 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                       <td className="px-2 py-1.5 whitespace-nowrap text-right">
                         <EventTableActions
                           eventId={event._id}
-                          eventName={event.Event_Name}
+                          eventName={event.Event_Name || "this eVenue event"}
                           isScrapingActive={isActive}
                         />
                       </td>
@@ -476,6 +536,7 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                 ? Date.now() - new Date(lastUpdated).getTime() < 4 * 60 * 1000
                 : false;
               const isActive = !event.Skip_Scraping;
+              const isEvenue = isEvenueEvent(event);
               const stdIncluded = event.includeStandardSeats !== false;
               const resIncluded = event.includeResaleSeats !== false;
 
@@ -495,16 +556,17 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                           href={`/dashboard/events/${event._id}`}
                           className="text-gray-900 hover:text-blue-600 font-semibold text-base transition-colors duration-200 block truncate"
                         >
-                          {event.Event_Name}
+                          <EventTitle event={event} />
                         </Link>
                         <div className="flex items-center gap-2 mt-1">
                           <StatusBadge isActive={isActive} />
-                          <EventTypeBadge type={event.eventType} />
+                          <SourceBadge event={event} />
+                          {!isEvenue && <EventTypeBadge type={event.eventType} />}
                         </div>
                       </div>
                       <EventTableActions
                         eventId={event._id}
-                        eventName={event.Event_Name}
+                        eventName={event.Event_Name || "this eVenue event"}
                         isScrapingActive={isActive}
                         compact
                       />
@@ -532,6 +594,7 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                       <div className="space-y-2 text-right">
                         <div className="flex items-center justify-end gap-1">
                           <Users size={14} className="text-gray-400" />
+                          {isEvenue ? <TotalBadge value={event.standardQty} /> : <>
                           <span className={`inline-flex items-center text-[11px] font-semibold px-1.5 py-0.5 rounded border tabular-nums ${
                             stdIncluded ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-slate-200 bg-slate-50 text-slate-400 line-through opacity-50'
                           }`}>
@@ -547,9 +610,11 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                           }`} title="Broker subset (incl. in R)">
                             <span className="mr-0.5 opacity-50 text-[9px]">B</span>{(event.brokerQty ?? 0).toLocaleString()}
                           </span>
+                          </>}
                         </div>
                         <div className="flex items-center justify-end gap-1">
                           <span className="text-[10px] text-gray-400 mr-0.5">rows</span>
+                          {isEvenue ? <TotalBadge value={event.standardRows} /> : <>
                           <span className={`inline-flex items-center text-[11px] font-semibold px-1.5 py-0.5 rounded border tabular-nums ${
                             stdIncluded ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-slate-200 bg-slate-50 text-slate-400 line-through opacity-50'
                           }`}>
@@ -565,8 +630,9 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                           }`} title="Broker subset (incl. in R)">
                             <span className="mr-0.5 opacity-50 text-[9px]">B</span>{(event.brokerRows ?? 0).toLocaleString()}
                           </span>
+                          </>}
                         </div>
-                        
+
                         <div className="flex flex-col items-end gap-1.5">
                           <div className="flex items-center justify-end gap-2">
                             <TrendingUp size={14} className="text-gray-400" />
@@ -580,7 +646,7 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                               {(event.priceIncreasePercentage || 0) > 0 ? '+' : ''}{event.priceIncreasePercentage || 0}%
                             </span>
                           </div>
-                          {(() => {
+                          {!isEvenue && (() => {
                             const stdAdj = event.standardMarkupAdjustment ?? 0;
                             const resAdj = event.resaleMarkupAdjustment ?? 0;
                             const brkAdj = event.brokerMarkupAdjustment ?? 0;

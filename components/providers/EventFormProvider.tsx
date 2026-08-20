@@ -1,6 +1,7 @@
 'use client';
 import React, { createContext, useContext, useState, ReactNode } from 'react';
 import { EVENT_TYPES, isValidEventType, type EventType } from '@/lib/venueToSport';
+import { isEvenueUrl, isTicketmasterUrl, isTicketsComUrl } from '@/lib/evenue';
 
 // Define explicit form states instead of multiple boolean flags
 type FormState = 'idle' | 'submitting' | 'success' | 'error';
@@ -74,14 +75,7 @@ const validationRules: {
   brokerMarkupAdjustment: (value: number) => boolean;
   eventType: (value: string) => boolean;
 } = {
-  URL: (value: string) => {
-    try {
-      const parsed = new URL(value);
-      return /ticketmaster\.(com|ca|co\.uk)$/i.test(parsed.hostname) && parsed.pathname.includes("/event/");
-    } catch {
-      return false;
-    }
-  },
+  URL: (value: string) => isTicketmasterUrl(value) || isEvenueUrl(value) || isTicketsComUrl(value),
   Event_ID: (value: string) => value.length > 0,
   Event_Name: (value: string) => value.length >= 3,
   Event_DateTime: (value: string) => Boolean(value),
@@ -99,8 +93,28 @@ const validationRules: {
   eventType: (value: string) => isValidEventType(value),
 };
 
+/**
+ * Fields the eVenue scraper resolves from the live site on its first pass.
+ *
+ * For an eVenue URL the form must not require them: nobody can be expected to
+ * know an event's seasonCd, and the URL-parsing that fills these in for a
+ * Ticketmaster link produces nonsense for an eVenue one. They are left blank
+ * and the scraper writes the real values back into the same row.
+ */
+const EVENUE_RESOLVED_FIELDS = [
+  'Event_ID',
+  'Event_Name',
+  'Event_DateTime',
+  'Venue',
+  'mapping_id',
+  'inHandDate',
+  // eventType drives Ticketmaster markup adjustments and CSV filtering. eVenue
+  // is primary inventory at a single markup, with no resale/broker split.
+  'eventType',
+] as const;
+
 const errorMessages = {
-  URL: "Please enter a valid Ticketmaster event URL",
+  URL: "Please enter a valid Ticketmaster, tickets.com, or eVenue event URL",
   Event_ID: "Please enter a valid event ID",
   Event_Name: "Name must be at least 3 characters long",
   Event_DateTime: "Please select an event date and time",
@@ -170,7 +184,18 @@ export function EventFormProvider({ children, initialData }: {
     if (error) setError('');
   };
 
-  const validateSingleField = (name: keyof FormData, value: string | number | boolean) => {
+  const validateSingleField = (
+    name: keyof FormData,
+    value: string | number | boolean,
+    urlValue?: string
+  ) => {
+    // An eVenue event is registered by URL alone; the scraper fills in the rest,
+    // so those fields are not required here.
+    const currentUrl = String(urlValue ?? formData.URL.value ?? '');
+    if (isEvenueUrl(currentUrl) && (EVENUE_RESOLVED_FIELDS as readonly string[]).includes(name)) {
+      return true;
+    }
+
     switch (name) {
       case "URL":
       case "Event_ID":
@@ -212,11 +237,13 @@ export function EventFormProvider({ children, initialData }: {
   const validate = () => {
     const updatedData = { ...formData };
     let isFormValid = true;
+    // Resolve the URL once so every field is judged against the same one.
+    const currentUrl = String(formData.URL.value ?? '');
 
     Object.keys(formData).forEach(key => {
       const fieldName = key as keyof FormData;
       const field = formData[fieldName];
-      const isValid = validateSingleField(fieldName, field.value);
+      const isValid = validateSingleField(fieldName, field.value, currentUrl);
       
       updatedData[fieldName] = {
         ...field,

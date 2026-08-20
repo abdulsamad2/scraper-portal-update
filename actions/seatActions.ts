@@ -5,6 +5,7 @@ import { ConsecutiveGroup } from '@/models/seatModel'; // Assuming models are al
 import { Event } from '@/models/eventModel'; // Assuming models are aliased to @/models
 import { UpdateQuery } from 'mongoose';
 import { deleteInventoryBatchFromSync } from './csvActions';
+import { EVENUE_GROUPS_COLLECTION, EVENUE_SOURCE, TICKETMASTER_SOURCE } from '@/lib/evenue';
 
 /**
  * Creates a new consecutive seat group.
@@ -133,7 +134,11 @@ export async function deleteConsecutiveGroup(groupId: string) {
 export async function getConsecutiveGroupsByEventId(eventId: string) {
   await dbConnect();
   try {
-    const groups = await ConsecutiveGroup.find({ eventId: eventId });
+    // Spans both scrapers' collections — an eventId belongs to whichever owns it.
+    const groups = await ConsecutiveGroup.aggregate([
+      { $match: { eventId } },
+      { $unionWith: { coll: EVENUE_GROUPS_COLLECTION, pipeline: [{ $match: { eventId } }] } },
+    ]);
     return JSON.parse(JSON.stringify(groups));
   } catch (error: unknown) {
     console.error('Error fetching consecutive groups by eventId:', error);
@@ -149,6 +154,8 @@ interface FilterOptions {
   mapping?: string;
   section?: string;
   row?: string;
+  /** 'evenue' | 'ticketmaster' — which scraper produced the row. */
+  source?: string;
 }
 
 export async function getConsecutiveGroupsPaginated(
@@ -212,24 +219,54 @@ export async function getConsecutiveGroupsPaginated(
         const regex = new RegExp(filters.row, 'i');
         conditions.push({ row: regex });
       }
+      // Which scraper produced the row. eVenue stamps `source: "evenue"` on
+      // every document; Ticketmaster rows predate the field and simply do not
+      // carry it, so "ticketmaster" has to mean "not evenue" rather than an
+      // equality match. Without this an operator hunting eVenue inventory has
+      // to already know a mapping_id to search for — 436 eVenue rows sit among
+      // half a million Ticketmaster ones and never surface on their own.
+      if (filters.source === EVENUE_SOURCE) {
+        conditions.push({ source: EVENUE_SOURCE });
+      } else if (filters.source === TICKETMASTER_SOURCE) {
+        conditions.push({ source: { $ne: EVENUE_SOURCE } });
+      }
     }
     
     // Combine all conditions
     if (conditions.length > 0) {
       query.$and = conditions;
     }
-    const total = await ConsecutiveGroup.countDocuments(query);
-    const qtyAgg = await ConsecutiveGroup.aggregate([
-      { $match: query },
-      { $group: { _id: null, seats: { $sum: "$inventory.quantity" } } },
+    // eVenue inventory lives in its own collection, one per scraper, so neither
+    // scraper can pick up the other's events. The inventory page spans both:
+    // union eVenue in and count, sum and page over the combined set so the
+    // totals agree with what the table shows. Both scrapers write the identical
+    // ConsecutiveGroup shape, so nothing else here has to change.
+    const matchStage = { $match: query };
+    const unionEvenue = {
+      $unionWith: { coll: EVENUE_GROUPS_COLLECTION, pipeline: [{ $match: query }] },
+    };
+
+    const [countAgg, qtyAgg] = await Promise.all([
+      ConsecutiveGroup.aggregate([matchStage, unionEvenue, { $count: 'n' }]),
+      ConsecutiveGroup.aggregate([
+        matchStage,
+        unionEvenue,
+        { $group: { _id: null, seats: { $sum: '$inventory.quantity' } } },
+      ]),
     ]);
+    const total = countAgg[0]?.n || 0;
     const totalQuantity = qtyAgg[0]?.seats || 0;
 
-    // Fetch groups for this page
-    const groups = await ConsecutiveGroup.find(query)
-      .skip((page - 1) * limit)
-      .limit(limit)
-      .lean();
+    // Sorted by _id so paging is stable across the union: without an explicit
+    // sort the two collections come back in whatever order each scan yields,
+    // and a row could repeat or vanish between pages.
+    const groups = await ConsecutiveGroup.aggregate([
+      matchStage,
+      unionEvenue,
+      { $sort: { _id: 1 } },
+      { $skip: (page - 1) * limit },
+      { $limit: limit },
+    ]);
 
     // Serialize the data to ensure it's a plain object for client components.
     // This converts ObjectIds, Dates, etc., to strings.

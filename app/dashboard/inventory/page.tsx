@@ -13,6 +13,7 @@ interface PageProps {
     mapping?: string;
     section?: string;
     row?: string;
+    source?: string;
     sortField?: string;
     sortDir?: string;
   }>;
@@ -64,6 +65,7 @@ async function Content({ searchParams }: PageProps) {
     mapping: params.mapping || undefined,
     section: params.section || undefined,
     row: params.row || undefined,
+    source: params.source || undefined,
   };
 
   const resp = await getConsecutiveGroupsPaginated(perPage, page, search, filters);
@@ -89,6 +91,7 @@ async function Content({ searchParams }: PageProps) {
         mapping: params.mapping || '',
         section: params.section || '',
         row: params.row || '',
+        source: params.source || '',
       }}
       sortField={params.sortField || ''}
       sortDir={(params.sortDir as 'asc' | 'desc') || 'asc'}

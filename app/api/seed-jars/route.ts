@@ -178,18 +178,39 @@ export async function GET(req: NextRequest) {
       const now = new Date();
       const docs = await coll
         .find({})
-        .project({ status: 1, expiresAt: 1, machineId: 1 })
+        .project({ status: 1, expiresAt: 1, machineId: 1, mintedAt: 1, useCount: 1 })
         .toArray();
       const healthy = docs.filter(
         (d) => d.status === 'healthy' && d.expiresAt && new Date(d.expiresAt) > now
       );
       const machines = new Set(healthy.map((d) => d.machineId).filter(Boolean));
+
+      // Per-machine roll-up so a farm can tell a machine that is STALLED from one that is
+      // merely quiet. Counting machines with a healthy jar is not enough: a jar outlives
+      // its minter by up to its TTL (~50m), so a dead machine keeps being counted as
+      // present for that whole window and the fleet under-provisions without noticing.
+      // newestMintedAt is the liveness signal — a healthy farm mints every ~12 minutes.
+      const byMachine = new Map<string, { machineId: string; jars: number; healthy: number; newestMintedAt: string | null }>();
+      for (const d of docs) {
+        const id = String(d.machineId || '').trim();
+        if (!id) continue;
+        const row = byMachine.get(id) || { machineId: id, jars: 0, healthy: 0, newestMintedAt: null };
+        row.jars++;
+        if (healthy.includes(d)) row.healthy++;
+        if (d.mintedAt) {
+          const t = new Date(d.mintedAt as Date);
+          if (!row.newestMintedAt || t > new Date(row.newestMintedAt)) row.newestMintedAt = t.toISOString();
+        }
+        byMachine.set(id, row);
+      }
+
       return NextResponse.json({
         ok: true,
         pool: {
           totalHealthy: healthy.length,
-          machines: machines.size,
+          machines: machines.size,          // kept as a COUNT — existing callers rely on it
           totalDocs: docs.length,
+          machineList: [...byMachine.values()].sort((a, b) => a.machineId.localeCompare(b.machineId)),
         },
       });
     }

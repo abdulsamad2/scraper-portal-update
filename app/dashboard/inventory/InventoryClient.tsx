@@ -10,6 +10,8 @@ interface FilterState {
   mapping: string;
   section: string;
   row: string;
+  /** Which scraper produced the row: '' (both), 'evenue' or 'ticketmaster'. */
+  source: string;
 }
 
 interface Props {
@@ -68,16 +70,17 @@ export default function InventoryClient({
       mapping: pendingFilters.mapping,
       section: pendingFilters.section,
       row: pendingFilters.row,
+      source: pendingFilters.source,
       page: '1',
     });
     setShowFilters(false);
   };
 
   const clearFilters = () => {
-    const empty = { event: '', mapping: '', section: '', row: '' };
+    const empty = { event: '', mapping: '', section: '', row: '', source: '' };
     setPendingFilters(empty);
     setPendingSearch('');
-    navigate({ search: '', event: '', mapping: '', section: '', row: '', page: '1' });
+    navigate({ search: '', event: '', mapping: '', section: '', row: '', source: '', page: '1' });
     setShowFilters(false);
   };
 
@@ -90,7 +93,9 @@ export default function InventoryClient({
   const handlePerPageChange = (pp: number) => navigate({ perPage: String(pp), page: '1' });
 
   const totalPages = Math.ceil(totalGroups / perPage);
-  const hasActiveFilters = currentFilters.event || currentFilters.mapping || currentFilters.section || currentFilters.row;
+  const hasActiveFilters =
+    currentFilters.event || currentFilters.mapping || currentFilters.section ||
+    currentFilters.row || currentFilters.source;
 
   const filterFields = [
     { label: 'Event Name', key: 'event' as keyof FilterState },
@@ -146,6 +151,22 @@ export default function InventoryClient({
           </button>
           {showFilters ? (
             <div className="absolute right-0 top-full mt-2 w-80 bg-white shadow-lg rounded-lg border p-4 text-sm z-10">
+              {/* Which scraper produced the row. A fixed choice, so a select
+                  rather than a text box — and the one filter that makes eVenue
+                  inventory reachable without knowing a mapping ID up front. */}
+              <div className="mb-3">
+                <label className="block text-gray-500 mb-1">Source</label>
+                <select
+                  value={pendingFilters.source}
+                  onChange={e => setPendingFilters({ ...pendingFilters, source: e.target.value })}
+                  className="border rounded-md px-2 py-1 w-full bg-white"
+                >
+                  <option value="">All scrapers</option>
+                  <option value="ticketmaster">Ticketmaster</option>
+                  <option value="evenue">eVenue</option>
+                </select>
+              </div>
+
               {filterFields.map(f => (
                 <div key={f.key} className="mb-3">
                   <label className="block text-gray-500 mb-1">{f.label}</label>

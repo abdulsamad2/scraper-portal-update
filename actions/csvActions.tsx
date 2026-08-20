@@ -29,6 +29,7 @@ const BLOCKED_STATES = ['ri', 'me', 'rhode island', 'maine'];
 import dbConnect from '../lib/dbConnect';
 import { ConsecutiveGroup } from '../models/seatModel';
 import { Event } from '../models/eventModel';
+import { TcEvent } from '../models/tcEventModel';
 import { SchedulerSettings } from '../models/schedulerModel';
 import { AutoDeleteSettings } from '../models/autoDeleteModel';
 import { ExclusionRules } from '../models/exclusionRulesModel';
@@ -37,7 +38,74 @@ import { createErrorLog } from './errorLogActions';
 import { deleteExpiredEvents, getExpiredEventsStats, deletePassedEvents } from './autoDeleteActions';
 import { deleteConsecutiveGroupsByEventIds } from './seatActions';
 import { detectTimezoneFromVenueAsync, resolveVenueTimezonesBulk, getCurrentTimeInTimezone } from '../lib/timezone';
+import { EvenueEvent } from '../models/evenueEventModel';
+import { EVENUE_GROUPS_COLLECTION } from '../lib/evenue';
 import { PipelineStage } from 'mongoose';
+
+/**
+ * ── Combining the three scrapers in one export ────────────────────────────────
+ *
+ * Ticketmaster, eVenue, and tickets.com inventory live in separate collections,
+ * one per scraper, so no scraper can pick up the others' events. The CSV is where
+ * they come back together: all scrapers emit the same ConsecutiveGroup shape
+ * and join on the same `mapping_id`, so all rows go through the identical
+ * row mapper, exclusion rules and min-seat filters as Ticketmaster rows.
+ */
+
+const TICKETSCOM_GROUPS_COLLECTION = 'tc_consecutivegroups';
+
+/** Append eVenue and tickets.com inventory to a ConsecutiveGroup pipeline, filtered the same way. */
+function unionAllInventorySources(match: Record<string, any>): PipelineStage[] {
+  return [
+    // The filter is pushed into the sub-pipeline so Mongo never materialises
+    // the whole collection just to throw most of it away.
+    {
+      $unionWith: { coll: EVENUE_GROUPS_COLLECTION, pipeline: [{ $match: match }] },
+    } as PipelineStage,
+    {
+      $unionWith: { coll: TICKETSCOM_GROUPS_COLLECTION, pipeline: [{ $match: match }] },
+    } as PipelineStage,
+  ];
+}
+
+/**
+ * Active events from all three rosters (Ticketmaster, eVenue, tickets.com).
+ *
+ * Rows the portal registered but the scraper has not reached yet have no
+ * mapping_id and no inventory, so they are dropped here rather than joining
+ * against nothing downstream.
+ */
+async function findActiveEventsBothSources(activeEventQuery: Record<string, any>) {
+  const [tmEvents, evEvents, tcEvents] = await Promise.all([
+    Event.find(activeEventQuery, { mapping_id: 1 }).read('primary').maxTimeMS(30000).lean(),
+    EvenueEvent.find(activeEventQuery, { mapping_id: 1 }).maxTimeMS(30000).lean(),
+    TcEvent.find(activeEventQuery, { mapping_id: 1 }).maxTimeMS(30000).lean(),
+  ]);
+  return [...tmEvents, ...evEvents, ...tcEvents].filter((e: any) => e.mapping_id);
+}
+
+/**
+ * Per-event CSV settings from all three rosters.
+ *
+ * eVenue and tickets.com documents carry none of the Ticketmaster markup
+ * adjustments — those platforms are primary inventory at a single markup, with
+ * no resale or broker split — so those fall back to 0 and both include toggles
+ * default to on, which is the same treatment a Ticketmaster event with unset
+ * fields gets.
+ */
+async function findEventDetailsBothSources(eventMappingIds: string[]) {
+  const projection = {
+    mapping_id: 1, URL: 1, standardMarkupAdjustment: 1, resaleMarkupAdjustment: 1,
+    brokerMarkupAdjustment: 1, priceIncreasePercentage: 1,
+    includeStandardSeats: 1, includeResaleSeats: 1,
+  };
+  const [tmDocs, evDocs, tcDocs] = await Promise.all([
+    Event.find({ mapping_id: { $in: eventMappingIds } }, projection).lean(),
+    EvenueEvent.find({ mapping_id: { $in: eventMappingIds } }, projection).lean(),
+    TcEvent.find({ mapping_id: { $in: eventMappingIds } }, projection).lean(),
+  ]);
+  return [...tmDocs, ...evDocs, ...tcDocs];
+}
 
 interface CsvRow {
   inventory_id: number;
@@ -283,7 +351,17 @@ const CSV_PROJECTION = {
   'inventory.passthrough': 1,
 } as const;
 
-// ── Global: stop events with seats <= threshold & clear their inventory ──
+/**
+ * ── Global: stop events with seats <= threshold & clear their inventory ──
+ *
+ * Ticketmaster only, deliberately. This clears inventory by deleting
+ * ConsecutiveGroup rows, which is safe for Ticketmaster but not for eVenue: a
+ * SeatScouts listing is only retired when the eVenue scraper deletes the row
+ * AND sends the matching delete by inventoryId, so deleting eVenue rows from
+ * here would leave those listings live with nothing left to reconcile them
+ * against. To auto-stop eVenue events the same way, the check belongs in the
+ * eVenue scraper's sweep, where both halves happen together.
+ */
 export async function stopLowSeatEvents(): Promise<{ stopped: number; eventIds: string[] }> {
   await dbConnect();
   try {
@@ -396,12 +474,7 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
         console.log('Including all active events (Skip_Scraping: false)');
       }
 
-      const activeEvents = await Event.find(
-        activeEventQuery,
-        { mapping_id: 1 }
-      )
-      .read('primary')
-      .maxTimeMS(30000);
+      const activeEvents = await findActiveEventsBothSources(activeEventQuery);
 
       console.log(`Found ${activeEvents.length} active events matching filter criteria`);
 
@@ -420,12 +493,7 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
         url: string; stdAdj: number; resaleAdj: number; brokerAdj: number; defaultPct: number;
         includeStandard: boolean; includeResale: boolean;
       }>();
-      const eventDocs = await Event.find(
-        { mapping_id: { $in: eventMappingIds } },
-        { mapping_id: 1, URL: 1, standardMarkupAdjustment: 1, resaleMarkupAdjustment: 1,
-          brokerMarkupAdjustment: 1, priceIncreasePercentage: 1,
-          includeStandardSeats: 1, includeResaleSeats: 1 }
-      ).lean();
+      const eventDocs = await findEventDetailsBothSources(eventMappingIds);
       for (const ev of eventDocs) {
         eventDetailsMap.set(ev.mapping_id, {
           url: ev.URL || '',
@@ -463,6 +531,7 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
       // Step 1: Get all matching _ids quickly (no $lookup, very fast)
       const idPipeline: PipelineStage[] = [
         { $match: eventFilter },
+        ...unionAllInventorySources(eventFilter),
         { $sort: { _id: 1 as const } },
         { $project: { _id: 1 } },
       ];
@@ -500,6 +569,7 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
         const chunkDocs: ConsecutiveGroupDocument[] = await ConsecutiveGroup.aggregate(
           [
             { $match: { _id: { $in: chunkIds } } },
+            ...unionAllInventorySources({ _id: { $in: chunkIds } }),
             { $project: projection },
           ] as PipelineStage[],
           { allowDiskUse: true, maxTimeMS: 120000 }
@@ -962,9 +1032,7 @@ export async function* generateInventoryCsvStream(
       activeEventQuery.updatedAt = { $gte: cutoffTime };
     }
 
-    const activeEvents = await Event.find(activeEventQuery, { mapping_id: 1 })
-      .read('primary')
-      .maxTimeMS(30000);
+    const activeEvents = await findActiveEventsBothSources(activeEventQuery);
 
     if (activeEvents.length === 0) {
       const msg = eventUpdateFilterMinutes > 0
@@ -983,12 +1051,7 @@ export async function* generateInventoryCsvStream(
       url: string; stdAdj: number; resaleAdj: number; brokerAdj: number; defaultPct: number;
       includeStandard: boolean; includeResale: boolean;
     }>();
-    const eventDocs = await Event.find(
-      { mapping_id: { $in: eventMappingIds } },
-      { mapping_id: 1, URL: 1, standardMarkupAdjustment: 1, resaleMarkupAdjustment: 1,
-        brokerMarkupAdjustment: 1, priceIncreasePercentage: 1,
-        includeStandardSeats: 1, includeResaleSeats: 1 }
-    ).lean();
+    const eventDocs = await findEventDetailsBothSources(eventMappingIds);
     for (const ev of eventDocs) {
       eventDetailsMap.set(ev.mapping_id, {
         url: ev.URL || '',
@@ -1011,6 +1074,7 @@ export async function* generateInventoryCsvStream(
     const CHUNK_SIZE = 10000;
     const idPipeline: PipelineStage[] = [
       { $match: eventFilter },
+      ...unionAllInventorySources(eventFilter),
       { $sort: { _id: 1 as const } },
       { $project: { _id: 1 } },
     ];
@@ -1037,6 +1101,9 @@ export async function* generateInventoryCsvStream(
       const totals = await ConsecutiveGroup.aggregate(
         [
           { $match: eventFilter },
+          // Section totals must span both scrapers, or the min-seat filter would
+          // judge an eVenue section on a partial count.
+          ...unionAllInventorySources(eventFilter),
           {
             $group: {
               _id: { mappingId: '$mapping_id', section: '$inventory.section' },
@@ -1062,6 +1129,7 @@ export async function* generateInventoryCsvStream(
       const chunkDocs: ConsecutiveGroupDocument[] = await ConsecutiveGroup.aggregate(
         [
           { $match: { _id: { $in: chunkIds } } },
+          ...unionAllInventorySources({ _id: { $in: chunkIds } }),
           { $project: projection },
         ] as PipelineStage[],
         { allowDiskUse: true, maxTimeMS: 120000 }

@@ -17,13 +17,67 @@
 
 import dbConnect from '@/lib/dbConnect';
 import { Event } from '@/models/eventModel'; // Assuming models are aliased to @/models
+import { TcEvent } from '@/models/tcEventModel';
 import { ConsecutiveGroup } from '@/models/seatModel';
+import { EvenueEvent } from '@/models/evenueEventModel';
 import { deleteConsecutiveGroupsByEventId, deleteConsecutiveGroupsByEventIds } from './seatActions';
 import { isValidEventType, EVENT_TYPES } from '@/lib/venueToSport';
+import { EVENUE_EVENTS_COLLECTION, EVENUE_GROUPS_COLLECTION, EVENUE_SOURCE, isEvenueUrl } from '@/lib/evenue';
 
 // Escape special regex characters to prevent ReDoS and injection
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Detect if URL is from tickets.com
+function isTicketsComUrl(url: string): boolean {
+  if (!url) return false;
+  return /tickets\.com\/events\//i.test(url) || /tickets\.com\/tickets\//i.test(url);
+}
+
+/**
+ * The fields the form submits that an eVenue registration cares about.
+ * Declared rather than cast so this path does not add to the file's `any` debt.
+ */
+interface EvenueEventInput {
+  URL?: string;
+  priceIncreasePercentage?: number | string | null;
+  Skip_Scraping?: boolean;
+  Zone?: string;
+  eventType?: string | null;
+  standardMarkupAdjustment?: number | string;
+  resaleMarkupAdjustment?: number | string;
+  brokerMarkupAdjustment?: number | string;
+  includeStandardSeats?: boolean;
+  includeResaleSeats?: boolean;
+}
+
+/** Numeric fields the portal owns on an eVenue event; all default to 0. */
+const EVENUE_ADJUSTMENT_FIELDS = [
+  'standardMarkupAdjustment',
+  'resaleMarkupAdjustment',
+  'brokerMarkupAdjustment',
+] as const;
+
+/**
+ * Find an event by _id across all rosters.
+ *
+ * Ticketmaster events live in `events`, tickets.com in `tc_events`, and eVenue
+ * in `ev_events` — one scraper per collection. The portal spans all three:
+ * every action that takes an _id has to look in all places and then act on
+ * whichever collection the event actually came from.
+ */
+async function findEventAnywhere(eventId: string) {
+  const tmEvent = await Event.findById(eventId).maxTimeMS(5000);
+  if (tmEvent) return { doc: tmEvent, isEvenue: false, isTc: false };
+
+  const tcEvent = await TcEvent.findById(eventId).maxTimeMS(5000);
+  if (tcEvent) return { doc: tcEvent, isEvenue: false, isTc: true };
+
+  const evEvent = await EvenueEvent.findById(eventId).maxTimeMS(5000);
+  if (evEvent) return { doc: evEvent, isEvenue: true, isTc: false };
+
+  return { doc: null, isEvenue: false, isTc: false };
 }
 
 /**
@@ -32,6 +86,19 @@ function escapeRegex(str: string): string {
  * @returns {Promise<object>} The created event object or an error object.
  */
 export async function createEvent(eventData: Partial<Event>) {
+  const input = eventData as EvenueEventInput;
+  const url = (input.URL || '').trim();
+
+  // eVenue events are registered by URL alone — see registerEvenueEvent.
+  if (isEvenueUrl(url)) {
+    return registerEvenueEvent(input);
+  }
+
+  // tickets.com events are registered separately
+  if (isTicketsComUrl(url)) {
+    return registerTicketsComEvent(input);
+  }
+
   const venue = ((eventData as any).Venue || '').trim().toLowerCase();
   const blockedStates = ['ri', 'me', 'rhode island', 'maine'];
   if (blockedStates.some(s => venue === s || venue.endsWith(', ' + s) || venue.endsWith(',' + s))) {
@@ -48,12 +115,121 @@ export async function createEvent(eventData: Partial<Event>) {
 
   await dbConnect();
   try {
-    const newEvent = new Event(eventData);
+    const newEvent = new Event({
+      ...eventData,
+      source: 'ticketmaster',
+    });
     const savedEvent = await newEvent.save();
     return JSON.parse(JSON.stringify(savedEvent));
   } catch (error:unknown) {
     console.error('Error creating event:', error);
     return { error: (error as Error).message || 'Failed to create event' };
+  }
+}
+
+/**
+ * Register an eVenue event into `ev_events`, where the eVenue scraper will pick
+ * it up on its next pass (within MAX_UPDATE_INTERVAL, 2 min by default).
+ *
+ * Only the URL and the markup are written. Event_ID, name, date, venue and the
+ * platform context are resolved from the live site by the scraper and written
+ * back into this same row, so the form does not need — and must not invent —
+ * any of them: the URL-parsing the form does for Ticketmaster links produces
+ * nonsense for an eVenue URL.
+ *
+ * eventType is not required. It exists to drive Ticketmaster-side markup
+ * adjustments and CSV filtering; eVenue is primary box-office inventory sold at
+ * a price level, with one markup and no resale/broker split.
+ */
+async function registerEvenueEvent(input: EvenueEventInput) {
+  await dbConnect();
+
+  const url = (input.URL || '').trim();
+  const rawMarkup = input.priceIncreasePercentage;
+  const markup = rawMarkup === undefined || rawMarkup === null || rawMarkup === '' ? 35 : Number(rawMarkup);
+
+  if (isNaN(markup) || markup < 0) {
+    return { error: 'Markup percentage must be a number, 0 or greater.' };
+  }
+
+  try {
+    const existing = await EvenueEvent.findOne({ URL: url }).lean();
+    if (existing) {
+      return { error: 'That eVenue event is already registered.' };
+    }
+
+    const created = await EvenueEvent.create({
+      URL: url,
+      priceIncreasePercentage: markup,
+      Source: EVENUE_SOURCE,
+      Skip_Scraping: input.Skip_Scraping ?? false,
+      Zone: input.Zone || 'none',
+      // Carried through when the form sends them; the schema supplies the same
+      // defaults as the Ticketmaster model otherwise.
+      ...(input.eventType ? { eventType: input.eventType } : {}),
+      ...Object.fromEntries(
+        EVENUE_ADJUSTMENT_FIELDS.filter((f) => input[f] !== undefined && !isNaN(Number(input[f]))).map(
+          (f) => [f, Number(input[f])]
+        )
+      ),
+      ...(input.includeStandardSeats !== undefined
+        ? { includeStandardSeats: Boolean(input.includeStandardSeats) }
+        : {}),
+      ...(input.includeResaleSeats !== undefined
+        ? { includeResaleSeats: Boolean(input.includeResaleSeats) }
+        : {}),
+    });
+
+    return JSON.parse(JSON.stringify(created));
+  } catch (error: unknown) {
+    console.error('Error registering eVenue event:', error);
+    return { error: (error as Error).message || 'Failed to register eVenue event' };
+  }
+}
+
+/**
+ * Register a tickets.com event into `events` with source='ticketscom', where the
+ * tickets.com scraper will pick it up on its next pass (within ~2 minutes).
+ *
+ * Only the URL and markup are written by the portal. Event metadata (Event_ID,
+ * Event_Name, Venue, Event_DateTime) will be resolved by the scraper from the
+ * live site and written back into this same row.
+ */
+async function registerTicketsComEvent(input: EvenueEventInput) {
+  await dbConnect();
+
+  const url = (input.URL || '').trim();
+  const rawMarkup = input.priceIncreasePercentage;
+  const markup = rawMarkup === undefined || rawMarkup === null || rawMarkup === '' ? 35 : Number(rawMarkup);
+
+  if (isNaN(markup) || markup < 0) {
+    return { error: 'Markup percentage must be a number, 0 or greater.' };
+  }
+
+  try {
+    // Check if already registered
+    const existing = await Event.findOne({ URL: url }).lean().maxTimeMS(5000);
+    if (existing) {
+      return { error: 'That tickets.com event is already registered.' };
+    }
+
+    // Create with required fields in tc_events collection
+    const created = await TcEvent.create({
+      URL: url,
+      priceIncreasePercentage: markup,
+      Skip_Scraping: input.Skip_Scraping ?? false,
+      // User provides these; if missing, scraper will resolve from live data
+      Event_ID: `tc-${Date.now()}`,
+      Event_Name: (input as any).Event_Name || `Event ${Date.now()}`,
+      Event_DateTime: (input as any).Event_DateTime || new Date(),
+      Venue: (input as any).Venue || 'TBD',
+      mapping_id: `tc-${Date.now()}`,
+    });
+
+    return JSON.parse(JSON.stringify(created));
+  } catch (error: unknown) {
+    console.error('Error registering tickets.com event:', error);
+    return { error: (error as Error).message || 'Failed to register tickets.com event' };
   }
 }
 
@@ -65,14 +241,14 @@ export async function createEvent(eventData: Partial<Event>) {
 export async function getEventById(eventId: string): Promise<object | null> {
   await dbConnect();
   try {
-    const event = await Event.findOne({
-      _id: eventId,
-    });
-    if (!event) {
+    // Looks in both rosters — the dashboard lists Ticketmaster and eVenue
+    // events together, so an _id from the table can belong to either.
+    const found = await findEventAnywhere(eventId);
+    if (!found.doc) {
       console.error('Event not found with ID:', eventId);
       return null;
     }
-    return JSON.parse(JSON.stringify(event));
+    return JSON.parse(JSON.stringify(found.doc));
   } catch (error) {
     console.error('Error fetching event by ID:', eventId, error);
     return { error: (error as Error).message || 'Failed to fetch event' };
@@ -86,7 +262,11 @@ export async function getEventById(eventId: string): Promise<object | null> {
 export async function getAllEvents(): Promise<Array<object>> {
   await dbConnect();
   try {
-    const events = await Event.find({});
+    // All three rosters, same format.
+    const events = await Event.aggregate([
+      { $unionWith: { coll: 'tc_events' } },
+      { $unionWith: { coll: EVENUE_EVENTS_COLLECTION } }
+    ]);
     return JSON.parse(JSON.stringify(events));
   } catch (error) {
     console.error('Error fetching all events:', error);
@@ -212,15 +392,25 @@ export async function getPaginatedEventsAdvanced(page: number = 1, limit: number
         sortCriteria = { Last_Updated: -orderMul, updatedAt: -orderMul };
     }
 
-    // Get total count for pagination
-    const total = await Event.countDocuments(query);
-    
-    // Get paginated events
-    const events = await Event.find(query)
-      .sort(sortCriteria)
-      .skip(skip)
-      .limit(limit)
-      .lean(); // Use lean() for better performance
+    // Ticketmaster, tickets.com, and eVenue events live in separate collections,
+    // one per scraper. The dashboard is the one place they come back together:
+    // union all three rosters, then apply the search, filters, sort and paging
+    // to the combined set so paging stays correct across all.
+    const tcUnionStage = { $unionWith: { coll: 'tc_events' } };
+    const evUnionStage = { $unionWith: { coll: EVENUE_EVENTS_COLLECTION } };
+    const matchStages = allConditions.length > 0 ? [{ $match: query }] : [];
+
+    const countResult = await Event.aggregate([tcUnionStage, evUnionStage, ...matchStages, { $count: 'total' }]);
+    const total = countResult[0]?.total || 0;
+
+    const events = await Event.aggregate([
+      tcUnionStage,
+      evUnionStage,
+      ...matchStages,
+      { $sort: sortCriteria },
+      { $skip: skip },
+      { $limit: limit },
+    ]);
 
     const totalPages = Math.ceil(total / limit);
 
@@ -252,11 +442,16 @@ export async function getPaginatedEventsAdvanced(page: number = 1, limit: number
 export async function getEventCounts(): Promise<{ total: number; active: number }> {
   await dbConnect();
   try {
-    const [total, active] = await Promise.all([
-      Event.countDocuments({}),
-      Event.countDocuments({ $or: [{ Skip_Scraping: false }, { Skip_Scraping: { $exists: false } }] }),
+    const activeMatch = { $or: [{ Skip_Scraping: false }, { Skip_Scraping: { $exists: false } }] };
+    const tcUnion = { $unionWith: { coll: 'tc_events' } };
+    const evUnion = { $unionWith: { coll: EVENUE_EVENTS_COLLECTION } };
+
+    // Counts cover all three rosters so the dashboard totals match the list.
+    const [totalResult, activeResult] = await Promise.all([
+      Event.aggregate([tcUnion, evUnion, { $count: 'n' }]),
+      Event.aggregate([tcUnion, evUnion, { $match: activeMatch }, { $count: 'n' }]),
     ]);
-    return { total, active };
+    return { total: totalResult[0]?.n || 0, active: activeResult[0]?.n || 0 };
   } catch {
     return { total: 0, active: 0 };
   }
@@ -294,7 +489,12 @@ export async function getInventoryCountsByType(
         },
       ],
     };
+    // eVenue inventory lands in its own collection, the same way its events do.
+    // Union it in before matching so an eVenue row's Qty/Rows badges count its
+    // seats instead of always reading zero. The two collections hold disjoint
+    // mapping_ids, so nothing can be double-counted by the $group below.
     const result = await ConsecutiveGroup.aggregate([
+      { $unionWith: { coll: EVENUE_GROUPS_COLLECTION } },
       { $match: { mapping_id: { $in: mappingIds } } },
       {
         $group: {
@@ -354,10 +554,17 @@ export async function updateEvent(eventId: string, updateData: Partial<Event> & 
   await dbConnect();
   try {
     // Get current event state to check if we're actually stopping scraping
-    const currentEvent = await Event.findById(eventId).maxTimeMS(5000); // 5 second timeout
-    if (!currentEvent) {
+    const found = await findEventAnywhere(eventId);
+    if (!found.doc) {
       return { error: 'Event not found' };
     }
+    if (found.isEvenue) {
+      return updateEvenueEvent(found.doc, updateData);
+    }
+    if (found.isTc) {
+      return updateTcEvent(found.doc, updateData);
+    }
+    const currentEvent = found.doc;
 
     const incomingType = (updateData as any).eventType;
     if (incomingType !== undefined && incomingType !== null && !isValidEventType(incomingType)) {
@@ -367,8 +574,11 @@ export async function updateEvent(eventId: string, updateData: Partial<Event> & 
     // Gate: starting scraping (Skip_Scraping true→false) requires a valid eventType
     // on the stored doc OR one being set in this same update. Existing events whose
     // scraping is already on are untouched.
+    // NOTE: tickets.com events (source='ticketscom') don't require eventType since
+    // they are resale listings, not primary ticketing events.
     const startingScraping = updateData.Skip_Scraping === false && currentEvent.Skip_Scraping !== false;
-    if (startingScraping) {
+    const isTicketsComEvent = currentEvent.source === 'ticketscom';
+    if (startingScraping && !isTicketsComEvent) {
       const effectiveType = incomingType !== undefined ? incomingType : currentEvent.eventType;
       if (!isValidEventType(effectiveType)) {
         return { error: 'Select an event type (NFL, MLB, NHL, NBA, or Other) before starting scraping.' };
@@ -428,6 +638,142 @@ export async function updateEvent(eventId: string, updateData: Partial<Event> & 
   }
 }
 
+/**
+ * Update an eVenue event.
+ *
+ * Only the three fields the portal owns are writable — markup, pause and zone.
+ * Everything else on the row (Event_ID, name, date, venue, the `evenue`
+ * context) is the scraper's, resolved from the live site, and overwriting it
+ * from here would just be undone on the next pass.
+ *
+ * Unlike the Ticketmaster path this never deletes inventory itself. SeatScouts
+ * has no update endpoint, so a listing is only retired when the scraper deletes
+ * the row AND sends the matching delete by inventoryId; deleting rows here
+ * would leave those listings live with nothing to reconcile them against.
+ * Both cases are already handled by the scraper:
+ *
+ *   - markup changed -> the next pass re-prices, and the sync layer deletes and
+ *     re-inserts each changed row on both sides
+ *   - paused         -> its sweep delists the event, the same way stopping a
+ *     Ticketmaster event drops its seat groups
+ */
+async function updateEvenueEvent(
+  currentEvent: { _id: unknown },
+  updateData: Partial<Event> & { Skip_Scraping?: boolean; priceIncreasePercentage?: number }
+) {
+  const input = updateData as EvenueEventInput;
+  const $set: Record<string, unknown> = {};
+
+  if (input.priceIncreasePercentage !== undefined) {
+    const markup = Number(input.priceIncreasePercentage);
+    if (isNaN(markup) || markup < 0) {
+      return { error: 'Markup percentage must be a number, 0 or greater.' };
+    }
+    $set.priceIncreasePercentage = markup;
+  }
+  if (input.Skip_Scraping !== undefined) $set.Skip_Scraping = Boolean(input.Skip_Scraping);
+  if (input.Zone !== undefined) $set.Zone = input.Zone;
+
+  // The CSV markup adjustments and include toggles work the same on both
+  // rosters — eVenue rows carry splitType NEVERLEAVEONE, so the export treats
+  // them as standard inventory and applies these identically.
+  for (const field of EVENUE_ADJUSTMENT_FIELDS) {
+    if (input[field] === undefined) continue;
+    const n = Number(input[field]);
+    if (isNaN(n)) return { error: `${field} must be a number.` };
+    $set[field] = n;
+  }
+  if (input.includeStandardSeats !== undefined)
+    $set.includeStandardSeats = Boolean(input.includeStandardSeats);
+  if (input.includeResaleSeats !== undefined)
+    $set.includeResaleSeats = Boolean(input.includeResaleSeats);
+
+  if (input.eventType !== undefined) {
+    // Optional for eVenue — unlike Ticketmaster it does not gate scraping — but
+    // accepted so the dashboard's type filter and badges work across both.
+    if (input.eventType !== null && !isValidEventType(input.eventType)) {
+      return { error: `Invalid eventType. Must be one of: ${EVENT_TYPES.join(', ')}.` };
+    }
+    $set.eventType = input.eventType;
+  }
+
+  if (!Object.keys($set).length) {
+    return JSON.parse(JSON.stringify(currentEvent));
+  }
+
+  const updated = await EvenueEvent.findByIdAndUpdate(currentEvent._id, { $set }, {
+    new: true,
+    runValidators: true,
+  }).maxTimeMS(10000);
+
+  if (!updated) {
+    return { error: 'Failed to update event - event may have been deleted' };
+  }
+
+  return JSON.parse(JSON.stringify(updated));
+}
+
+/**
+ * Update a tickets.com event.
+ *
+ * Tickets.com events are stored in tc_events collection.
+ * Portal can update: Skip_Scraping, priceIncreasePercentage, eventType, Zone, and markup adjustments.
+ */
+async function updateTcEvent(
+  currentEvent: { _id: unknown },
+  updateData: Partial<Event> & { Skip_Scraping?: boolean; priceIncreasePercentage?: number }
+) {
+  const input = updateData as EvenueEventInput;
+  const $set: Record<string, unknown> = {};
+
+  if (input.Skip_Scraping !== undefined)
+    $set.Skip_Scraping = Boolean(input.Skip_Scraping);
+
+  if (input.priceIncreasePercentage !== undefined) {
+    const markup = Number(input.priceIncreasePercentage);
+    if (isNaN(markup) || markup < 0) {
+      return { error: 'Markup percentage must be a number, 0 or greater.' };
+    }
+    $set.priceIncreasePercentage = markup;
+  }
+
+  if (input.Zone !== undefined)
+    $set.Zone = String(input.Zone);
+
+  for (const field of EVENUE_ADJUSTMENT_FIELDS) {
+    if (input[field] === undefined) continue;
+    const n = Number(input[field]);
+    if (isNaN(n)) return { error: `${field} must be a number.` };
+    $set[field] = n;
+  }
+  if (input.includeStandardSeats !== undefined)
+    $set.includeStandardSeats = Boolean(input.includeStandardSeats);
+  if (input.includeResaleSeats !== undefined)
+    $set.includeResaleSeats = Boolean(input.includeResaleSeats);
+
+  if (input.eventType !== undefined) {
+    if (input.eventType !== null && !isValidEventType(input.eventType)) {
+      return { error: `Invalid eventType. Must be one of: ${EVENT_TYPES.join(', ')}.` };
+    }
+    $set.eventType = input.eventType;
+  }
+
+  if (!Object.keys($set).length) {
+    return JSON.parse(JSON.stringify(currentEvent));
+  }
+
+  const updated = await TcEvent.findByIdAndUpdate(currentEvent._id, { $set }, {
+    new: true,
+    runValidators: true,
+  }).maxTimeMS(10000);
+
+  if (!updated) {
+    return { error: 'Failed to update event - event may have been deleted' };
+  }
+
+  return JSON.parse(JSON.stringify(updated));
+}
+
 // Example of how to get an event by a different unique field, e.g., Event_ID
 /**
  * Retrieves a single event by its Event_ID.
@@ -458,10 +804,26 @@ export async function deleteEvent(eventId: string) {
   await dbConnect();
   try {
     // First, find the event to get its details before deletion
-    const eventToDelete = await Event.findById(eventId);
-    if (!eventToDelete) {
+    const found = await findEventAnywhere(eventId);
+    if (!found.doc) {
       return { message: 'Event not found', success: false };
     }
+
+    // eVenue: delete the row and stop. Its inventory is delisted by the
+    // scraper's sweep, which deletes the Mongo rows and sends the matching
+    // SeatScouts deletes together — doing the Mongo half here would leave the
+    // listings live with nothing left to reconcile them against.
+    if (found.isEvenue) {
+      const deleted = await EvenueEvent.findByIdAndDelete(eventId);
+      return {
+        message: 'Event deleted. Its inventory is delisted by the eVenue scraper on its next sweep.',
+        success: true,
+        deletedEvent: JSON.parse(JSON.stringify(deleted)),
+        deletedSeatGroups: 0,
+      };
+    }
+
+    const eventToDelete = found.doc;
 
     // Delete all associated consecutive seat groups first using Event_ID (not MongoDB _id)
     const seatDeletionResult = await deleteConsecutiveGroupsByEventId(eventToDelete.Event_ID);
@@ -498,11 +860,17 @@ export async function toggleCsvExportSetting(
 
   await dbConnect();
   try {
-    const updatedEvent = await Event.findByIdAndUpdate(
-      eventId,
-      { [field]: value },
-      { new: true, runValidators: true }
-    ).maxTimeMS(5000);
+    // Both rosters carry these toggles, so the switch works the same on an
+    // eVenue row as on a Ticketmaster one — it just lives in ev_events.
+    const found = await findEventAnywhere(eventId);
+    if (!found.doc) {
+      return { error: 'Event not found' };
+    }
+
+    const model = found.isEvenue ? EvenueEvent : Event;
+    const updatedEvent = await model
+      .findByIdAndUpdate(eventId, { [field]: value }, { new: true, runValidators: true })
+      .maxTimeMS(5000);
 
     if (!updatedEvent) {
       return { error: 'Event not found' };
