@@ -442,7 +442,32 @@ export async function stopLowSeatEvents(): Promise<{ stopped: number; eventIds: 
   }
 }
 
-export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0) {
+/**
+ * Options for callers that want rows rather than a file.
+ *
+ * The StubHub sync worker needs the same marked-up rows the CSV is built from,
+ * but only for the handful of events a drain actually touched — building the
+ * whole 600k-row book to push three changed listings is both slow and, because
+ * of how the worker compares hashes, unsafe if the result is reused across
+ * drains.
+ */
+export interface GenerateInventoryOptions {
+  /** Restrict to these events. Omit for the whole active book. */
+  mappingIds?: string[];
+  /**
+   * Skip the pre-export low-seat stop.
+   *
+   * That step writes — it disables events below the seat threshold — and is a
+   * CSV-cycle policy, not something a sync drain should trigger as a side effect
+   * several times a minute.
+   */
+  skipLowSeatStop?: boolean;
+}
+
+export async function generateInventoryCsv(
+  eventUpdateFilterMinutes: number = 0,
+  options: GenerateInventoryOptions = {}
+) {
   return withRetry(async () => {
     await dbConnect();
 
@@ -454,9 +479,11 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
     _venueTzCache.clear();
 
     // ── Stop low-seat events before generating CSV ──
-    const lowSeatResult = await stopLowSeatEvents();
-    if (lowSeatResult.stopped > 0) {
-      console.log(`[CSV] Pre-export: stopped ${lowSeatResult.stopped} low-seat event(s)`);
+    if (!options.skipLowSeatStop) {
+      const lowSeatResult = await stopLowSeatEvents();
+      if (lowSeatResult.stopped > 0) {
+        console.log(`[CSV] Pre-export: stopped ${lowSeatResult.stopped} low-seat event(s)`);
+      }
     }
 
     try {
@@ -474,9 +501,21 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
         console.log('Including all active events (Skip_Scraping: false)');
       }
 
+      // Scoping to specific events is safe for every filter applied downstream:
+      // exclusion rules and min-seat totals are computed per event and section, so
+      // narrowing the event set narrows the work without changing any row's
+      // outcome. Narrowing to individual ROWS would not be safe, which is why the
+      // scope is expressed as events.
+      if (options.mappingIds?.length) {
+        activeEventQuery.mapping_id = { $in: options.mappingIds };
+      }
+
       const activeEvents = await findActiveEventsBothSources(activeEventQuery);
 
-      console.log(`Found ${activeEvents.length} active events matching filter criteria`);
+      console.log(
+        `Found ${activeEvents.length} active events matching filter criteria` +
+        (options.mappingIds?.length ? ` (scoped to ${options.mappingIds.length} event(s))` : '')
+      );
 
       if (activeEvents.length === 0) {
         return { success: false, message: eventUpdateFilterMinutes > 0

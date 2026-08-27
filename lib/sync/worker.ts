@@ -20,19 +20,15 @@
  * two consumers, and makes "worker price equals CSV price" true by construction
  * rather than by assertion.
  *
- * The cost is that a drain regenerates the book, and the book is 627k rows on
- * ~360 active events. Running that aggregation on every pass would dominate the
- * cycle and put avoidable load on a database that is also serving the scrapers,
- * so the result is cached for EXPORT_CACHE_MS.
+ * Rows are built for ONLY the events a drain claimed, not the whole book.
  *
- * Staleness is bounded and harmless in the direction that matters. A price that
- * moved inside the cache window is pushed on the next drain, at most one window
- * late; it is never pushed *wrong*, because the cached rows are still the
- * exporter's own output. Set STUBHUB_EXPORT_CACHE_MS=0 to disable.
- *
- * The proper fix is to extract the row builder so it can run on just the events a
- * drain claimed. That is a refactor of a live exporter, so it is deliberately not
- * being done in the same change as everything else here.
+ * An earlier version cached the whole book for 60s instead. That was wrong, and
+ * not merely slow: the worker decides a row is already in sync by comparing the
+ * hash of its mapped payload against syncHash. Feed it a stale row and it hashes
+ * the OLD price, matches the OLD hash, and marks the row synced — silently
+ * discarding the change that made it dirty in the first place. The price would
+ * then stay wrong on StubHub until something else about that row happened to
+ * change. Scoping by event removes the staleness rather than bounding it.
  *
  * ── Why it drains rather than ticks ────────────────────────────────────────────
  *
@@ -73,34 +69,45 @@ const SKIP_ABORT_RATIO = Number(process.env.STUBHUB_SKIP_ABORT_RATIO ?? 0.9);
 /** Rows claimed per pass. Independent of batch size; a pass may send several batches. */
 const CLAIM_SIZE = Number(process.env.STUBHUB_CLAIM_SIZE ?? 500);
 
-/** How long the exporter's rows may be reused across drains. */
-const EXPORT_CACHE_MS = Number(process.env.STUBHUB_EXPORT_CACHE_MS ?? 60_000);
-
-let exportCache: { at: number; rows: InventoryRowInput[] } | null = null;
+/**
+ * How many listings may be updated concurrently on the single-call fast path.
+ *
+ * PATCH /inventory/{id} allows 12,880/min, so latency rather than budget is the
+ * binding constraint here — one round trip is ~300ms, and doing them one after
+ * another would make a 30-row event take ten seconds for no reason.
+ */
+const PATCH_CONCURRENCY = Number(process.env.STUBHUB_PATCH_CONCURRENCY ?? 8);
 
 /**
- * The exporter's rows, memoised.
+ * Build the exporter's rows for just these events.
  *
- * Deliberately keyed on nothing: there is one book, and the only question is how
- * fresh the copy is. A drain that finds the cache warm skips a 627k-row
- * aggregation entirely, which in steady state is most of them.
+ * Scoped rather than whole-book, and never reused across drains: see the note at
+ * the top of this file about why a cached book silently loses price changes.
  */
-async function currentRows(): Promise<{ rows: InventoryRowInput[] | null; error?: string }> {
-  if (exportCache && Date.now() - exportCache.at < EXPORT_CACHE_MS) {
-    return { rows: exportCache.rows };
-  }
-  const csv = await generateInventoryCsv(0);
-  if (!csv.success || !csv.rows) {
-    return { rows: null, error: csv.message ?? 'unknown' };
-  }
-  const rows = csv.rows as InventoryRowInput[];
-  exportCache = { at: Date.now(), rows };
-  return { rows };
+async function rowsForEvents(mappingIds: string[]): Promise<{ rows: InventoryRowInput[] | null; error?: string }> {
+  const csv = await generateInventoryCsv(0, {
+    mappingIds,
+    // A drain runs many times a minute; it must not keep re-triggering a policy
+    // step that disables events.
+    skipLowSeatStop: true,
+  });
+  if (!csv.success || !csv.rows) return { rows: null, error: csv.message ?? 'unknown' };
+  return { rows: csv.rows as InventoryRowInput[] };
 }
 
-/** Drop the memoised book — after a manual price edit, say. */
-export function invalidateExportCache(): void {
-  exportCache = null;
+/** Run tasks with bounded concurrency, preserving input order in the results. */
+async function pooled<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 export interface DrainResult {
@@ -206,9 +213,11 @@ async function processRows(
 ): Promise<{ created: number; updated: number; noop: number; skipped: number; failed: number; aborted: string | null }> {
   const out = { created: 0, updated: 0, noop: 0, skipped: 0, failed: 0, aborted: null as string | null };
 
-  // The exporter is the single source of the final price. Ask for everything and
-  // index it, then take only the rows we claimed.
-  const { rows: allRows, error } = await currentRows();
+  // The exporter is the single source of the final price. Build only the events
+  // this pass claimed — typically a handful, since a scrape cycle marks one
+  // event's rows dirty at a time.
+  const mappingIds = [...new Set(rows.map(r => r.mapping_id).filter(Boolean))];
+  const { rows: allRows, error } = await rowsForEvents(mappingIds);
   if (!allRows) {
     out.aborted = `could not build rows: ${error}`;
     return out;
@@ -318,9 +327,12 @@ async function processRows(
     const plan = planBatch(updates.length, 'update');
 
     if (plan.path === 'single' && updates.length <= SINGLE_CALL_THRESHOLD) {
-      for (const item of updates) {
-        const meta = byExternalId.get(item.externalId)!;
-        const outcome = await patchOne(client, item);
+      // Concurrent, not sequential: these are independent listings and the point
+      // of taking the single-call path at all is to land the change now.
+      const outcomes = await pooled(updates, PATCH_CONCURRENCY, item => patchOne(client, item));
+      for (let i = 0; i < updates.length; i++) {
+        const meta = byExternalId.get(updates[i].externalId)!;
+        const outcome = outcomes[i];
         if (outcome.ok) { await markSynced(meta.rowId, meta.hash); out.updated++; }
         else { await markFailed(meta.rowId, outcome.error!, meta.attempts); out.failed++; }
       }

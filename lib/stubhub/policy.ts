@@ -62,11 +62,21 @@ import { MAX_BATCH_ITEMS, SINGLE_CALL_THRESHOLD, type WriteOperation } from './l
 export const REAPPEARANCE_GRACE_MS = 15 * 60 * 1000;
 
 /**
- * Idle sleep when the queue is empty. Not a drain interval: the loop wakes on this
- * only to notice work it wasn't told about. When rows are pending it drains
- * continuously and never sleeps.
+ * Idle sleep when the queue is empty. Not a drain interval — when rows are
+ * pending the loop drains continuously and never sleeps, so this is only the
+ * delay before an idle worker notices new work.
+ *
+ * That makes it the floor on end-to-end latency, so it is set low. The check it
+ * gates is a single indexed find against the partial outbox index, which costs
+ * essentially nothing against a collection where almost no rows are pending; four
+ * of them a second is not a load anyone will measure.
+ *
+ * A MongoDB change stream would remove the floor entirely by pushing rather than
+ * polling, and Atlas supports it. That is the right upgrade if 250ms ever proves
+ * too slow, but it adds a connection to supervise and a resume-token to persist,
+ * and polling an indexed query is hard to beat for the money.
  */
-export const IDLE_POLL_MS = 2_000;
+export const IDLE_POLL_MS = Number(process.env.STUBHUB_IDLE_POLL_MS ?? 250);
 
 /** Backoff between polls of a submitted bulk batch, in ms, capped. */
 export const BULK_POLL_BACKOFF_MS = [250, 500, 1_000, 2_000, 4_000, 8_000] as const;
