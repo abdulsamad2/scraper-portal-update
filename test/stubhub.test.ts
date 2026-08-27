@@ -23,6 +23,7 @@ import { chooseWritePath, itemsPerMinute, MAX_BATCH_ITEMS, RATE_LIMITS, RECONCIL
 import { planBatch, resolveRemoval, REAPPEARANCE_GRACE_MS } from '../lib/stubhub/policy.ts';
 import { verifyEvent, clearEventCache } from '../lib/stubhub/eventVerifier.ts';
 import { outcomes as __testOutcomes } from '../lib/sync/bulkResults.ts';
+import { VERIFY_CAPACITY } from '../lib/sync/verify.ts';
 
 describe('resolveSplitType', () => {
   // Every case here appeared in the 1,537-row export, with its observed frequency.
@@ -504,5 +505,47 @@ describe('bulk result matching', () => {
     const map = __testOutcomes(summary);
     assert.equal(map.get('7')?.ok, false);
     assert.match(map.get('7')!.error!, /splitType=not allowed/);
+  });
+});
+
+describe('capacity model — what 3,000 events actually needs', () => {
+  // These are not aspirational numbers. They come from StubHub's stated limits
+  // and the measured production shape (627,525 rows across 363 active events),
+  // and they decide the transport rather than the other way round.
+  const ROWS_PER_EVENT = 627525 / 363;
+  const CYCLE_S = 120;
+
+  const patchPerSecond = 12_880 / 60;
+  const bulkSubmitPerSecond = (760 * 250) / 60;
+  const bulkStatusPerSecond = (100 * 250) / 60;
+  const seekPerSecond = (VERIFY_CAPACITY.seekPerMinute * VERIFY_CAPACITY.idsPerCall) / 60;
+
+  test('PATCH alone cannot carry 3,000 events', () => {
+    const book = ROWS_PER_EVENT * 3000;
+    const onePercentPerCycle = (book * 0.01) / CYCLE_S;
+    assert.equal(onePercentPerCycle > patchPerSecond, true,
+      'even a 1% change rate exceeds 215 items/s, so single-call cannot be the only path');
+  });
+
+  test('polling bulk status would cap the system below PATCH-times-two', () => {
+    assert.equal(Math.round(bulkStatusPerSecond), 417);
+    assert.equal(bulkStatusPerSecond < bulkSubmitPerSecond / 7, true,
+      'confirmation, not writing, is what the status endpoint limits');
+  });
+
+  test('verifying with seek lifts the ceiling roughly sixfold', () => {
+    assert.equal(Math.round(seekPerSecond), 2333);
+    assert.equal(Math.round(seekPerSecond / bulkStatusPerSecond), 6);
+  });
+
+  test('the resulting ceiling is a real number we can quote', () => {
+    // Verification is still marginally the binding constraint (2,333/s against
+    // bulk submit's 3,167/s) — worth knowing, because it means a larger seek
+    // chunk or a higher seek quota buys throughput, while more write budget
+    // would not.
+    const ceiling = Math.min(bulkSubmitPerSecond, seekPerSecond);
+    assert.equal(Math.round(ceiling), 2333);
+    assert.equal(Math.round(ceiling * CYCLE_S), 280_000,
+      'about 280k changes per 2-minute cycle, or ~5.4% of a 5.2M-row book');
   });
 });

@@ -727,6 +727,92 @@ export async function generateInventoryCsv(
   }, 'CSV Generation');
 }
 
+/**
+ * Build export rows for a specific set of documents, by _id.
+ *
+ * The sync worker needs the marked-up rows for the handful of listings a drain
+ * claimed, not for the whole event. Going through generateInventoryCsv cost ~4.7
+ * seconds per pass — it aggregates every row of every event involved, then throws
+ * almost all of it away — and that single call was the entire latency budget for
+ * "a price change reaches StubHub". This does the same work against the claimed
+ * ids only, which is an _id index lookup.
+ *
+ * It deliberately reuses processBatch, buildExclusionFilter and isBlockedVenueState
+ * rather than reimplementing them. The whole point is that the worker prices a row
+ * at exactly what the CSV would have said; a second implementation of the markup
+ * chain would drift and nobody would notice until the prices were wrong.
+ *
+ * Returns null when the result cannot be trusted, and the caller falls back to the
+ * full path. That happens for section-mode min-seat, which decides whether a row
+ * qualifies by summing every row in its section across the event — a question a
+ * subset genuinely cannot answer.
+ */
+export async function generateInventoryRowsForIds(
+  docIds: unknown[]
+): Promise<{ rows: CsvRow[] } | { rows: null; reason: string }> {
+  await dbConnect();
+  if (!docIds.length) return { rows: [] };
+
+  const schedulerSettings = await SchedulerSettings.findOne({}).lean() as any;
+  const minSeatFilter: number = schedulerSettings?.minSeatFilter ?? 0;
+  const minSeatFilterMode: 'section' | 'row' = schedulerSettings?.minSeatFilterMode ?? 'section';
+
+  if (minSeatFilter > 0 && minSeatFilterMode === 'section') {
+    return { rows: null, reason: 'section-mode min-seat needs the whole event' };
+  }
+
+  const match = { _id: { $in: docIds } };
+  const docs: ConsecutiveGroupDocument[] = await ConsecutiveGroup.aggregate(
+    [
+      { $match: match },
+      ...unionAllInventorySources(match),
+      { $project: CSV_PROJECTION },
+    ] as PipelineStage[],
+    { allowDiskUse: true, maxTimeMS: 60000 }
+  );
+  if (docs.length === 0) return { rows: [] };
+
+  const mappingIds = [...new Set(docs.map(d => d.mapping_id).filter(Boolean))] as string[];
+  const eventDocs = await findEventDetailsBothSources(mappingIds);
+  const eventDetailsMap = new Map(eventDocs.map(ev => [ev.mapping_id, {
+    url: ev.URL || '',
+    stdAdj: ev.standardMarkupAdjustment ?? 0,
+    resaleAdj: ev.resaleMarkupAdjustment ?? 0,
+    brokerAdj: ev.brokerMarkupAdjustment ?? 0,
+    defaultPct: ev.priceIncreasePercentage ?? 0,
+    includeStandard: ev.includeStandardSeats !== false,
+    includeResale: ev.includeResaleSeats !== false,
+  }]));
+
+  // Same enrichment and inclusion toggles as the chunk loop above.
+  const enriched: ConsecutiveGroupDocument[] = [];
+  for (const doc of docs) {
+    const evData = doc.mapping_id ? eventDetailsMap.get(doc.mapping_id) : undefined;
+    const isStandard = doc.inventory?.splitType === 'NEVERLEAVEONE';
+    if (isStandard && evData && !evData.includeStandard) continue;
+    if (!isStandard && evData && !evData.includeResale) continue;
+    doc.event_url = evData?.url || '';
+    doc.event_std_adj = evData?.stdAdj ?? 0;
+    doc.event_resale_adj = evData?.resaleAdj ?? 0;
+    doc.event_broker_adj = evData?.brokerAdj ?? 0;
+    doc.event_default_pct = evData?.defaultPct ?? 0;
+    enriched.push(doc);
+  }
+  if (enriched.length === 0) return { rows: [] };
+
+  const exclusionFilter = await buildExclusionFilter(mappingIds);
+  const rowModeMinSeat = minSeatFilter > 0 && minSeatFilterMode === 'row'
+    ? (r: CsvRow) => r.quantity > minSeatFilter
+    : null;
+
+  const produced = await processBatch(enriched);
+  const rows = produced.filter(r =>
+    !isBlockedVenueState(r) && exclusionFilter(r) && (!rowModeMinSeat || rowModeMinSeat(r))
+  );
+
+  return { rows };
+}
+
 // Interface for the document structure from MongoDB aggregation
 interface ConsecutiveGroupDocument {
   _id?: string;

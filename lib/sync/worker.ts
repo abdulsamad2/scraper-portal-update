@@ -20,7 +20,8 @@
  * two consumers, and makes "worker price equals CSV price" true by construction
  * rather than by assertion.
  *
- * Rows are built for ONLY the events a drain claimed, not the whole book.
+ * Rows are built for ONLY the documents a drain claimed — not the whole book, and
+ * not even the whole event.
  *
  * An earlier version cached the whole book for 60s instead. That was wrong, and
  * not merely slow: the worker decides a row is already in sync by comparing the
@@ -39,7 +40,7 @@
  * tuning a window.
  */
 
-import { generateInventoryCsv } from '@/actions/csvActions';
+import { generateInventoryCsv, generateInventoryRowsForIds } from '@/actions/csvActions';
 import { StubHubClient, StubHubError, loadConfig } from '@/lib/stubhub/client.ts';
 import { mapRow, type InventoryRowInput } from '@/lib/stubhub/mapRow.ts';
 import { verifyEvent } from '@/lib/stubhub/eventVerifier.ts';
@@ -51,9 +52,10 @@ import {
   queueDepth, MAX_ATTEMPTS,
 } from './queue.ts';
 import {
-  submitCreates, patchOne, delistOne, deleteOne,
+  submitCreates, submitUpdates, patchOne, delistOne, deleteOne,
   type CreateItem, type UpdateItem, type ItemOutcome,
 } from './batcher.ts';
+import { verifyPrices } from './verify.ts';
 import { acquireLease, releaseLease, makeHolderId, RENEW_INTERVAL_MS } from './leader.ts';
 import { getStubhubSyncSettings, StubhubSyncSettings } from '@/models/stubhubSyncModel.js';
 import type { ApiMarketplace } from '@/lib/stubhub/types.ts';
@@ -83,8 +85,21 @@ export async function configuredClient(): Promise<{ client: StubHubClient; marke
  */
 const SKIP_ABORT_RATIO = Number(process.env.STUBHUB_SKIP_ABORT_RATIO ?? 0.9);
 
-/** Rows claimed per pass. Independent of batch size; a pass may send several batches. */
-const CLAIM_SIZE = Number(process.env.STUBHUB_CLAIM_SIZE ?? 500);
+/**
+ * Rows claimed per pass.
+ *
+ * Smaller than it looks like it should be, deliberately. The loop drains
+ * continuously — a pass that finds more work immediately runs again without
+ * sleeping — so claim size does not limit throughput, only how long one pass
+ * takes. And pass duration is the latency a single price change experiences when
+ * it arrives mid-backfill.
+ *
+ * Measured against the live collection: fetching claimed documents costs ~150ms
+ * for a handful, 630ms for 100, and 2.4s for 500. A hundred keeps the worst case
+ * under a second while a thousand-row backfill still drains in the same total
+ * time, just across more passes.
+ */
+const CLAIM_SIZE = Number(process.env.STUBHUB_CLAIM_SIZE ?? 100);
 
 /**
  * How many listings may be updated concurrently on the single-call fast path.
@@ -96,12 +111,26 @@ const CLAIM_SIZE = Number(process.env.STUBHUB_CLAIM_SIZE ?? 500);
 const PATCH_CONCURRENCY = Number(process.env.STUBHUB_PATCH_CONCURRENCY ?? 16);
 
 /**
- * Build the exporter's rows for just these events.
+ * Build the exporter's rows for exactly the documents this pass claimed.
  *
- * Scoped rather than whole-book, and never reused across drains: see the note at
- * the top of this file about why a cached book silently loses price changes.
+ * This is the latency budget. Going through generateInventoryCsv — even scoped to
+ * the events involved — aggregates every row of those events and discards almost
+ * all of it: ~4.7 seconds to price a handful of listings. Fetching the claimed
+ * ids directly is an _id index lookup.
+ *
+ * Falls back to the scoped export when the targeted path cannot answer
+ * correctly, which today means only section-mode min-seat: whether a row
+ * qualifies depends on the total across its whole section, which a subset cannot
+ * see. Correctness first, speed when it is free.
  */
-async function rowsForEvents(mappingIds: string[]): Promise<{ rows: InventoryRowInput[] | null; error?: string }> {
+async function rowsForClaimed(
+  docIds: unknown[],
+  mappingIds: string[]
+): Promise<{ rows: InventoryRowInput[] | null; error?: string }> {
+  const targeted = await generateInventoryRowsForIds(docIds);
+  if (targeted.rows) return { rows: targeted.rows as InventoryRowInput[] };
+
+  console.log(`[stubhub:worker] targeted build unavailable (${targeted.reason}) — using the scoped export`);
   const csv = await generateInventoryCsv(0, {
     mappingIds,
     // A drain runs many times a minute; it must not keep re-triggering a policy
@@ -241,7 +270,7 @@ async function processRows(
   // this pass claimed — typically a handful, since a scrape cycle marks one
   // event's rows dirty at a time.
   const mappingIds = [...new Set(rows.map(r => r.mapping_id).filter(Boolean))];
-  const { rows: allRows, error } = await rowsForEvents(mappingIds);
+  const { rows: allRows, error } = await rowsForClaimed(rows.map(r => r._id), mappingIds);
   if (!allRows) {
     out.aborted = `could not build rows: ${error}`;
     return out;
@@ -381,6 +410,28 @@ async function processRows(
   }
 
   if (updates.length > 0) {
+    // Transport is chosen by depth, because the two options fail in opposite
+    // directions and the crossover is real.
+    //
+    //   PATCH one-by-one   applies immediately, no polling, but caps at
+    //                      12,880/min = 215 items/s. Below that it is strictly
+    //                      better: lower latency and a direct answer.
+    //
+    //   bulk               3,167 items/s of submit capacity, but confirming it
+    //                      through GET /inventory/bulk/{id} caps the system at
+    //                      100 polls/min = 417 items/s, which is *worse* than
+    //                      PATCH unless the confirmation moves elsewhere. It
+    //                      does: seek allows 700/min over arbitrary id lists,
+    //                      so verification stops being the constraint and the
+    //                      bulk submit limit becomes the ceiling.
+    //
+    // So: small change sets take PATCH and land in one round trip. Large ones
+    // take bulk and are confirmed by reading the listings back, which is also a
+    // stronger check than a status code — it proves the price actually applied,
+    // which this integration has twice found is not implied by acceptance.
+    if (updates.length > BULK_UPDATE_THRESHOLD) {
+      await pushUpdatesInBulk(client, updates, byExternalId, out);
+    } else {
     // Updates go one at a time, concurrently, rather than through bulk.
     //
     // Bulk update works — a batch settles in about six seconds. What did not work
@@ -403,6 +454,7 @@ async function processRows(
       const outcome = outcomes[i];
       if (outcome.ok) { await markSynced(meta.rowId, meta.hash); out.updated++; }
       else { await markFailed(meta.rowId, outcome.error!, meta.attempts); out.failed++; }
+    }
     }
   }
 
@@ -494,6 +546,78 @@ export async function recordDrain(result: DrainResult): Promise<void> {
     { upsert: true }
   );
 }
+
+/**
+ * Above this many pending updates, batching wins.
+ *
+ * Roughly where PATCH's 215 items/s stops keeping up with a drain that has work
+ * queued behind it. Below it, a batch's submit-and-verify round trip costs more
+ * latency than it saves requests.
+ */
+const BULK_UPDATE_THRESHOLD = Number(process.env.STUBHUB_BULK_THRESHOLD ?? 40);
+
+/**
+ * Push updates as bulk batches, then confirm by reading the listings back.
+ *
+ * The confirmation deliberately does not poll bulk status. That endpoint is
+ * capped at 100/min and would make itself the bottleneck; seek allows 700/min
+ * over arbitrary id lists and answers a stronger question — not "did the batch
+ * finish" but "does the listing hold the price we sent".
+ */
+async function pushUpdatesInBulk(
+  client: StubHubClient,
+  updates: UpdateItem[],
+  meta: Map<string, { rowId: unknown; hash: string; attempts: number }>,
+  out: { updated: number; failed: number }
+): Promise<void> {
+  for (let i = 0; i < updates.length; i += 250) {
+    const chunk = updates.slice(i, i + 250);
+
+    try {
+      await submitUpdates(client, chunk);
+    } catch (error) {
+      const reason = error instanceof StubHubError ? error.summary : String(error);
+      console.error(`[stubhub:worker] update batch rejected: ${reason}`);
+      for (const item of chunk) {
+        const m = meta.get(item.externalId)!;
+        await markFailed(m.rowId, reason, m.attempts);
+        out.failed++;
+      }
+      continue;
+    }
+
+    // Bulk is asynchronous — a batch settles in a few seconds — so give it a
+    // moment before reading back, rather than recording a failure for work that
+    // simply has not happened yet.
+    await sleep(BULK_SETTLE_MS);
+
+    const verdicts = await verifyPrices(
+      client,
+      chunk.map(item => ({
+        listingId: item.listingId,
+        expectedPrice: Number(item.payload.prices?.[0]?.listPrice ?? item.payload.prices?.[0]?.allInPrice ?? 0),
+      }))
+    );
+
+    for (const item of chunk) {
+      const m = meta.get(item.externalId)!;
+      const verdict = verdicts.get(item.listingId);
+      if (verdict?.ok) {
+        await markSynced(m.rowId, m.hash);
+        out.updated++;
+      } else {
+        // Left dirty rather than failed when merely unverified: the row keeps its
+        // retry budget and the next pass re-sends, which is safe because every
+        // write here is idempotent.
+        await markFailed(m.rowId, verdict?.detail ?? 'unverified', m.attempts);
+        out.failed++;
+      }
+    }
+  }
+}
+
+/** How long to let a bulk batch settle before reading the listings back. */
+const BULK_SETTLE_MS = Number(process.env.STUBHUB_BULK_SETTLE_MS ?? 7_000);
 
 /** Snapshot for the dashboard. */
 export async function syncStatus() {
