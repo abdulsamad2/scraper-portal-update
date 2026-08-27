@@ -38,6 +38,7 @@ import type {
 import { resolveEventId, type SkipReason } from './eventResolver.ts';
 import { resolveSplitType } from './splitType.ts';
 import { resolveDeliveryType } from './deliveryType.ts';
+import { ASK_PRICE_FIELD } from './price.ts';
 
 /**
  * Structurally identical to CsvRow in actions/csvActions.tsx. Declared here rather
@@ -78,13 +79,10 @@ export interface MapOptions {
    */
   marketplaces?: ApiMarketplace[];
   /**
-   * Whether our marked-up ask goes in `listPrice` or `allInPrice`.
-   *
-   * OPEN — StubHub question P4. The spec calls listPrice "unit price" and
-   * allInPrice "the broadcasted price with taxes / fees", which does not settle
-   * whether listPrice is the buyer-facing ask or our net proceeds. Sending the
-   * wrong one mis-prices the entire book on day one, so it is a switch with a
-   * documented default rather than a silent assumption.
+   * Which field carries our marked-up ask. Defaults to listPrice; see price.ts
+   * for the evidence that this is correct and for comparePriceEcho, which proves
+   * it against a real listing on the first sandbox write rather than leaving it
+   * as an assumption.
    */
   priceField?: 'listPrice' | 'allInPrice';
   currencyCode?: string;
@@ -92,7 +90,7 @@ export interface MapOptions {
 
 const DEFAULTS: Required<MapOptions> = {
   marketplaces: ['StubHub'],
-  priceField: 'listPrice',
+  priceField: ASK_PRICE_FIELD,
   currencyCode: 'USD',
 };
 

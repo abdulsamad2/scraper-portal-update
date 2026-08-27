@@ -18,6 +18,7 @@ import { resolveDeliveryType } from '../lib/stubhub/deliveryType.ts';
 import { resolveEventId } from '../lib/stubhub/eventResolver.ts';
 import { payloadHash, stableStringify, deriveBatchId } from '../lib/stubhub/hash.ts';
 import { mapRow, type InventoryRowInput } from '../lib/stubhub/mapRow.ts';
+import { comparePriceEcho, ASK_PRICE_FIELD } from '../lib/stubhub/price.ts';
 
 describe('resolveSplitType', () => {
   // Every case here appeared in the 1,537-row export, with its observed frequency.
@@ -258,5 +259,50 @@ describe('mapRow', () => {
 
   test('is total — malformed input degrades instead of throwing', () => {
     assert.doesNotThrow(() => mapRow({ ...base, quantity: 0, in_hand_date: 'not-a-date' }));
+  });
+});
+
+describe('price echo verification', () => {
+  const listing = (listPrice: number | null, allInPrice: number | null) => ({
+    id: 1146693166,
+    listingPricesByMarketplace: [
+      { marketplaceName: 'StubHub' as const, listPrice, allInPrice, marketplaceMarkup: null },
+    ],
+  });
+
+  test('matching echo passes and measures the buyer-fee load', () => {
+    // Shape taken from live sandbox listing 1146693166.
+    const r = comparePriceEcho(120, listing(120, 120));
+    assert.equal(r.match, true);
+    assert.equal(r.feeRatio, 0);
+    assert.match(r.detail, /price held at 120/);
+  });
+
+  test('a fee-bearing echo still matches — allInPrice is derived, not our input', () => {
+    const r = comparePriceEcho(120, listing(120, 138));
+    assert.equal(r.match, true);
+    assert.equal(Math.round(r.feeRatio! * 100), 15);
+  });
+
+  test('an inflated listPrice fails loudly and names the likely cause', () => {
+    const r = comparePriceEcho(120, listing(132, 132));
+    assert.equal(r.match, false);
+    assert.match(r.detail, /read\s+as a base rather than the ask|revisit ASK_PRICE_FIELD/);
+  });
+
+  test('a missing marketplace entry is a failure, not a silent pass', () => {
+    const r = comparePriceEcho(120, { id: 1, listingPricesByMarketplace: [] });
+    assert.equal(r.match, false);
+    assert.match(r.detail, /no StubHub price echoed back/);
+  });
+
+  test('mapRow sends the ask in the field price.ts nominates', () => {
+    const r = mapRow({
+      inventory_id: 1, event_id: '159262123', quantity: 2, section: 'A', row: 'B',
+      cost: 100, list_price: 130,
+    });
+    assert.equal(r.ok, true);
+    if (!r.ok) return;
+    assert.equal((r.update.prices![0] as unknown as Record<string, unknown>)[ASK_PRICE_FIELD], 130);
   });
 });
