@@ -335,3 +335,90 @@ export async function queueDepth(): Promise<{
     oldestPendingAt: (oldest as LeanRowDoc | null)?.inventory?.syncPendingSince ?? null,
   };
 }
+
+/**
+ * Rows that exhausted their retries, with the reason.
+ *
+ * The single most useful thing on the dashboard during a cutover. A count of
+ * failures tells you something is wrong; the actual API message tells you which
+ * field, which is usually enough to fix it without reading a log.
+ */
+export async function recentFailures(limit = 20): Promise<Array<{
+  inventoryId: number; mappingId: string; section: string; row: string;
+  error: string; attempts: number;
+}>> {
+  await dbConnect();
+  const docs = await ConsecutiveGroup.find(
+    { 'inventory.syncState': { $in: ['failed', 'skipped'] } },
+    {
+      mapping_id: 1, section: 1, row: 1,
+      'inventory.inventoryId': 1, 'inventory.syncError': 1, 'inventory.syncAttempts': 1,
+    }
+  )
+    .sort({ updatedAt: -1 })
+    .limit(limit)
+    .lean();
+
+  return (docs as unknown as Array<LeanRowDoc & {
+    section?: string; row?: string;
+    inventory?: { syncError?: string };
+  }>).map(d => ({
+    inventoryId: d.inventory?.inventoryId ?? 0,
+    mappingId: d.mapping_id ?? '',
+    section: d.section ?? '',
+    row: d.row ?? '',
+    error: (d.inventory as { syncError?: string } | undefined)?.syncError ?? '',
+    attempts: d.inventory?.syncAttempts ?? 0,
+  }));
+}
+
+/**
+ * Why rows were skipped, grouped.
+ *
+ * Skips are not failures — a row with no StubHub event id is correctly ignored
+ * rather than retried — but a rising count means a data problem upstream, and the
+ * grouping says which one without anyone grepping.
+ */
+export async function skipBreakdown(): Promise<Array<{ reason: string; count: number }>> {
+  await dbConnect();
+  const rows = await ConsecutiveGroup.aggregate([
+    { $match: { 'inventory.syncState': 'skipped' } },
+    // The reason is stored as "<code>: <detail>"; the code is the useful half.
+    { $project: { reason: { $arrayElemAt: [{ $split: ['$inventory.syncError', ':'] }, 0] } } },
+    { $group: { _id: '$reason', count: { $sum: 1 } } },
+    { $sort: { count: -1 } },
+    { $limit: 10 },
+  ]);
+  return rows.map((r: { _id: string | null; count: number }) => ({
+    reason: r._id || 'unknown',
+    count: r.count,
+  }));
+}
+
+/**
+ * Pending work grouped by event.
+ *
+ * During a live test this answers the question you actually have — "is it keeping
+ * up with the scraper, and on which events is it behind" — which a single queue
+ * depth cannot.
+ */
+export async function pendingByEvent(limit = 10): Promise<Array<{
+  mappingId: string; count: number; oldest: Date | null;
+}>> {
+  await dbConnect();
+  const rows = await ConsecutiveGroup.aggregate([
+    { $match: { 'inventory.syncPendingSince': { $exists: true } } },
+    { $group: {
+        _id: '$mapping_id',
+        count: { $sum: 1 },
+        oldest: { $min: '$inventory.syncPendingSince' },
+    } },
+    { $sort: { count: -1 } },
+    { $limit: limit },
+  ]);
+  return rows.map((r: { _id: string; count: number; oldest: Date }) => ({
+    mappingId: r._id ?? '',
+    count: r.count,
+    oldest: r.oldest ?? null,
+  }));
+}
