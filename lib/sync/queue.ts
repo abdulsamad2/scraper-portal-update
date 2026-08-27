@@ -215,6 +215,38 @@ export async function claimTombstones(limit: number, now = new Date()): Promise<
  * rather than sitting in it marked done.
  */
 export async function markSynced(id: unknown, hash: string, listingId?: string): Promise<void> {
+  // A synced row must name the listing it is synced to.
+  //
+  // 'synced' means "StubHub holds this and we have checked" — it is the state
+  // that stops a row being retried, and the hash gate skips it thereafter. A row
+  // that reaches it without a listing id is therefore permanently done and
+  // permanently absent from the marketplace, which is the worst outcome this
+  // system can produce: silent, self-concealing loss. 288 rows ended up here.
+  //
+  // The queue cannot tell how it happened, but it can refuse to record the
+  // contradiction, and sending the row back to be created is both safe and
+  // self-correcting.
+  if (!listingId) {
+    const existing = await ConsecutiveGroup.findOne(
+      { _id: id },
+      { 'inventory.stubhubListingId': 1 }
+    ).lean() as { inventory?: { stubhubListingId?: string | null } } | null;
+
+    if (!existing?.inventory?.stubhubListingId) {
+      await ConsecutiveGroup.updateOne(
+        { _id: id },
+        {
+          $set: {
+            'inventory.syncState': 'dirty',
+            'inventory.syncPendingSince': new Date(),
+            'inventory.syncError': 'refused to mark synced with no listing id',
+          },
+          $unset: { 'inventory.syncLeaseUntil': '', 'inventory.syncHash': '' },
+        }
+      );
+      return;
+    }
+  }
   await ConsecutiveGroup.updateOne(
     { _id: id },
     {
