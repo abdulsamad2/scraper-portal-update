@@ -1,0 +1,337 @@
+/**
+ * The outbox queue: claiming work, and recording what happened to it.
+ *
+ * This is the only module that mutates syncState. Everything else reads it or
+ * asks this to change it, which keeps the state machine in one file rather than
+ * scattered across whatever happened to be convenient.
+ *
+ * Rows and tombstones are two separate queues because they are two separate
+ * lifecycles: a row is created then repeatedly updated, a tombstone is created
+ * once and resolved once. Forcing them into one collection would mean either a
+ * discriminator on every query or a soft-delete flag on every row, and both cost
+ * more than the small duplication here.
+ *
+ * ── Claiming ───────────────────────────────────────────────────────────────────
+ *
+ * A leader lease already guarantees one drain loop, so claiming does not have to
+ * defend against a stampede. It still takes a lease per row, for a different
+ * reason: if the worker dies mid-batch, those rows must become claimable again
+ * without anyone diagnosing the crash or running a cleanup job. The lease expires
+ * and the next drain picks them up.
+ *
+ * Claims are ordered by event_date ascending. If the API cannot absorb everything
+ * — or a backlog builds after an outage — what sells soonest goes first. Sorting
+ * by when the row was marked dirty would be fairer and commercially wrong.
+ */
+
+import dbConnect from '@/lib/dbConnect';
+import { ConsecutiveGroup } from '@/models/seatModel.js';
+import { InventoryTombstone } from '@/models/inventoryTombstoneModel.js';
+
+/** How long a claimed row stays claimed before it can be picked up again. */
+export const CLAIM_TTL_MS = 5 * 60 * 1000;
+
+/** Attempts before a row is parked as failed and stops consuming budget. */
+export const MAX_ATTEMPTS = 5;
+
+/** Shape of the lean documents the claim queries return. */
+interface LeanRowDoc {
+  _id: unknown;
+  mapping_id?: string;
+  event_date?: Date;
+  inventory?: {
+    inventoryId?: number;
+    stubhubListingId?: string;
+    syncState?: string;
+    syncHash?: string;
+    syncAttempts?: number;
+    syncPendingSince?: Date;
+  };
+}
+
+interface LeanTombstoneDoc {
+  _id: unknown;
+  inventoryId: number;
+  stubhubListingId?: string | null;
+  reason: string;
+  createdAt: Date;
+  delistedAt?: Date | null;
+  syncAttempts?: number;
+}
+
+export interface ClaimedRow {
+  _id: unknown;
+  mapping_id: string;
+  event_date: Date;
+  inventoryId: number;
+  stubhubListingId: string | null;
+  syncState: string;
+  syncHash: string | null;
+  syncAttempts: number;
+}
+
+export interface ClaimedTombstone {
+  _id: unknown;
+  inventoryId: number;
+  stubhubListingId: string | null;
+  reason: string;
+  createdAt: Date;
+  delistedAt: Date | null;
+  syncAttempts: number;
+}
+
+/**
+ * Claim up to `limit` rows needing a push.
+ *
+ * Two steps rather than one findAndModify loop: select the ids, then stamp them
+ * in a single updateMany. Mongo has no atomic "update the first N matching", and
+ * a findOneAndUpdate loop would be one round trip per row — which is exactly the
+ * per-row latency the batching design exists to avoid.
+ *
+ * The stamp re-checks the lease in its filter, so even without the leader lease
+ * two claimers could not both take the same row.
+ */
+export async function claimRows(limit: number, now = new Date()): Promise<ClaimedRow[]> {
+  await dbConnect();
+
+  const candidates = await ConsecutiveGroup.find(
+    {
+      'inventory.syncPendingSince': { $exists: true },
+      'inventory.syncAttempts': { $lt: MAX_ATTEMPTS },
+      $or: [
+        { 'inventory.syncLeaseUntil': { $exists: false } },
+        { 'inventory.syncLeaseUntil': { $lt: now } },
+      ],
+    },
+    {
+      _id: 1,
+      mapping_id: 1,
+      event_date: 1,
+      'inventory.inventoryId': 1,
+      'inventory.stubhubListingId': 1,
+      'inventory.syncState': 1,
+      'inventory.syncHash': 1,
+      'inventory.syncAttempts': 1,
+    }
+  )
+    .sort({ event_date: 1 })
+    .limit(limit)
+    .lean();
+
+  if (candidates.length === 0) return [];
+
+  const docs = candidates as unknown as LeanRowDoc[];
+  const ids = docs.map(c => c._id);
+  const leaseUntil = new Date(now.getTime() + CLAIM_TTL_MS);
+
+  await ConsecutiveGroup.updateMany(
+    {
+      _id: { $in: ids },
+      $or: [
+        { 'inventory.syncLeaseUntil': { $exists: false } },
+        { 'inventory.syncLeaseUntil': { $lt: now } },
+      ],
+    },
+    { $set: { 'inventory.syncLeaseUntil': leaseUntil } }
+  );
+
+  return docs.map(c => ({
+    _id: c._id,
+    mapping_id: c.mapping_id ?? '',
+    event_date: c.event_date ?? new Date(0),
+    inventoryId: c.inventory?.inventoryId ?? 0,
+    stubhubListingId: c.inventory?.stubhubListingId ?? null,
+    syncState: c.inventory?.syncState ?? 'pending',
+    syncHash: c.inventory?.syncHash ?? null,
+    syncAttempts: c.inventory?.syncAttempts ?? 0,
+  }));
+}
+
+/** Same, for removals. */
+export async function claimTombstones(limit: number, now = new Date()): Promise<ClaimedTombstone[]> {
+  await dbConnect();
+
+  const candidates = await InventoryTombstone.find({
+    syncState: { $in: ['pending', 'deleting'] },
+    syncAttempts: { $lt: MAX_ATTEMPTS },
+    $or: [{ syncLeaseUntil: { $exists: false } }, { syncLeaseUntil: { $lt: now } }],
+  })
+    .sort({ createdAt: 1 })
+    .limit(limit)
+    .lean();
+
+  if (candidates.length === 0) return [];
+
+  const docs = candidates as unknown as LeanTombstoneDoc[];
+  const leaseUntil = new Date(now.getTime() + CLAIM_TTL_MS);
+  await InventoryTombstone.updateMany(
+    { _id: { $in: docs.map(c => c._id) } },
+    { $set: { syncLeaseUntil: leaseUntil } }
+  );
+
+  return docs.map(c => ({
+    _id: c._id,
+    inventoryId: c.inventoryId,
+    stubhubListingId: c.stubhubListingId ?? null,
+    reason: c.reason,
+    createdAt: c.createdAt,
+    delistedAt: c.delistedAt ?? null,
+    syncAttempts: c.syncAttempts ?? 0,
+  }));
+}
+
+/**
+ * A row is now in sync.
+ *
+ * Unsetting syncPendingSince is what removes it from the queue: the outbox index
+ * is partial on that field's presence, so a synced row leaves the index entirely
+ * rather than sitting in it marked done.
+ */
+export async function markSynced(id: unknown, hash: string, listingId?: string): Promise<void> {
+  await ConsecutiveGroup.updateOne(
+    { _id: id },
+    {
+      $set: {
+        'inventory.syncState': 'synced',
+        'inventory.syncHash': hash,
+        'inventory.syncedAt': new Date(),
+        'inventory.syncAttempts': 0,
+        ...(listingId ? { 'inventory.stubhubListingId': listingId } : {}),
+      },
+      $unset: {
+        'inventory.syncPendingSince': '',
+        'inventory.syncLeaseUntil': '',
+        'inventory.syncError': '',
+        'inventory.syncBatchId': '',
+      },
+    }
+  );
+}
+
+/**
+ * A listing exists but has no price yet.
+ *
+ * Create carries no price field, so this state is real rather than an artefact —
+ * and it stays in the queue deliberately. The next drain sees a row with a
+ * listing id and no matching hash and issues the price update, which is also how
+ * a crash between the two halves of a create recovers by itself.
+ */
+export async function markCreated(id: unknown, listingId: string): Promise<void> {
+  await ConsecutiveGroup.updateOne(
+    { _id: id },
+    {
+      $set: {
+        'inventory.syncState': 'created',
+        'inventory.stubhubListingId': listingId,
+        'inventory.syncPendingSince': new Date(),
+      },
+      $unset: { 'inventory.syncLeaseUntil': '' },
+    }
+  );
+}
+
+/**
+ * Record a failure and either return the row to the queue or park it.
+ *
+ * Parking matters: a row that can never succeed — a malformed value, an event
+ * StubHub rejects — would otherwise be retried forever, consuming budget that
+ * working rows need. It stays visible as `failed` with its reason rather than
+ * being deleted or silently ignored.
+ */
+export async function markFailed(id: unknown, error: string, attempts: number): Promise<void> {
+  const exhausted = attempts + 1 >= MAX_ATTEMPTS;
+  await ConsecutiveGroup.updateOne(
+    { _id: id },
+    {
+      $set: {
+        'inventory.syncState': exhausted ? 'failed' : 'dirty',
+        'inventory.syncError': error.slice(0, 1000),
+        'inventory.syncAttempts': attempts + 1,
+      },
+      $unset: { 'inventory.syncLeaseUntil': '' },
+    }
+  );
+}
+
+/** A row we cannot represent at all — no usable StubHub event id, typically. */
+export async function markSkipped(id: unknown, reason: string): Promise<void> {
+  await ConsecutiveGroup.updateOne(
+    { _id: id },
+    {
+      $set: { 'inventory.syncState': 'skipped', 'inventory.syncError': reason.slice(0, 1000) },
+      $unset: { 'inventory.syncPendingSince': '', 'inventory.syncLeaseUntil': '' },
+    }
+  );
+}
+
+/** The listing has stopped selling but is being held in case the row returns. */
+export async function markDelisted(id: unknown, now = new Date()): Promise<void> {
+  await InventoryTombstone.updateOne(
+    { _id: id },
+    { $set: { syncState: 'deleting', delistedAt: now }, $unset: { syncLeaseUntil: '' } }
+  );
+}
+
+export async function markTombstoneDone(id: unknown): Promise<void> {
+  await InventoryTombstone.updateOne(
+    { _id: id },
+    { $set: { syncState: 'done', processedAt: new Date() }, $unset: { syncLeaseUntil: '' } }
+  );
+}
+
+export async function markTombstoneFailed(id: unknown, error: string, attempts: number): Promise<void> {
+  const exhausted = attempts + 1 >= MAX_ATTEMPTS;
+  await InventoryTombstone.updateOne(
+    { _id: id },
+    {
+      $set: {
+        syncState: exhausted ? 'failed' : 'pending',
+        syncError: error.slice(0, 1000),
+        syncAttempts: attempts + 1,
+      },
+      $unset: { syncLeaseUntil: '' },
+    }
+  );
+}
+
+/**
+ * The row came back before its tombstone was acted on.
+ *
+ * Deleting the tombstone is the cancellation: the listing was only delisted, so
+ * re-broadcasting it costs one call and it keeps its id, its age and its history.
+ * This is the flap case, and it is the common one — sections sell out and return
+ * within minutes.
+ */
+export async function cancelTombstone(id: unknown): Promise<void> {
+  await InventoryTombstone.deleteOne({ _id: id });
+}
+
+/** Counts for the dashboard and the circuit breaker. */
+export async function queueDepth(): Promise<{
+  pendingRows: number;
+  pendingTombstones: number;
+  failedRows: number;
+  oldestPendingAt: Date | null;
+}> {
+  await dbConnect();
+
+  const [pendingRows, pendingTombstones, failedRows, oldest] = await Promise.all([
+    ConsecutiveGroup.countDocuments({ 'inventory.syncPendingSince': { $exists: true } }),
+    InventoryTombstone.countDocuments({ syncState: { $in: ['pending', 'deleting'] } }),
+    ConsecutiveGroup.countDocuments({ 'inventory.syncState': 'failed' }),
+    ConsecutiveGroup.findOne(
+      { 'inventory.syncPendingSince': { $exists: true } },
+      { 'inventory.syncPendingSince': 1 }
+    )
+      .sort({ 'inventory.syncPendingSince': 1 })
+      .lean(),
+  ]);
+
+  return {
+    pendingRows,
+    pendingTombstones,
+    failedRows,
+    // Sync lag in one number: how long the oldest unpushed change has waited.
+    oldestPendingAt: (oldest as LeanRowDoc | null)?.inventory?.syncPendingSince ?? null,
+  };
+}

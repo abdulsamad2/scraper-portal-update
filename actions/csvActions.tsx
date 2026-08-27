@@ -652,9 +652,20 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
       
       console.log(`[CSV] ✅ Generation completed in ${duration}ms for ${filteredRecords.length} records (Peak memory: ${memoryUsage}MB)`);
 
-      return { 
-        success: true, 
+      return {
+        success: true,
         csv: csvString,
+        // The same rows the CSV was built from, marked up and filtered.
+        //
+        // The StubHub sync worker consumes these rather than reading
+        // inventory.listPrice from Mongo. Markup runs in two stages and only the
+        // second — the event's standard/resale/broker adjustments, applied in
+        // processBatch — produces the number we actually list at. Every
+        // adjustment is 0 today, so a worker reading the document directly would
+        // agree on every row now and silently mis-price the whole book the first
+        // time one is set in the dashboard. Handing back the rows keeps one
+        // implementation of the markup chain with two consumers.
+        rows: filteredRecords,
         recordCount: filteredRecords.length,
         excludedCount,
         generationTime: duration,
