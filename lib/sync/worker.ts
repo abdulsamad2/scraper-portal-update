@@ -10,18 +10,29 @@
  * The worker asks generateInventoryCsv for its rows rather than reading
  * inventory.listPrice out of Mongo. Markup runs in two stages and only the
  * second — the event's standard, resale and broker adjustments — produces the
- * number we actually list at. Every adjustment is 0 today, so reading the
- * document directly would agree on every row now and silently mis-price the
- * whole book the first time someone set one in the dashboard. Sharing the
- * exporter's output keeps one implementation of the markup chain with two
- * consumers, and makes "worker price equals CSV price" true by construction
+ * number we actually list at.
+ *
+ * This is not hypothetical. In production 201 of 363 active events carry a
+ * non-zero broker adjustment and 6 carry a standard one, and priceIncreasePercentage
+ * varies across six values. A worker reading inventory.listPrice would mis-price
+ * the broker rows on more than half the active book, silently and immediately.
+ * Sharing the exporter's output keeps one implementation of the markup chain with
+ * two consumers, and makes "worker price equals CSV price" true by construction
  * rather than by assertion.
  *
- * The cost is that a drain regenerates the book. That is one Mongo aggregation
- * against a collection with an index on (event_date, updatedAt), and it buys
- * exact parity on the number that matters most. If it ever becomes the
- * bottleneck, the fix is to extract the row builder so it can run on a subset —
- * not to duplicate the markup.
+ * The cost is that a drain regenerates the book, and the book is 627k rows on
+ * ~360 active events. Running that aggregation on every pass would dominate the
+ * cycle and put avoidable load on a database that is also serving the scrapers,
+ * so the result is cached for EXPORT_CACHE_MS.
+ *
+ * Staleness is bounded and harmless in the direction that matters. A price that
+ * moved inside the cache window is pushed on the next drain, at most one window
+ * late; it is never pushed *wrong*, because the cached rows are still the
+ * exporter's own output. Set STUBHUB_EXPORT_CACHE_MS=0 to disable.
+ *
+ * The proper fix is to extract the row builder so it can run on just the events a
+ * drain claimed. That is a refactor of a live exporter, so it is deliberately not
+ * being done in the same change as everything else here.
  *
  * ── Why it drains rather than ticks ────────────────────────────────────────────
  *
@@ -61,6 +72,36 @@ const SKIP_ABORT_RATIO = Number(process.env.STUBHUB_SKIP_ABORT_RATIO ?? 0.9);
 
 /** Rows claimed per pass. Independent of batch size; a pass may send several batches. */
 const CLAIM_SIZE = Number(process.env.STUBHUB_CLAIM_SIZE ?? 500);
+
+/** How long the exporter's rows may be reused across drains. */
+const EXPORT_CACHE_MS = Number(process.env.STUBHUB_EXPORT_CACHE_MS ?? 60_000);
+
+let exportCache: { at: number; rows: InventoryRowInput[] } | null = null;
+
+/**
+ * The exporter's rows, memoised.
+ *
+ * Deliberately keyed on nothing: there is one book, and the only question is how
+ * fresh the copy is. A drain that finds the cache warm skips a 627k-row
+ * aggregation entirely, which in steady state is most of them.
+ */
+async function currentRows(): Promise<{ rows: InventoryRowInput[] | null; error?: string }> {
+  if (exportCache && Date.now() - exportCache.at < EXPORT_CACHE_MS) {
+    return { rows: exportCache.rows };
+  }
+  const csv = await generateInventoryCsv(0);
+  if (!csv.success || !csv.rows) {
+    return { rows: null, error: csv.message ?? 'unknown' };
+  }
+  const rows = csv.rows as InventoryRowInput[];
+  exportCache = { at: Date.now(), rows };
+  return { rows };
+}
+
+/** Drop the memoised book — after a manual price edit, say. */
+export function invalidateExportCache(): void {
+  exportCache = null;
+}
 
 export interface DrainResult {
   claimed: number;
@@ -167,14 +208,14 @@ async function processRows(
 
   // The exporter is the single source of the final price. Ask for everything and
   // index it, then take only the rows we claimed.
-  const csv = await generateInventoryCsv(0);
-  if (!csv.success || !csv.rows) {
-    out.aborted = `could not build rows: ${csv.message ?? 'unknown'}`;
+  const { rows: allRows, error } = await currentRows();
+  if (!allRows) {
+    out.aborted = `could not build rows: ${error}`;
     return out;
   }
 
   const byInventoryId = new Map<number, InventoryRowInput>();
-  for (const r of csv.rows as InventoryRowInput[]) byInventoryId.set(Number(r.inventory_id), r);
+  for (const r of allRows) byInventoryId.set(Number(r.inventory_id), r);
 
   const creates: CreateItem[] = [];
   const updates: UpdateItem[] = [];

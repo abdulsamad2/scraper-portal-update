@@ -19,13 +19,13 @@
  * event's standard / resale / broker adjustment. It is computed during CSV
  * generation and never stored.
  *
- * Every adjustment in the database is currently 0, which makes stage 2 an identity
- * function — so a mapper that read `inventory.listPrice` straight from the document
- * would agree with the exporter on every row today, pass review, ship, and then
- * silently mis-price the whole book the first time someone sets a resale adjustment
- * in the dashboard. This module therefore takes the already-marked-up row that
- * generateInventoryCsv produces, so there is exactly one implementation of the
- * markup chain and the two paths cannot drift.
+ * Those adjustments are live: 201 of 363 active events carry a non-zero broker
+ * adjustment, 6 carry a standard one, and priceIncreasePercentage takes six
+ * different values across the book. A mapper reading `inventory.listPrice` straight
+ * from the document would therefore mis-price the broker rows on more than half the
+ * active events — silently, and from the first push. This module takes the
+ * already-marked-up row that generateInventoryCsv produces, so there is exactly one
+ * implementation of the markup chain and the two paths cannot drift.
  */
 
 import type {
