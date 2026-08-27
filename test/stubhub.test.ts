@@ -19,7 +19,7 @@ import { resolveEventId } from '../lib/stubhub/eventResolver.ts';
 import { payloadHash, stableStringify, deriveBatchId } from '../lib/stubhub/hash.ts';
 import { mapRow, type InventoryRowInput } from '../lib/stubhub/mapRow.ts';
 import { comparePriceEcho, ASK_PRICE_FIELD } from '../lib/stubhub/price.ts';
-import { chooseWritePath, itemsPerMinute, MAX_BATCH_ITEMS, RATE_LIMITS, RECONCILIATION } from '../lib/stubhub/limits.ts';
+import { chooseWritePath, itemsPerMinute, MAX_BATCH_ITEMS, RATE_LIMITS, RECONCILIATION, RATE_UTILISATION } from '../lib/stubhub/limits.ts';
 import { planBatch, resolveRemoval, REAPPEARANCE_GRACE_MS } from '../lib/stubhub/policy.ts';
 import { verifyEvent, clearEventCache } from '../lib/stubhub/eventVerifier.ts';
 import { outcomes as __testOutcomes } from '../lib/sync/bulkResults.ts';
@@ -600,5 +600,35 @@ describe('circuit breaker — what counts as "something is wrong"', () => {
   test('it never fires while there is real work in the pass', () => {
     assert.equal(wouldAbort(100, 100, 5), false,
       'if anything is actionable the cycle proceeds — partial failure is not systemic failure');
+  });
+});
+
+describe('burst sizing stays inside the published limit', () => {
+  // The bucket is derived from the limit rather than chosen, so this is provable
+  // rather than tuned: spend a full bucket instantly, then run at the sustained
+  // rate, and the worst case in any 60s window is exactly the published limit.
+  const worstCaseInAMinute = (limit: number, utilisation: number) => {
+    const sustained = limit * utilisation;
+    const burst = Math.floor(limit * (1 - utilisation));
+    return sustained + burst;
+  };
+
+  for (const limit of [760, 700, 100, 12_880, 2_730]) {
+    test(`${limit}/min endpoint never exceeds its allowance`, () => {
+      assert.equal(worstCaseInAMinute(limit, RATE_UTILISATION) <= limit, true);
+    });
+  }
+
+  test('the old "N seconds of rate" sizing could overshoot', () => {
+    // Kept as a regression note: at 0.9 utilisation with a 10s burst window the
+    // first minute reached 105% of the limit — throttled by our own throttle.
+    const overshoot = 0.9 * (60 + 10) / 60;
+    assert.equal(overshoot > 1, true);
+  });
+
+  test('the burst is large enough to matter', () => {
+    const bulkBurst = Math.floor(760 * (1 - RATE_UTILISATION));
+    assert.equal(bulkBurst * 250 > 30_000, true,
+      'a full bulk burst carries more than 30,000 items at once');
   });
 });

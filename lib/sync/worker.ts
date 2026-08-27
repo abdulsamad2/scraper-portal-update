@@ -160,7 +160,7 @@ const loggedEventProblems = new Set<string>();
  * binding constraint here — one round trip is ~300ms, and doing them one after
  * another would make a 30-row event take ten seconds for no reason.
  */
-const PATCH_CONCURRENCY = Number(process.env.STUBHUB_PATCH_CONCURRENCY ?? 16);
+const PATCH_CONCURRENCY = Number(process.env.STUBHUB_PATCH_CONCURRENCY ?? 32);
 
 /**
  * Build the exporter's rows for exactly the documents this pass claimed.
@@ -419,8 +419,17 @@ async function submitRemovals(
   });
 }
 
-/** Bulk submissions in flight at once. Each is one round trip; the limiter paces them. */
-const BATCH_CONCURRENCY = Number(process.env.STUBHUB_BATCH_CONCURRENCY ?? 8);
+/**
+ * Bulk submissions in flight at once.
+ *
+ * Generous on purpose, and safe to be: rate limiting is per endpoint and
+ * bucket-based, so raising this spends the burst rather than exceeding the
+ * allowance. A request beyond the bucket waits on a token instead of reaching
+ * StubHub. The bucket holds 152 bulk requests at the current utilisation — 38,000
+ * items — so 32 in flight is comfortably inside it while being enough to clear a
+ * large backlog in a handful of waves.
+ */
+const BATCH_CONCURRENCY = Number(process.env.STUBHUB_BATCH_CONCURRENCY ?? 32);
 
 async function processRows(
   client: StubHubClient,

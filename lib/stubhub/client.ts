@@ -141,9 +141,26 @@ class AdaptiveLimiter {
   constructor(requestsPerMinute: number) {
     this.maxRatePerSecond = Math.max((requestsPerMinute * RATE_UTILISATION) / 60, 0.05);
     this.ratePerSecond = this.maxRatePerSecond;
-    // A few seconds of sustained rate, so a burst goes straight out while a
-    // sustained flood still settles to the allowance.
-    this.capacity = Math.max(1, Math.ceil(this.maxRatePerSecond * BURST_SECONDS));
+
+    // Bucket size is derived from the limit rather than chosen, so the burst can
+    // be as large as possible while staying provably inside the allowance.
+    //
+    // Spend a full bucket instantly and then run at the sustained rate, and the
+    // worst case within any sixty-second window is
+    //
+    //     limit x utilisation   (sustained)  +  limit x (1 - utilisation)  (burst)
+    //   = limit
+    //
+    // exactly. Sizing the bucket as "N seconds of rate" instead — which is what
+    // this was — has no such property: at 0.9 utilisation and a ten-second burst
+    // the first minute reaches 105% of the published limit, which is how you get
+    // throttled by your own throttle.
+    //
+    // The trade is explicit: a lower utilisation buys a larger burst and a lower
+    // sustained ceiling. At 0.8 that is 608 bulk requests a minute sustained with
+    // 152 available at once — 38,000 items in a single burst — which is far more
+    // headroom than any realistic change rate needs.
+    this.capacity = Math.max(1, Math.floor(requestsPerMinute * (1 - RATE_UTILISATION)));
     this.tokens = this.capacity;
   }
 
@@ -181,15 +198,19 @@ class AdaptiveLimiter {
   get currentPerMinute(): number {
     return this.ratePerSecond * 60;
   }
+
+  /** Requests available to fire right now, for the dashboard. */
+  get availableBurst(): number {
+    this.refill();
+    return Math.floor(this.tokens);
+  }
+
+  get burstCapacity(): number {
+    return this.capacity;
+  }
 }
 
-/**
- * How many seconds of allowance may be spent at once.
- *
- * Four bulk requests to delete a thousand listings should leave together, not be
- * dripped out. Verified safe: a 24-request burst drew no throttling at all.
- */
-const BURST_SECONDS = Number(process.env.STUBHUB_BURST_SECONDS ?? 5);
+
 
 const limiters = new Map<string, AdaptiveLimiter>();
 
@@ -350,10 +371,12 @@ export class StubHubClient {
   }
 
   /** Current permitted rate per endpoint, for the dashboard. */
-  limiterState(): Array<{ endpoint: string; perMinute: number }> {
+  limiterState(): Array<{ endpoint: string; perMinute: number; burst: number; capacity: number }> {
     return [...limiters.entries()].map(([endpoint, l]) => ({
       endpoint,
       perMinute: Math.round(l.currentPerMinute),
+      burst: l.availableBurst,
+      capacity: l.burstCapacity,
     }));
   }
 }
