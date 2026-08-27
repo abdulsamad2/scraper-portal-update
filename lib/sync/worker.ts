@@ -136,6 +136,20 @@ const CLAIM_SIZE = Number(process.env.STUBHUB_CLAIM_SIZE ?? 100);
  */
 const PIPELINE_CONCURRENCY = Number(process.env.STUBHUB_PIPELINES ?? 4);
 
+/**
+ * Removals claimed per pass — far more than rows, because they cost far less.
+ *
+ * A row has to be fetched, joined to its event config, marked up and mapped
+ * before it can be sent, which is why rows are claimed in small slices. A removal
+ * carries a listing id and nothing else: no build, no export, no mapping. The
+ * only work is putting 250 ids in a request.
+ *
+ * Sharing the row claim size meant 400 removals a pass, so stopping an event with
+ * 30,000 listings would have taken 75 passes to submit what the API could accept
+ * in 120 requests. The drain was the bottleneck, not the API.
+ */
+const TOMBSTONE_CLAIM_SIZE = Number(process.env.STUBHUB_TOMBSTONE_CLAIM ?? 2_000);
+
 /** Events already reported as unusable, so the warning is logged once, not per slice. */
 const loggedEventProblems = new Set<string>();
 
@@ -262,7 +276,10 @@ export async function drainOnce(client?: StubHubClient, marketplaces?: ApiMarket
     }
   }
 
-  result.more = result.claimed >= CLAIM_SIZE * PIPELINE_CONCURRENCY && !result.aborted;
+  result.more = !result.aborted && (
+    rows.length >= CLAIM_SIZE * PIPELINE_CONCURRENCY ||
+    tombstones.length >= TOMBSTONE_CLAIM_SIZE
+  );
   return result;
 }
 
@@ -360,8 +377,13 @@ async function submitRemovals(
 ): Promise<void> {
   if (items.length === 0) return;
 
-  for (let i = 0; i < items.length; i += MAX_BATCH_ITEMS) {
-    const chunk = items.slice(i, i + MAX_BATCH_ITEMS);
+  const chunks: (typeof items)[] = [];
+  for (let i = 0; i < items.length; i += MAX_BATCH_ITEMS) chunks.push(items.slice(i, i + MAX_BATCH_ITEMS));
+
+  // Submitting batches one after another wastes the allowance: bulk permits 760
+  // requests a minute and a submit is a single round trip, so eight batches
+  // sequentially is eight round trips of dead time for no reason.
+  await pooled(chunks, BATCH_CONCURRENCY, async (chunk) => {
     const ids = chunk.map(t => Number(t.stubhubListingId));
 
     if (chunk.length < BULK_UPDATE_THRESHOLD) {
@@ -374,7 +396,7 @@ async function submitRemovals(
         if (kind === 'delete') await markTombstoneDone(t._id);
         await onOk(t);
       });
-      continue;
+      return;
     }
 
     try {
@@ -394,8 +416,11 @@ async function submitRemovals(
         onFail();
       });
     }
-  }
+  });
 }
+
+/** Bulk submissions in flight at once. Each is one round trip; the limiter paces them. */
+const BATCH_CONCURRENCY = Number(process.env.STUBHUB_BATCH_CONCURRENCY ?? 8);
 
 async function processRows(
   client: StubHubClient,
