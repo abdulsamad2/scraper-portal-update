@@ -20,6 +20,7 @@ import { payloadHash, stableStringify, deriveBatchId } from '../lib/stubhub/hash
 import { mapRow, type InventoryRowInput } from '../lib/stubhub/mapRow.ts';
 import { comparePriceEcho, ASK_PRICE_FIELD } from '../lib/stubhub/price.ts';
 import { chooseWritePath, itemsPerMinute, MAX_BATCH_ITEMS, RATE_LIMITS, RECONCILIATION } from '../lib/stubhub/limits.ts';
+import { planBatch, resolveRemoval, REAPPEARANCE_GRACE_MS } from '../lib/stubhub/policy.ts';
 
 describe('resolveSplitType', () => {
   // Every case here appeared in the 1,537-row export, with its observed frequency.
@@ -340,5 +341,63 @@ describe('rate limits and write-path selection', () => {
     // One call per two minutes cannot serve a per-cycle diff on a 2-minute scrape.
     assert.equal(RECONCILIATION.minExportIntervalSeconds, 120);
     assert.equal(RATE_LIMITS['GET /inventory/search'], 10);
+  });
+});
+
+describe('drain policy — instant without spamming', () => {
+  test('a single dirty row goes immediately, no waiting to fill a batch', () => {
+    const p = planBatch(1, 'update');
+    assert.deepEqual({ size: p.size, path: p.path, more: p.more }, { size: 1, path: 'single', more: false });
+  });
+
+  test('under load it batches to the cap and asks to drain again without sleeping', () => {
+    const p = planBatch(600, 'update');
+    assert.equal(p.size, 250);
+    assert.equal(p.path, 'bulk');
+    assert.equal(p.more, true, 'more work remains — loop again rather than idle');
+  });
+
+  test('one create still batches — idempotency, not efficiency', () => {
+    assert.equal(planBatch(1, 'create').path, 'bulk');
+  });
+
+  test('nothing pending plans nothing', () => {
+    assert.deepEqual(planBatch(0, 'update').size, 0);
+  });
+});
+
+describe('removal policy — protect instantly, churn never', () => {
+  const now = new Date('2026-08-27T12:00:00Z');
+  const ago = (ms: number) => new Date(now.getTime() - ms);
+
+  test('a vanished row is delisted first, not deleted', () => {
+    const d = resolveRemoval({ stubhubListingId: '1', delistedAt: null, reappeared: false, reason: 'scraper-removed', now });
+    assert.equal(d.action, 'delist', 'stop it selling immediately — that is the half that matters');
+  });
+
+  test('inside the grace window it waits rather than deleting', () => {
+    const d = resolveRemoval({ stubhubListingId: '1', delistedAt: ago(60_000), reappeared: false, reason: 'scraper-removed', now });
+    assert.equal(d.action, 'wait');
+  });
+
+  test('a reappearing row is re-broadcast on its existing listing, not recreated', () => {
+    const d = resolveRemoval({ stubhubListingId: '1', delistedAt: ago(60_000), reappeared: true, reason: 'scraper-removed', now });
+    assert.equal(d.action, 'cancel');
+    assert.match(d.reason, /re-broadcast/);
+  });
+
+  test('past the window it finally deletes', () => {
+    const d = resolveRemoval({ stubhubListingId: '1', delistedAt: ago(REAPPEARANCE_GRACE_MS + 1000), reappeared: false, reason: 'scraper-removed', now });
+    assert.equal(d.action, 'delete');
+  });
+
+  test('final reasons skip the grace window once delisted', () => {
+    const d = resolveRemoval({ stubhubListingId: '1', delistedAt: ago(1000), reappeared: false, reason: 'event-expired', now });
+    assert.equal(d.action, 'delete');
+  });
+
+  test('a listing that never existed resolves locally with no API call', () => {
+    const d = resolveRemoval({ stubhubListingId: null, delistedAt: null, reappeared: false, reason: 'scraper-removed', now });
+    assert.equal(d.action, 'cancel');
   });
 });
