@@ -199,6 +199,14 @@ describe('mapRow', () => {
     assert.equal(enabled.ok && enabled.create.hideSeats, true);
   });
 
+  test('the update always carries hideSeats — PATCH is not feature-gated', () => {
+    const r = mapRow(base);
+    assert.equal(r.ok && r.update.hideSeats, true,
+      'this is what actually hides seats without ExtApiInvCreateFeatures');
+    const shown = mapRow({ ...base, hide_seats: 'N' });
+    assert.equal(shown.ok && shown.update.hideSeats, false);
+  });
+
   test('never broadcasts at create — nothing goes live without a price', () => {
     const r = mapRow(base);
     assert.equal(r.ok && r.create.autoBroadcast, false);

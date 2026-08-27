@@ -128,6 +128,15 @@ export interface InventoryCreateRequest {
 /** PATCH /inventory/{id} — the only place a price can be set. */
 export interface InventoryUpdateRequest {
   prices?: InventoryPriceUpdateRequest[] | null;
+  /**
+   * Hide seat numbers from buyers.
+   *
+   * Settable here even when the create-time equivalent is refused: the create
+   * field is gated behind ExtApiInvCreateFeatures, this one is not. Verified on
+   * the sandbox — PATCH hideSeats:true moves hideSeatsFromMarketplace to true on
+   * an account where the same field fails the create outright.
+   */
+  hideSeats?: boolean | null;
   broadcastStatuses?: InventoryBroadcastUpdateRequest[] | null;
   splitType?: ApiSplitType;
   deliveryType?: ApiDeliveryType;

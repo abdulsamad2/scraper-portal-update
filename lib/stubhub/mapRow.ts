@@ -87,14 +87,20 @@ export interface MapOptions {
   priceField?: 'listPrice' | 'allInPrice';
   currencyCode?: string;
   /**
-   * Whether this account may set hideSeats at create time.
+   * Whether this account may set hideSeats at CREATE time.
    *
-   * Gated behind the ExtApiInvCreateFeatures feature. Sending it without that
-   * flag fails the whole create with "hideSeats is not enabled for this account"
-   * — and through the bulk endpoint that surfaces only as "An internal error
-   * occurred while processing this item", which is not a debuggable message.
+   * The create-time field is gated behind ExtApiInvCreateFeatures, and sending it
+   * without that feature fails the whole create with "hideSeats is not enabled
+   * for this account" — which through the bulk endpoint surfaces only as "An
+   * internal error occurred while processing this item".
    *
-   * Omitted by default, which the spec says falls back to the account default.
+   * This only affects the create. The update carries hideSeats unconditionally,
+   * because PATCH is not gated: verified on the sandbox, PATCH hideSeats:true
+   * moves hideSeatsFromMarketplace to true on an account where the identical
+   * field is refused at create. Since every create is followed by a price PATCH
+   * anyway, seats end up hidden either way and this flag only decides whether
+   * they are hidden a few seconds earlier.
+   *
    * Enable with STUBHUB_HIDE_SEATS=true once StubHub turns the feature on.
    */
   hideSeatsSupported?: boolean;
@@ -205,7 +211,8 @@ export function mapRow(row: InventoryRowInput, options: MapOptions = {}): Mapped
     deliveryType: delivery.deliveryType,
     splitType: split.splitType,
     seating: { section: row.section || null, row: seatingRow },
-    // Omitted unless the account has the feature; see MapOptions.hideSeatsSupported.
+    // Omitted unless the account has the create-time feature. The update below
+    // sets it regardless, so nothing is lost by leaving it out here.
     ...(opts.hideSeatsSupported ? { hideSeats: row.hide_seats === 'Y' } : {}),
     zoneFill: isZone,
     inHandAt,
@@ -233,6 +240,10 @@ export function mapRow(row: InventoryRowInput, options: MapOptions = {}): Mapped
     splitType: split.splitType,
     deliveryType: delivery.deliveryType,
     inHandAt,
+    // Always sent here, gated nowhere. This is the path that actually hides seats
+    // on an account without ExtApiInvCreateFeatures — and hide_seats is Y on
+    // effectively every row we export, so it matters.
+    hideSeats: row.hide_seats === 'Y',
     maxDisplayQuantity: create.maxDisplayQuantity,
     listingNotes: create.listingNotes,
     tags: create.tags,
