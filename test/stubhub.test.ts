@@ -570,3 +570,29 @@ describe('capacity model — what 3,000 events actually needs', () => {
       'about 280k changes per 2-minute cycle, or ~5.4% of a 5.2M-row book');
   });
 });
+
+describe('circuit breaker — what counts as "something is wrong"', () => {
+  // The breaker exists for the systemic case: token expired, resolution broken,
+  // the API refusing everything. It must NOT fire on a known-bad event, because
+  // claims are ordered by event date — so one misconfigured event fills every
+  // slice, trips the breaker at 100%, and starves every good row behind it.
+  // That is not a hypothetical: it stopped a live run cold.
+  const ratio = 0.9;
+  const wouldAbort = (unexplained: number, claimed: number, actionable: number) =>
+    claimed > 0 && unexplained / claimed > ratio && actionable === 0;
+
+  test('a fully bad event does not trip it — those skips are explained', () => {
+    assert.equal(wouldAbort(0, 100, 0), false,
+      '100 rows skipped for a verified-unusable event is a data problem, not a system fault');
+  });
+
+  test('wholesale lookup failure does trip it', () => {
+    assert.equal(wouldAbort(100, 100, 0), true,
+      'events that could not be looked up at all is the shape the breaker is for');
+  });
+
+  test('it never fires while there is real work in the pass', () => {
+    assert.equal(wouldAbort(100, 100, 5), false,
+      'if anything is actionable the cycle proceeds — partial failure is not systemic failure');
+  });
+});

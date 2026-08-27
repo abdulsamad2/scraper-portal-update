@@ -77,12 +77,23 @@ export async function configuredClient(): Promise<{ client: StubHubClient; marke
 }
 
 /**
- * Abort a cycle if this share of claimed rows cannot be resolved to a StubHub
- * event. A handful of unmappable rows is ordinary — tickets.com inventory has no
- * StubHub event id and never will until it is backfilled. Most of the book going
- * unresolvable at once is not ordinary; it means a bad deploy or a data problem,
- * and the correct response is to stop rather than to act on a book we suddenly
- * cannot describe.
+ * Abort a cycle when this share of claimed rows fails for reasons we cannot
+ * explain.
+ *
+ * The distinction matters more than the number. Rows skipped because their event
+ * was checked and found unusable — it does not exist, or it resolves to a
+ * different event — are not evidence that anything is wrong with the system. They
+ * are a known data problem, they are deterministic, and they are self-limiting:
+ * each one is marked skipped and leaves the queue for good.
+ *
+ * Counting those toward the breaker was actively harmful. Claims are ordered by
+ * event date, so an event with hundreds of bad rows fills every slice, trips the
+ * breaker at 100%, and aborts the cycle — starving every good row queued behind
+ * it. One misconfigured event could stop the entire sync indefinitely.
+ *
+ * What the breaker is actually for is the systemic case: the token expired, the
+ * API is refusing everything, a deploy broke event resolution. Those show up as
+ * lookup failures and unexplained skips, and those are what it counts.
  */
 const SKIP_ABORT_RATIO = Number(process.env.STUBHUB_SKIP_ABORT_RATIO ?? 0.9);
 
@@ -122,6 +133,9 @@ const CLAIM_SIZE = Number(process.env.STUBHUB_CLAIM_SIZE ?? 100);
  * arithmetic for a given book size is in the capacity tests.
  */
 const PIPELINE_CONCURRENCY = Number(process.env.STUBHUB_PIPELINES ?? 4);
+
+/** Events already reported as unusable, so the warning is logged once, not per slice. */
+const loggedEventProblems = new Set<string>();
 
 /**
  * How many listings may be updated concurrently on the single-call fast path.
@@ -302,6 +316,11 @@ async function processRows(
 ): Promise<{ created: number; updated: number; noop: number; skipped: number; failed: number; aborted: string | null }> {
   const out = { created: 0, updated: 0, noop: 0, skipped: 0, failed: 0, aborted: null as string | null };
 
+  // Skips we cannot account for. A row skipped because its event was checked and
+  // found unusable is explained; one that vanished from the export, or whose
+  // event could not be looked up at all, is not.
+  let unexplained = 0;
+
   // The exporter is the single source of the final price. Build only the events
   // this pass claimed — typically a handful, since a scrape cycle marks one
   // event's rows dirty at a time.
@@ -333,7 +352,12 @@ async function processRows(
     else eventSkips.set(mappingId, `${check.reason}: ${check.detail}`);
   }
 
+  // Once per event, not once per pipeline slice per pass. The verdict is cached,
+  // so without this the same line repeats several times a second for as long as
+  // the bad event has rows queued.
   for (const [mappingId, reason] of eventSkips) {
+    if (loggedEventProblems.has(mappingId)) continue;
+    loggedEventProblems.add(mappingId);
     console.warn(`[stubhub:worker] event ${mappingId} unusable — ${reason}`);
   }
 
@@ -351,6 +375,7 @@ async function processRows(
       // or already gone. Not an error; it simply has nothing to say right now.
       await markSkipped(row._id, 'row not present in current export');
       out.skipped++;
+      unexplained++;
       continue;
     }
 
@@ -359,7 +384,8 @@ async function processRows(
     if (eventProblem) {
       // A transient lookup failure is not the row's fault: leave it queued so the
       // next drain retries, rather than marking the book unlistable over a blip.
-      if (eventProblem.startsWith('lookup-failed')) { out.skipped++; continue; }
+      // This one DOES count toward the breaker — it is the systemic shape.
+      if (eventProblem.startsWith('lookup-failed')) { out.skipped++; unexplained++; continue; }
       await markSkipped(row._id, eventProblem);
       out.skipped++;
       continue;
@@ -440,10 +466,11 @@ async function processRows(
 
   // Circuit breaker. Evaluated before anything is sent, not as a handler after
   // something has gone wrong.
-  const actionable = creates.length + updates.length;
-  if (rows.length > 0 && out.skipped / rows.length > SKIP_ABORT_RATIO && actionable === 0) {
+  const actionable = creates.length + updates.length + pendingVerify.length;
+  if (rows.length > 0 && unexplained / rows.length > SKIP_ABORT_RATIO && actionable === 0) {
     out.aborted =
-      `${out.skipped}/${rows.length} rows unresolvable — aborting rather than acting on a book we cannot describe`;
+      `${unexplained}/${rows.length} rows failed for unexplained reasons — aborting rather than ` +
+      `acting on a book we cannot describe`;
     console.error(`[stubhub:worker] ${out.aborted}`);
     return out;
   }
