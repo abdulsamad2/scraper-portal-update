@@ -138,3 +138,48 @@ export const VERIFY_CAPACITY = {
     return (this.seekPerMinute * this.idsPerCall) / 60;
   },
 } as const;
+
+/**
+ * Which of these listings no longer exist.
+ *
+ * Confirmation for a bulk delete is absence: seek simply stops returning a
+ * listing that has been removed. One call covers 200 ids, so proving a whole
+ * event's removal costs a handful of requests rather than one per listing.
+ */
+export async function verifyGone(
+  client: StubHubClient,
+  listingIds: number[]
+): Promise<Set<number>> {
+  const gone = new Set<number>(listingIds);
+  if (listingIds.length === 0) return gone;
+
+  for (let i = 0; i < listingIds.length; i += SEEK_CHUNK) {
+    const chunk = listingIds.slice(i, i + SEEK_CHUNK);
+    const params = new URLSearchParams();
+    for (const id of chunk) params.append('inventoryIds', String(id));
+
+    try {
+      const res = await client.request<Array<{ data?: ListingResource[] }> | ListingResource[]>({
+        method: 'GET',
+        path: `/inventory/seek?${params}`,
+        endpoint: 'GET /inventory/seek',
+        idempotent: true,
+      });
+      const body = res.data;
+      const listings: ListingResource[] = Array.isArray(body)
+        ? (body as unknown[]).flatMap(b =>
+            Array.isArray((b as { data?: ListingResource[] }).data)
+              ? (b as { data: ListingResource[] }).data
+              : [b as ListingResource])
+        : [];
+      // Anything still returned has not been removed yet.
+      for (const l of listings) if (l?.id != null) gone.delete(Number(l.id));
+    } catch {
+      // A failed read is not evidence of anything. Treat the whole chunk as
+      // still present so it is re-checked rather than wrongly marked done.
+      for (const id of chunk) gone.delete(id);
+    }
+  }
+
+  return gone;
+}

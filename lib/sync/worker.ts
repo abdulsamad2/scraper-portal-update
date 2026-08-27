@@ -49,14 +49,16 @@ import { resolveRemoval, IDLE_POLL_MS } from '@/lib/stubhub/policy.ts';
 import { MAX_BATCH_ITEMS } from '@/lib/stubhub/limits.ts';
 import {
   claimRows, claimTombstones, markSynced, markCreated, markFailed, markSkipped,
-  markUpdating, markDelisted, markTombstoneDone, markTombstoneFailed, cancelTombstone,
+  markUpdating, markDelisted, markTombstoneDone, markTombstoneFailed,
+  markTombstoneSubmitted, cancelTombstone,
   queueDepth, MAX_ATTEMPTS,
 } from './queue.ts';
 import {
-  submitCreates, submitUpdates, patchOne, delistOne, deleteOne,
+  submitCreates, submitUpdates, submitDeletes, submitDelists,
+  patchOne, delistOne, deleteOne,
   type CreateItem, type UpdateItem, type ItemOutcome,
 } from './batcher.ts';
-import { verifyPrices } from './verify.ts';
+import { verifyPrices, verifyGone } from './verify.ts';
 import { acquireLease, releaseLease, makeHolderId, RENEW_INTERVAL_MS } from './leader.ts';
 import { getStubhubSyncSettings, StubhubSyncSettings } from '@/models/stubhubSyncModel.js';
 import type { ApiMarketplace } from '@/lib/stubhub/types.ts';
@@ -272,46 +274,127 @@ async function processTombstones(
   let delisted = 0, deleted = 0, cancelled = 0, failed = acc.failed;
   const now = new Date();
 
-  // Concurrent, not sequential. These are independent listings, and a for-loop
-  // with an API call in it made removals the slowest thing in the system: 766
-  // queued removals took four minutes at one call at a time, and every drain
-  // pass waited behind them. DELETE allows 2,730/min, so the only thing that was
-  // ever limiting this was the shape of the loop.
-  await pooled(tombstones, PATCH_CONCURRENCY, async (t) => {
+  // Decide everything first, then act in batches. Deciding and acting in the same
+  // loop is what made removals the slowest thing here: one API call at a time
+  // meant 766 queued removals took four minutes, and because removals run before
+  // rows, every drain pass waited behind them.
+  const toDelete: typeof tombstones = [];
+  const toDelist: typeof tombstones = [];
+  const toCancel: typeof tombstones = [];
+  const inFlight: typeof tombstones = [];
+
+  for (const t of tombstones) {
+    // Already submitted in a batch — confirm rather than send again.
+    if (t.syncState === 'deleting' && t.syncBatchId && t.stubhubListingId) {
+      inFlight.push(t);
+      continue;
+    }
     const decision = resolveRemoval({
       stubhubListingId: t.stubhubListingId,
       delistedAt: t.delistedAt,
       // The scraper deletes the row and writes the tombstone atomically, so a row
       // that came back has a fresh document and a stale tombstone. Reappearance is
       // detected by the row existing again, which the next claim surfaces as a
-      // pending create — so here we only need the tombstone's own state.
+      // pending create.
       reappeared: false,
       reason: t.reason,
       now,
     });
+    if (decision.action === 'cancel') toCancel.push(t);
+    else if (decision.action === 'delete' && t.stubhubListingId) toDelete.push(t);
+    else if (decision.action === 'delist' && t.stubhubListingId) toDelist.push(t);
+    // 'wait' is left untouched; its lease expires and a later pass reconsiders it
+    // once the grace window has passed.
+  }
 
-    try {
-      if (decision.action === 'cancel') {
-        await cancelTombstone(t._id);
-        cancelled++;
-      } else if (decision.action === 'delist' && t.stubhubListingId) {
-        const outcome = await delistOne(client, Number(t.stubhubListingId));
-        if (outcome.ok) { await markDelisted(t._id, now); delisted++; }
-        else { await markTombstoneFailed(t._id, outcome.error!, t.syncAttempts); failed++; }
-      } else if (decision.action === 'delete' && t.stubhubListingId) {
-        const outcome = await deleteOne(client, Number(t.stubhubListingId));
-        if (outcome.ok) { await markTombstoneDone(t._id); deleted++; }
-        else { await markTombstoneFailed(t._id, outcome.error!, t.syncAttempts); failed++; }
-      }
-      // 'wait' leaves it claimed-but-untouched; the lease expires and the next
-      // drain reconsiders it once the grace window has passed.
-    } catch (error) {
-      await markTombstoneFailed(t._id, String(error), t.syncAttempts);
-      failed++;
-    }
+  // Nothing on StubHub to act on — resolve locally, no requests at all.
+  await pooled(toCancel, PATCH_CONCURRENCY, async (t) => {
+    await cancelTombstone(t._id);
+    cancelled++;
   });
 
+  // Confirm anything a previous pass submitted. Absence is the confirmation: a
+  // removed listing simply stops being returned by seek.
+  if (inFlight.length > 0) {
+    const gone = await verifyGone(client, inFlight.map(t => Number(t.stubhubListingId)));
+    await pooled(inFlight, PATCH_CONCURRENCY, async (t) => {
+      if (gone.has(Number(t.stubhubListingId))) {
+        await markTombstoneDone(t._id);
+        deleted++;
+      } else {
+        // Still there. Back to pending so the next pass re-issues; deletes are
+        // idempotent so a duplicate costs nothing.
+        await markTombstoneFailed(t._id, 'still present after batch delete', t.syncAttempts);
+        failed++;
+      }
+    });
+  }
+
+  // Batch the removals. A bulk request carries 250 against a 760/min allowance,
+  // where single DELETE allows only 2,730/min — about 45/s, the slowest write the
+  // API offers and the easiest to saturate.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- signature is shared with the delist path
+  await submitRemovals(client, toDelete, 'delete', async (_t) => { deleted++; }, () => { failed++; });
+  await submitRemovals(client, toDelist, 'delist', async (t) => {
+    await markDelisted(t._id, now);
+    delisted++;
+  }, () => { failed++; });
+
   return { delisted, deleted, cancelled, failed };
+}
+
+/**
+ * Send removals in bulk batches, or singly when there are only a few.
+ *
+ * Submitted and not waited on, like every other bulk write here. Deletes are
+ * marked in-flight and confirmed on the next pass by absence from seek; delists
+ * are confirmed by their own state transition, since a delisted listing is still
+ * there and only its broadcast state changed.
+ */
+async function submitRemovals(
+  client: StubHubClient,
+  items: Awaited<ReturnType<typeof claimTombstones>>,
+  kind: 'delete' | 'delist',
+  onOk: (t: Awaited<ReturnType<typeof claimTombstones>>[number]) => Promise<void>,
+  onFail: () => void
+): Promise<void> {
+  if (items.length === 0) return;
+
+  for (let i = 0; i < items.length; i += MAX_BATCH_ITEMS) {
+    const chunk = items.slice(i, i + MAX_BATCH_ITEMS);
+    const ids = chunk.map(t => Number(t.stubhubListingId));
+
+    if (chunk.length < BULK_UPDATE_THRESHOLD) {
+      // Few enough that a direct call confirms itself in the response, which is
+      // worth more than the saved requests.
+      await pooled(chunk, PATCH_CONCURRENCY, async (t) => {
+        const id = Number(t.stubhubListingId);
+        const outcome = kind === 'delete' ? await deleteOne(client, id) : await delistOne(client, id);
+        if (!outcome.ok) { await markTombstoneFailed(t._id, outcome.error!, t.syncAttempts); onFail(); return; }
+        if (kind === 'delete') await markTombstoneDone(t._id);
+        await onOk(t);
+      });
+      continue;
+    }
+
+    try {
+      const batchId = kind === 'delete'
+        ? await submitDeletes(client, ids)
+        : await submitDelists(client, ids);
+
+      await pooled(chunk, PATCH_CONCURRENCY, async (t) => {
+        if (kind === 'delete') await markTombstoneSubmitted(t._id, batchId);
+        await onOk(t);
+      });
+    } catch (error) {
+      const reason = error instanceof StubHubError ? error.summary : String(error);
+      console.error(`[stubhub:worker] ${kind} batch rejected: ${reason}`);
+      await pooled(chunk, PATCH_CONCURRENCY, async (t) => {
+        await markTombstoneFailed(t._id, reason, t.syncAttempts);
+        onFail();
+      });
+    }
+  }
 }
 
 async function processRows(

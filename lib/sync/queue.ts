@@ -57,6 +57,8 @@ interface LeanTombstoneDoc {
   createdAt: Date;
   delistedAt?: Date | null;
   syncAttempts?: number;
+  syncState?: string;
+  syncBatchId?: string | null;
 }
 
 export interface ClaimedRow {
@@ -78,6 +80,8 @@ export interface ClaimedTombstone {
   createdAt: Date;
   delistedAt: Date | null;
   syncAttempts: number;
+  syncState: string;
+  syncBatchId: string | null;
 }
 
 /**
@@ -177,6 +181,8 @@ export async function claimTombstones(limit: number, now = new Date()): Promise<
     createdAt: c.createdAt,
     delistedAt: c.delistedAt ?? null,
     syncAttempts: c.syncAttempts ?? 0,
+    syncState: c.syncState ?? 'pending',
+    syncBatchId: c.syncBatchId ?? null,
   }));
 }
 
@@ -291,6 +297,19 @@ export async function markDelisted(id: unknown, now = new Date()): Promise<void>
   await InventoryTombstone.updateOne(
     { _id: id },
     { $set: { syncState: 'deleting', delistedAt: now }, $unset: { syncLeaseUntil: '' } }
+  );
+}
+
+/**
+ * Submitted in a bulk delete, awaiting confirmation.
+ *
+ * Kept in the queue on purpose: the next pass reads these back and settles them
+ * by absence, which is what lets a batch be submitted without waiting for it.
+ */
+export async function markTombstoneSubmitted(id: unknown, batchId: string): Promise<void> {
+  await InventoryTombstone.updateOne(
+    { _id: id },
+    { $set: { syncState: 'deleting', syncBatchId: batchId }, $unset: { syncLeaseUntil: '' } }
   );
 }
 

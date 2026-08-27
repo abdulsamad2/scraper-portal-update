@@ -213,6 +213,64 @@ export async function delistOne(client: StubHubClient, listingId: number): Promi
   }
 }
 
+/**
+ * Remove many listings in one request.
+ *
+ * DELETE one-by-one allows 2,730/min — about 45/s — which is the slowest write
+ * path the API offers and by far the easiest to hit. A bulk delete carries 250
+ * removals per request against a 760/min batch allowance, so stopping a large
+ * event goes from a minute of rate-limited calls to a single submission.
+ *
+ * Like every bulk write here it is submitted and not waited on. Confirmation is
+ * absence: a deleted listing stops being returned by seek, which the next pass
+ * checks in one call per 200 ids.
+ */
+export async function submitDeletes(
+  client: StubHubClient,
+  listingIds: number[]
+): Promise<string> {
+  const batchId = deriveBatchId('delete', listingIds.map(String));
+  await client.request<BulkProcessingResultSummaryResponse>({
+    method: 'POST',
+    path: '/inventory/bulk',
+    endpoint: 'POST /inventory/bulk',
+    body: {
+      bulkProcessingId: batchId,
+      deleteRequests: listingIds.map(inventoryId => ({ inventoryId })),
+    } satisfies BulkInventoryRequest,
+    idempotent: true,
+    isWrite: true,
+  });
+  return batchId;
+}
+
+/**
+ * Stop many listings selling in one request.
+ *
+ * The reversible half of a removal, batched for the same reason as the deletes.
+ */
+export async function submitDelists(
+  client: StubHubClient,
+  listingIds: number[]
+): Promise<string> {
+  const batchId = deriveBatchId('delist', listingIds.map(String));
+  await client.request<BulkProcessingResultSummaryResponse>({
+    method: 'POST',
+    path: '/inventory/bulk',
+    endpoint: 'POST /inventory/bulk',
+    body: {
+      bulkProcessingId: batchId,
+      updateRequests: listingIds.map(inventoryId => ({
+        inventoryId,
+        broadcastStatuses: [{ marketplace: 'StubHub' as const, posBroadcastState: 'Delist' as const }],
+      })),
+    } satisfies BulkInventoryRequest,
+    idempotent: true,
+    isWrite: true,
+  });
+  return batchId;
+}
+
 /** DELETE is idempotent — a second call is a no-op or a 404 — so retry is safe. */
 export async function deleteOne(client: StubHubClient, listingId: number): Promise<ItemOutcome> {
   const externalId = String(listingId);
