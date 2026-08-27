@@ -622,8 +622,16 @@ async function processRows(
 
   // Creates first: an update needs a listing id, and a row created this pass will
   // be picked up for pricing on the next one.
-  for (let i = 0; i < creates.length; i += 250) {
-    const chunk = creates.slice(i, i + 250);
+  // Batches go out together, not one after another. A submit is a single round
+  // trip of a few seconds, so four create batches sequentially is four round
+  // trips of dead time — and the server has no objection to receiving them at
+  // once: 24 concurrent bulk requests carrying 6,000 items drew zero throttling.
+  const createChunks: CreateItem[][] = [];
+  for (let i = 0; i < creates.length; i += MAX_BATCH_ITEMS) {
+    createChunks.push(creates.slice(i, i + MAX_BATCH_ITEMS));
+  }
+
+  await pooled(createChunks, BATCH_CONCURRENCY, async (chunk) => {
 
     // A batch that throws — a validation rejection, a network failure — must not
     // leave its rows holding a lease until it expires. Five minutes of a stalled
@@ -644,7 +652,7 @@ async function processRows(
         await markFailed(meta.rowId, reason, meta.attempts);
         out.failed++;
       }
-      continue;
+      return;
     }
 
     for (const item of chunk) {
@@ -664,7 +672,7 @@ async function processRows(
         await markCreating(meta.rowId, batchId);
       }
     }
-  }
+  });
 
   if (updates.length > 0) {
     // Transport is chosen by depth, because the two options fail in opposite
@@ -839,8 +847,14 @@ async function pushUpdatesInBulk(
   meta: Map<string, { rowId: unknown; hash: string; attempts: number }>,
   out: { updated: number; failed: number }
 ): Promise<void> {
+  // Same reasoning as creates: submits are independent round trips and the API
+  // takes them concurrently, so sending them one after another only adds latency.
+  const chunks: UpdateItem[][] = [];
   for (let i = 0; i < updates.length; i += MAX_BATCH_ITEMS) {
-    const chunk = updates.slice(i, i + MAX_BATCH_ITEMS);
+    chunks.push(updates.slice(i, i + MAX_BATCH_ITEMS));
+  }
+
+  await pooled(chunks, BATCH_CONCURRENCY, async (chunk) => {
     const batchId = deriveBatchId('update', chunk.map(c => `${c.externalId}:${c.hash}`));
 
     try {
@@ -853,7 +867,7 @@ async function pushUpdatesInBulk(
         await markFailed(m.rowId, reason, m.attempts);
         out.failed++;
       }
-      continue;
+      return;
     }
 
     // In flight, not done. Counted as updated because the write has been accepted
@@ -863,7 +877,7 @@ async function pushUpdatesInBulk(
       await markUpdating(m.rowId, batchId);
       out.updated++;
     }
-  }
+  });
 }
 
 /** Snapshot for the dashboard. */
