@@ -162,6 +162,21 @@ export async function submitCreates(
   return outcomes(await runBulk(client, request, 'create'));
 }
 
+/**
+ * Bulk update — NOT USED, and kept only so the finding is not lost.
+ *
+ * The API accepts a bulk update and never processes it. The submit returns 200
+ * with the item in `queued`, and every poll thereafter returns the same:
+ * finished:false, completed/failed/skipped all empty, indefinitely. The change is
+ * never applied — verified by hand on a single-item batch whose price was
+ * unchanged minutes later.
+ *
+ * Bulk CREATE works, so this is specific to updates rather than the bulk
+ * endpoint as a whole. Worth raising with StubHub: a write that is accepted,
+ * queued and silently never executed is the hardest possible failure to notice.
+ *
+ * The worker uses patchOne instead, which works and has 17x the rate allowance.
+ */
 export async function submitUpdates(
   client: StubHubClient,
   items: UpdateItem[]

@@ -44,15 +44,14 @@ import { StubHubClient, StubHubError, loadConfig } from '@/lib/stubhub/client.ts
 import { mapRow, type InventoryRowInput } from '@/lib/stubhub/mapRow.ts';
 import { verifyEvent } from '@/lib/stubhub/eventVerifier.ts';
 import { payloadHash } from '@/lib/stubhub/hash.ts';
-import { planBatch, resolveRemoval, IDLE_POLL_MS } from '@/lib/stubhub/policy.ts';
-import { SINGLE_CALL_THRESHOLD } from '@/lib/stubhub/limits.ts';
+import { resolveRemoval, IDLE_POLL_MS } from '@/lib/stubhub/policy.ts';
 import {
   claimRows, claimTombstones, markSynced, markCreated, markFailed, markSkipped,
   markDelisted, markTombstoneDone, markTombstoneFailed, cancelTombstone,
   queueDepth, MAX_ATTEMPTS,
 } from './queue.ts';
 import {
-  submitCreates, submitUpdates, patchOne, delistOne, deleteOne,
+  submitCreates, patchOne, delistOne, deleteOne,
   type CreateItem, type UpdateItem, type ItemOutcome,
 } from './batcher.ts';
 import { acquireLease, releaseLease, makeHolderId, RENEW_INTERVAL_MS } from './leader.ts';
@@ -94,7 +93,7 @@ const CLAIM_SIZE = Number(process.env.STUBHUB_CLAIM_SIZE ?? 500);
  * binding constraint here — one round trip is ~300ms, and doing them one after
  * another would make a 30-row event take ten seconds for no reason.
  */
-const PATCH_CONCURRENCY = Number(process.env.STUBHUB_PATCH_CONCURRENCY ?? 8);
+const PATCH_CONCURRENCY = Number(process.env.STUBHUB_PATCH_CONCURRENCY ?? 16);
 
 /**
  * Build the exporter's rows for just these events.
@@ -382,43 +381,27 @@ async function processRows(
   }
 
   if (updates.length > 0) {
-    const plan = planBatch(updates.length, 'update');
-
-    if (plan.path === 'single' && updates.length <= SINGLE_CALL_THRESHOLD) {
-      // Concurrent, not sequential: these are independent listings and the point
-      // of taking the single-call path at all is to land the change now.
-      const outcomes = await pooled(updates, PATCH_CONCURRENCY, item => patchOne(client, item));
-      for (let i = 0; i < updates.length; i++) {
-        const meta = byExternalId.get(updates[i].externalId)!;
-        const outcome = outcomes[i];
-        if (outcome.ok) { await markSynced(meta.rowId, meta.hash); out.updated++; }
-        else { await markFailed(meta.rowId, outcome.error!, meta.attempts); out.failed++; }
-      }
-    } else {
-      for (let i = 0; i < updates.length; i += 250) {
-        const chunk = updates.slice(i, i + 250);
-
-        let results: Map<string, ItemOutcome>;
-        try {
-          results = await submitUpdates(client, chunk);
-        } catch (error) {
-          const reason = error instanceof StubHubError ? error.summary : String(error);
-          console.error(`[stubhub:worker] update batch failed: ${reason}`);
-          for (const item of chunk) {
-            const meta = byExternalId.get(item.externalId)!;
-            await markFailed(meta.rowId, reason, meta.attempts);
-            out.failed++;
-          }
-          continue;
-        }
-
-        for (const item of chunk) {
-          const meta = byExternalId.get(item.externalId)!;
-          const outcome = results.get(item.externalId);
-          if (outcome?.ok) { await markSynced(meta.rowId, meta.hash); out.updated++; }
-          else if (outcome) { await markFailed(meta.rowId, outcome.error ?? 'update failed', meta.attempts); out.failed++; }
-        }
-      }
+    // Updates go one at a time, concurrently — NOT through bulk.
+    //
+    // Bulk update is accepted by the API and then never processed. Submitting one
+    // returns 200 with the item in `queued`, and every subsequent poll returns the
+    // same thing: finished:false, completed/failed/skipped all empty, forever. The
+    // price is never applied. Confirmed by hand on a single-item batch and by 967
+    // listings sitting created-but-unpriced while the worker reported 0 updates —
+    // it had no outcomes to record because none ever arrived.
+    //
+    // PATCH /inventory/{id} works, is idempotent, and allows 12,880/min against a
+    // bulk allowance of 760, so the single path is not even a compromise here.
+    // Concurrency keeps it fast: the limiter paces to roughly 100/s, so a
+    // thousand listings price in about ten seconds.
+    //
+    // Bulk CREATE does work and is still used — the defect is specific to updates.
+    const outcomes = await pooled(updates, PATCH_CONCURRENCY, item => patchOne(client, item));
+    for (let i = 0; i < updates.length; i++) {
+      const meta = byExternalId.get(updates[i].externalId)!;
+      const outcome = outcomes[i];
+      if (outcome.ok) { await markSynced(meta.rowId, meta.hash); out.updated++; }
+      else { await markFailed(meta.rowId, outcome.error!, meta.attempts); out.failed++; }
     }
   }
 
