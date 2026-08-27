@@ -19,10 +19,12 @@
  * changes more than that builds a backlog that never drains.
  *
  * GET /inventory/seek takes an arbitrary list of inventory ids and allows
- * 700/min. Verifying 250 listings per call gives ~2,900 listings/s of
- * confirmation capacity, which is no longer the constraint — the bulk submit
- * limit is, at 3,167 items/s. That is a sevenfold increase in ceiling from
- * changing which endpoint answers the question.
+ * 700/min. It does not, however, take as many ids per call as first assumed: the
+ * query string is capped near 2KB, which works out at roughly 60 ids with margin.
+ * That gives ~560 listings/s of confirmation capacity rather than the ~2,900
+ * originally claimed here — still comfortably above the 417/s that polling bulk
+ * status would cap us at, but close enough to the bulk submit ceiling that seek
+ * quota is now the thing worth asking StubHub to raise.
  *
  * ── What "verified" means here ─────────────────────────────────────────────────
  *
@@ -35,8 +37,44 @@
 import type { StubHubClient } from '@/lib/stubhub/client.ts';
 import type { ListingResource } from '@/lib/stubhub/types.ts';
 
-/** seek takes ids in the query string, so batches stay modest. */
-const SEEK_CHUNK = 200;
+/**
+ * seek takes its ids in the query string, and something in front of the API —
+ * CloudFront, most likely — rejects a long one with an HTML 404 rather than a
+ * JSON error.
+ *
+ * Measured boundary: 85 ids (2,055 characters) succeeds, 100 ids (2,415) does
+ * not. That is the familiar 2KB query-string limit. Chunks are therefore built by
+ * URL length rather than by count, with real margin, so it stays correct if
+ * listing ids get longer.
+ *
+ * This mattered more than it sounds. The chunk was 200 — every verification call
+ * this system ever made was failing, silently, and being recorded as "unverified"
+ * against rows that had in fact been written correctly. It produced over a
+ * thousand spurious failures and a queue that could never drain.
+ */
+const MAX_QUERY_BYTES = 1_600;
+
+/** Roughly how many ids fit, used for capacity arithmetic only. */
+const SEEK_CHUNK = 60;
+
+/** Split ids into groups whose query string stays under the limit. */
+function chunkByUrlLength(ids: number[]): number[][] {
+  const chunks: number[][] = [];
+  let current: number[] = [];
+  let bytes = 0;
+  for (const id of ids) {
+    const cost = String(id).length + 14; // "inventoryIds=" + "&"
+    if (current.length > 0 && bytes + cost > MAX_QUERY_BYTES) {
+      chunks.push(current);
+      current = [];
+      bytes = 0;
+    }
+    current.push(id);
+    bytes += cost;
+  }
+  if (current.length) chunks.push(current);
+  return chunks;
+}
 
 export interface Expectation {
   listingId: number;
@@ -66,8 +104,9 @@ export async function verifyPrices(
   const out = new Map<number, VerifyOutcome>();
   if (expectations.length === 0) return out;
 
-  for (let i = 0; i < expectations.length; i += SEEK_CHUNK) {
-    const chunk = expectations.slice(i, i + SEEK_CHUNK);
+  const byId = new Map(expectations.map(e => [e.listingId, e]));
+  for (const idChunk of chunkByUrlLength(expectations.map(e => e.listingId))) {
+    const chunk = idChunk.map(id => byId.get(id)!);
     const params = new URLSearchParams();
     for (const e of chunk) params.append('inventoryIds', String(e.listingId));
 
@@ -98,10 +137,10 @@ export async function verifyPrices(
       continue;
     }
 
-    const byId = new Map(listings.filter(l => l?.id != null).map(l => [Number(l.id), l]));
+    const returned = new Map(listings.filter(l => l?.id != null).map(l => [Number(l.id), l]));
 
     for (const e of chunk) {
-      const listing = byId.get(e.listingId);
+      const listing = returned.get(e.listingId);
       if (!listing) {
         out.set(e.listingId, {
           listingId: e.listingId, ok: false, actualPrice: null,
@@ -153,8 +192,7 @@ export async function verifyGone(
   const gone = new Set<number>(listingIds);
   if (listingIds.length === 0) return gone;
 
-  for (let i = 0; i < listingIds.length; i += SEEK_CHUNK) {
-    const chunk = listingIds.slice(i, i + SEEK_CHUNK);
+  for (const chunk of chunkByUrlLength(listingIds)) {
     const params = new URLSearchParams();
     for (const id of chunk) params.append('inventoryIds', String(id));
 

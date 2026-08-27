@@ -524,6 +524,7 @@ describe('capacity model — what 3,000 events actually needs', () => {
   const patchPerSecond = 12_880 / 60;
   const bulkSubmitPerSecond = (760 * 250) / 60;
   const bulkStatusPerSecond = (100 * 250) / 60;
+  // idsPerCall reflects the measured ~2KB query-string limit, not an assumption.
   const seekPerSecond = (VERIFY_CAPACITY.seekPerMinute * VERIFY_CAPACITY.idsPerCall) / 60;
 
   test('PATCH alone cannot carry 3,000 events', () => {
@@ -539,9 +540,14 @@ describe('capacity model — what 3,000 events actually needs', () => {
       'confirmation, not writing, is what the status endpoint limits');
   });
 
-  test('verifying with seek lifts the ceiling roughly sixfold', () => {
-    assert.equal(Math.round(seekPerSecond), 2333);
-    assert.equal(Math.round(seekPerSecond / bulkStatusPerSecond), 6);
+  test('verifying with seek lifts the ceiling, but less than first claimed', () => {
+    // Originally asserted 2,333/s on the assumption that seek took 200 ids per
+    // call. It does not: the query string is capped near 2KB, so ~60 ids fit.
+    // The real figure is 700/s — still better than polling bulk status, but the
+    // sixfold improvement this test used to claim was closer to 1.7x.
+    assert.equal(Math.round(seekPerSecond), 700);
+    assert.equal(seekPerSecond > bulkStatusPerSecond, true);
+    assert.equal(Math.round((seekPerSecond / bulkStatusPerSecond) * 10) / 10, 1.7);
   });
 
   test('row building, not the API, is what limits a large book', () => {
@@ -551,8 +557,8 @@ describe('capacity model — what 3,000 events actually needs', () => {
     assert.equal(Math.round(perPipelinePerCycle), 19_048);
 
     const apiPerCycle = Math.min(bulkSubmitPerSecond, seekPerSecond) * CYCLE_S;
-    assert.equal(perPipelinePerCycle < apiPerCycle / 10, true,
-      'one sequential pipeline is more than an order of magnitude below the API ceiling');
+    assert.equal(perPipelinePerCycle < apiPerCycle / 4, true,
+      'one sequential pipeline is still well below the API ceiling');
   });
 
   test('1,500 events needs several pipelines even at a 1% change rate', () => {
@@ -566,14 +572,15 @@ describe('capacity model — what 3,000 events actually needs', () => {
   });
 
   test('the resulting ceiling is a real number we can quote', () => {
-    // Verification is still marginally the binding constraint (2,333/s against
-    // bulk submit's 3,167/s) — worth knowing, because it means a larger seek
-    // chunk or a higher seek quota buys throughput, while more write budget
-    // would not.
+    // Verification is decisively the binding constraint: 700/s against bulk
+    // submit's 3,167/s. Write budget is not what to ask StubHub for — seek quota
+    // is, or a longer permitted query string so more ids fit per call.
     const ceiling = Math.min(bulkSubmitPerSecond, seekPerSecond);
-    assert.equal(Math.round(ceiling), 2333);
-    assert.equal(Math.round(ceiling * CYCLE_S), 280_000,
-      'about 280k changes per 2-minute cycle, or ~5.4% of a 5.2M-row book');
+    assert.equal(Math.round(ceiling), 700);
+    assert.equal(Math.round(ceiling * CYCLE_S), 84_000,
+      'about 84k changes per 2-minute cycle, or ~1.6% of a 5.2M-row book');
+    assert.equal(ceiling < bulkSubmitPerSecond / 4, true,
+      'confirmation is the bottleneck, not writing');
   });
 });
 

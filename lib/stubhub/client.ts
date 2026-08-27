@@ -72,6 +72,25 @@ export function loadConfig(
   };
 }
 
+/**
+ * A resubmitted bulk batch is refused, not deduplicated.
+ *
+ * bulkProcessingId is the only idempotency handle the API offers, and it behaves
+ * as a uniqueness constraint rather than an idempotency key: sending the same id
+ * twice answers 400 "You have already queued this process" instead of returning
+ * the original result. So it does prevent duplicate work — which is the important
+ * half — but a caller that treats the rejection as a failure will mark rows
+ * failed, retry them, and loop.
+ *
+ * Recognising it is the difference between "this batch is already in flight, go
+ * read it" and "this batch failed".
+ */
+export function isAlreadyQueued(error: unknown): boolean {
+  return error instanceof StubHubError
+    && error.status === 400
+    && /already queued this process/i.test(error.message ?? '');
+}
+
 export class StubHubError extends Error {
   readonly status: number;
   readonly code: string | null;
@@ -333,6 +352,20 @@ export class StubHubClient {
       const parsed = text ? safeJson(text) : null;
 
       if (!response.ok) {
+        // A long query string is rejected by the edge with an HTML page rather
+        // than a JSON error, so the body is a DOCTYPE and every field below is
+        // absent. Say what it is instead of surfacing markup as a message.
+        if (/^\s*<(!DOCTYPE|html)/i.test(text)) {
+          throw new StubHubError({
+            message:
+              `non-JSON response (${response.status}) — usually a query string over ~2KB ` +
+              `rejected before it reached the API`,
+            status: response.status,
+            traceId,
+            retryable: false,
+          });
+        }
+
         // Two error shapes come back from this API. Documented failures use
         // ErrorResource (code/message/errors); ASP.NET model validation returns
         // RFC 9110 problem+json instead, with `title` in place of `message` and a

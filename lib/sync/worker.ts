@@ -41,7 +41,7 @@
  */
 
 import { generateInventoryCsv, generateInventoryRowsForIds } from '@/actions/csvActions';
-import { StubHubClient, StubHubError, loadConfig } from '@/lib/stubhub/client.ts';
+import { StubHubClient, StubHubError, isAlreadyQueued, loadConfig } from '@/lib/stubhub/client.ts';
 import { mapRow, type InventoryRowInput } from '@/lib/stubhub/mapRow.ts';
 import { verifyEvent } from '@/lib/stubhub/eventVerifier.ts';
 import { payloadHash, deriveBatchId } from '@/lib/stubhub/hash.ts';
@@ -409,6 +409,13 @@ async function submitRemovals(
         await onOk(t);
       });
     } catch (error) {
+      if (isAlreadyQueued(error)) {
+        await pooled(chunk, PATCH_CONCURRENCY, async (t) => {
+          if (kind === 'delete') await markTombstoneSubmitted(t._id, 'in-flight');
+          await onOk(t);
+        });
+        return;
+      }
       const reason = error instanceof StubHubError ? error.summary : String(error);
       console.error(`[stubhub:worker] ${kind} batch rejected: ${reason}`);
       await pooled(chunk, PATCH_CONCURRENCY, async (t) => {
@@ -654,6 +661,17 @@ async function processRows(
       results = submitted.outcomes;
       batchId = submitted.batchId;
     } catch (error) {
+      // Already in flight from an earlier pass: the id is refused rather than
+      // deduplicated, so this is success-in-progress, not failure. Record the
+      // batch and read its result next pass.
+      if (isAlreadyQueued(error)) {
+        const known = deriveBatchId('create', chunk.map(i => `${i.externalId}:${i.hash}`));
+        for (const item of chunk) {
+          const meta = byExternalId.get(item.externalId)!;
+          await markCreating(meta.rowId, known);
+        }
+        return;
+      }
       const reason = error instanceof StubHubError ? error.summary : String(error);
       console.error(`[stubhub:worker] create batch failed: ${reason}`);
       for (const item of chunk) {
@@ -869,6 +887,15 @@ async function pushUpdatesInBulk(
     try {
       await submitUpdates(client, chunk);
     } catch (error) {
+      if (isAlreadyQueued(error)) {
+        // Already in flight; mark and let the next pass verify rather than
+        // treating a uniqueness rejection as a write failure.
+        for (const item of chunk) {
+          const m = meta.get(item.externalId)!;
+          await markUpdating(m.rowId, batchId);
+        }
+        return;
+      }
       const reason = error instanceof StubHubError ? error.summary : String(error);
       console.error(`[stubhub:worker] update batch rejected: ${reason}`);
       for (const item of chunk) {
