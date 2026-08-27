@@ -8,6 +8,8 @@
  *   POST { action: 'audit' }     → drift sweep (read-only)
  *   POST { action: 'settings' }  → change dryRun / marketplaces while running
  *   POST { action: 'retry' }     → return parked rows to the queue
+ *   POST { action: 'clear-count' } → how many listings StubHub holds (read-only)
+ *   POST { action: 'clear-all' }   → delete every listing on StubHub (destructive)
  *
  * A single manual pass exists because it is how you validate a cutover: run one
  * drain in dry-run, read exactly what it would have sent, and only then start the
@@ -23,6 +25,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { drainOnce, syncStatus, recordDrain } from '@/lib/sync/worker.ts';
 import { workerHandle, startWorker, stopWorker } from '@/lib/sync/runtime.ts';
+import { startClearAll, clearProgress, clearRunning, countRemoteListings } from '@/lib/sync/clearAll.ts';
 import { StubhubSyncSettings, getStubhubSyncSettings } from '@/models/stubhubSyncModel.js';
 import { requireFeatureFlag } from '@/lib/featureFlags';
 import dbConnect from '@/lib/dbConnect';
@@ -81,6 +84,8 @@ export async function GET() {
       skips,
       byEvent,
       states,
+      clearJob: clearProgress(),
+      clearRunning: clearRunning(),
       observedAt: new Date().toISOString(),
     });
   } catch (error) {
@@ -104,6 +109,33 @@ export async function POST(request: NextRequest) {
       const result = await drainOnce();
       await recordDrain(result);
       return NextResponse.json({ success: !result.aborted, ...result });
+    }
+
+    if (action === 'clear-count') {
+      const { count, truncated } = await countRemoteListings();
+      return NextResponse.json({ success: true, count, truncated });
+    }
+
+    if (action === 'clear-all') {
+      // A typed confirmation, checked on the server.
+      //
+      // This deletes the entire book from a live marketplace and there is no
+      // undo — the listings are gone and rebuilding them means re-creating every
+      // one, with new ids. A dialog the browser could skip, or a flag a stray
+      // fetch could set, is not enough of a gate for that.
+      if (body?.confirm !== 'DELETE ALL') {
+        return NextResponse.json(
+          { success: false, message: 'Confirmation phrase missing. Send confirm: "DELETE ALL".' },
+          { status: 400 }
+        );
+      }
+      if (clearRunning()) {
+        return NextResponse.json({ success: true, message: 'Already running.', clearJob: clearProgress() });
+      }
+      // stopWorker is passed in rather than called here so the operation owns the
+      // ordering: nothing may write to StubHub between the stop and the scan.
+      const job = startClearAll({ stop: stopWorker });
+      return NextResponse.json({ success: true, clearJob: job });
     }
 
     if (action === 'retry') {

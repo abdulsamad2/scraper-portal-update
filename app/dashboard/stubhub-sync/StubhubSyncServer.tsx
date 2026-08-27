@@ -4,6 +4,7 @@ import { FeatureFlags } from '@/models/featureFlagModel.js';
 import { syncStatus } from '@/lib/sync/worker.ts';
 import { currentLease } from '@/lib/sync/leader.ts';
 import { workerHandle } from '@/lib/sync/runtime.ts';
+import { clearProgress, clearRunning } from '@/lib/sync/clearAll.ts';
 import { recentFailures, skipBreakdown, pendingByEvent, stateBreakdown } from '@/lib/sync/queue.ts';
 import { getStubhubSyncSettings } from '@/models/stubhubSyncModel.js';
 import StubhubSyncClient, { type SyncSnapshot } from './StubhubSyncClient';
@@ -78,6 +79,8 @@ export default async function StubhubSyncServer() {
       skips,
       byEvent: byEvent.map(e => ({ ...e, oldest: e.oldest ? e.oldest.toISOString() : null })),
       states,
+      clearJob: clearProgress(),
+      clearRunning: clearRunning(),
       observedAt: new Date().toISOString(),
       settings: {
         ...status.settings,

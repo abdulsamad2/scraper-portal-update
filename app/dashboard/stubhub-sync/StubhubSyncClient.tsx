@@ -46,6 +46,7 @@ import {
   Radio, Play, Square, Zap, ShieldCheck, ShieldAlert, Loader2, AlertTriangle,
   Clock, Layers, Trash2, RefreshCw, Search, ChevronDown, ChevronRight, Ban,
   Activity, CheckCircle2, RotateCcw, Gauge, TrendingUp, TrendingDown, Minus,
+  Flame,
 } from 'lucide-react';
 
 export interface SyncSnapshot {
@@ -72,6 +73,8 @@ export interface SyncSnapshot {
   skips: Array<{ reason: string; count: number }>;
   byEvent: Array<{ mappingId: string; count: number; oldest: string | null }>;
   states: Record<string, number>;
+  clearJob: ClearProgress | null;
+  clearRunning: boolean;
   settings: {
     isRunning: boolean;
     dryRun: boolean;
@@ -81,6 +84,13 @@ export interface SyncSnapshot {
     lastError: string | null;
     totals: { created: number; updated: number; delisted: number; deleted: number; failed: number };
   };
+}
+
+export interface ClearProgress {
+  phase: 'idle' | 'stopping' | 'scanning' | 'deleting' | 'verifying' | 'resetting' | 'done' | 'failed';
+  scanned: number; pages: number; submitted: number; confirmed: number;
+  failed: number; rowsReset: number; dryRun: boolean;
+  startedAt: string | null; finishedAt: string | null; error: string | null; truncated: boolean;
 }
 
 interface DrainResult {
@@ -160,6 +170,9 @@ export default function StubhubSyncClient({ initial }: { initial: SyncSnapshot }
   const [showFailures, setShowFailures] = useState(false);
   const [showDrift, setShowDrift] = useState(false);
   const [history, setHistory] = useState<Sample[]>([]);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmText, setConfirmText] = useState('');
+  const [remoteCount, setRemoteCount] = useState<{ count: number; truncated: boolean } | null>(null);
 
   // Lifetime totals at the moment this page opened. Everything headline is
   // measured against this, so a counter poisoned by an old incident cannot go on
@@ -200,10 +213,10 @@ export default function StubhubSyncClient({ initial }: { initial: SyncSnapshot }
   useEffect(() => { record(initial); }, [initial, record]);
 
   useEffect(() => {
-    const active = snap.running || snap.leaseActive;
+    const active = snap.running || snap.leaseActive || snap.clearRunning;
     const t = setInterval(load, active ? 2000 : 8000);
     return () => clearInterval(t);
-  }, [load, snap.running, snap.leaseActive]);
+  }, [load, snap.running, snap.leaseActive, snap.clearRunning]);
 
   const act = async (action: string, extra: Record<string, unknown> = {}) => {
     setBusy(action);
@@ -219,6 +232,13 @@ export default function StubhubSyncClient({ initial }: { initial: SyncSnapshot }
       if (!data?.success) setError(data?.message ?? `${action} failed`);
       if (action === 'drain' && typeof data?.claimed === 'number') setLastDrain(data);
       if (action === 'audit' && data?.success) { setDrift(data as DriftResult); setShowDrift(true); }
+      if (action === 'clear-count' && data?.success) {
+        setRemoteCount({ count: data.count, truncated: Boolean(data.truncated) });
+      }
+      if (action === 'clear-all' && data?.success) {
+        setConfirmOpen(false);
+        setConfirmText('');
+      }
       if (action === 'retry' && data?.success) {
         setNotice(
           data.revived > 0
@@ -320,6 +340,7 @@ export default function StubhubSyncClient({ initial }: { initial: SyncSnapshot }
   }
 
   const verdict = assess(snap, trend, elsewhere);
+  const job = snap.clearJob;
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -867,6 +888,117 @@ export default function StubhubSyncClient({ initial }: { initial: SyncSnapshot }
           )}
         </section>
 
+        {/* ── Danger zone ──────────────────────────────────────────────────────
+            Deleting the whole book is occasionally the right thing — after a
+            bad cutover, or to reset a test account — and doing it by hand means
+            a script with a bearer token in it, which is worse. It is separated,
+            gated on a typed phrase checked server-side, and shows a real count
+            before it asks. */}
+        <section className="rounded-xl border-2 border-red-200 bg-white overflow-hidden">
+          <div className="bg-red-50 px-5 py-3 border-b border-red-200">
+            <h2 className="font-semibold text-red-900 flex items-center gap-2">
+              <Flame className="w-4 h-4" /> Danger zone
+            </h2>
+          </div>
+
+          <div className="p-5 space-y-4">
+            {job && job.phase !== 'done' && job.phase !== 'failed' ? (
+              <ClearRunning job={job} />
+            ) : (
+              <>
+                <div className="flex items-start justify-between gap-4 flex-wrap">
+                  <div className="max-w-xl">
+                    <h3 className="font-medium text-slate-900">Clear all inventory from StubHub</h3>
+                    <p className="text-sm text-slate-600 mt-1">
+                      Deletes every listing this account holds — enumerated from StubHub&apos;s own
+                      export, so it covers orphans the sync has lost track of as well as everything
+                      it still knows about.
+                    </p>
+                    <ul className="text-xs text-slate-500 mt-2 space-y-0.5">
+                      <li>· The drain loop is stopped first, so nothing re-creates listings mid-wipe.</li>
+                      <li>· Local rows forget their listing ids, so our record matches an empty marketplace.</li>
+                      <li>· Starting the worker afterwards rebuilds the whole book from scratch.</li>
+                      <li>· There is no undo. Rebuilt listings get new ids.</li>
+                    </ul>
+                  </div>
+                  {!confirmOpen && (
+                    <button
+                      disabled={busy !== null || !snap.configured}
+                      onClick={() => { setConfirmOpen(true); setRemoteCount(null); act('clear-count'); }}
+                      className="px-4 py-2 rounded-lg text-sm font-semibold bg-red-600 text-white hover:bg-red-700 flex items-center gap-2 disabled:opacity-40 shrink-0"
+                    >
+                      <Trash2 className="w-4 h-4" /> Clear all inventory
+                    </button>
+                  )}
+                </div>
+
+                {confirmOpen && (
+                  <div className="rounded-lg border border-red-300 bg-red-50 p-4 space-y-3">
+                    {busy === 'clear-count' ? (
+                      <p className="text-sm text-red-900 flex items-center gap-2">
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Counting what StubHub holds…
+                      </p>
+                    ) : remoteCount ? (
+                      <p className="text-sm text-red-900">
+                        This will permanently delete{' '}
+                        <strong className="tabular-nums">{remoteCount.count.toLocaleString()}</strong>{' '}
+                        listing(s) from StubHub.
+                        {remoteCount.truncated && ' The export was truncated, so there may be more.'}
+                      </p>
+                    ) : (
+                      <p className="text-sm text-red-900">
+                        Could not count the listings. You can still proceed — the wipe enumerates
+                        them again itself — but you will be doing it without knowing the number.
+                      </p>
+                    )}
+
+                    {snap.dryRun && (
+                      <p className="text-xs text-red-800 bg-white border border-red-200 rounded p-2">
+                        Dry run is on, so this will enumerate and report what it would delete
+                        without deleting anything. Switch to live to actually clear the book.
+                      </p>
+                    )}
+
+                    <label className="block text-xs font-medium text-red-900">
+                      Type <code className="bg-white px-1 rounded border border-red-200">DELETE ALL</code> to confirm
+                      <input
+                        value={confirmText}
+                        onChange={e => setConfirmText(e.target.value)}
+                        autoFocus
+                        spellCheck={false}
+                        className="mt-1 w-full max-w-xs px-3 py-2 rounded-lg border border-red-300 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-red-400"
+                        placeholder="DELETE ALL"
+                      />
+                    </label>
+
+                    <div className="flex gap-2">
+                      <button
+                        disabled={confirmText !== 'DELETE ALL' || busy !== null}
+                        onClick={() => act('clear-all', { confirm: confirmText })}
+                        className="px-4 py-2 rounded-lg text-sm font-semibold bg-red-600 text-white hover:bg-red-700 flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        {busy === 'clear-all' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                        {snap.dryRun ? 'Run the dry-run wipe' : 'Delete everything'}
+                      </button>
+                      <button
+                        onClick={() => { setConfirmOpen(false); setConfirmText(''); }}
+                        className="px-4 py-2 rounded-lg text-sm font-medium border border-slate-200 bg-white hover:bg-slate-50"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {job && (job.phase === 'done' || job.phase === 'failed') && (
+                  <ClearFinished job={job} />
+                )}
+              </>
+            )}
+          </div>
+        </section>
+
         {/* ── Footer ───────────────────────────────────────────────────────── */}
         <footer className="text-xs text-slate-400 flex flex-wrap gap-x-5 gap-y-1 pb-4">
           {snap.lease && (
@@ -1114,4 +1246,103 @@ function Banner({ tone, icon, children }: {
 
 function Empty({ children }: { children: React.ReactNode }) {
   return <p className="text-sm text-slate-400 py-2">{children}</p>;
+}
+
+/**
+ * A wipe in flight.
+ *
+ * Phase matters more than any percentage here, because the phases are wildly
+ * unequal: scanning is throttled to one export page per two minutes and is
+ * usually most of the wall clock, while deleting 250 ids at a time across 32
+ * concurrent batches is over in seconds. A single progress bar would sit near
+ * zero for minutes and then jump, which reads as a hang.
+ */
+function ClearRunning({ job }: { job: ClearProgress }) {
+  const phases: Array<{ key: ClearProgress['phase']; label: string; detail: string }> = [
+    { key: 'stopping',  label: 'Stopping the worker', detail: 'So nothing writes while the book is being cleared' },
+    { key: 'scanning',  label: 'Reading StubHub',     detail: 'Full export — capped at one page per two minutes' },
+    { key: 'deleting',  label: 'Deleting',            detail: '250 listings per request, 32 requests in flight' },
+    { key: 'verifying', label: 'Confirming',          detail: 'Reading back to prove they are gone' },
+    { key: 'resetting', label: 'Resetting local rows', detail: 'Forgetting listing ids so our record matches' },
+  ];
+  const current = phases.findIndex(p => p.key === job.phase);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2.5">
+        <Loader2 className="w-5 h-5 animate-spin text-red-600" />
+        <div>
+          <div className="font-medium text-slate-900">
+            {job.dryRun ? 'Dry-run wipe in progress' : 'Clearing all inventory'}
+          </div>
+          <div className="text-xs text-slate-500">
+            Started {ago(job.startedAt)} · this page can be closed, it runs on the server
+          </div>
+        </div>
+      </div>
+
+      <ol className="space-y-1.5">
+        {phases.map((p, i) => {
+          const done = current > i;
+          const active = current === i;
+          return (
+            <li key={p.key} className="flex items-start gap-2.5 text-sm">
+              <span className="mt-0.5 shrink-0">
+                {done ? <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  : active ? <Loader2 className="w-4 h-4 animate-spin text-red-600" />
+                  : <span className="block w-4 h-4 rounded-full border-2 border-slate-200" />}
+              </span>
+              <span>
+                <span className={done ? 'text-slate-500' : active ? 'text-slate-900 font-medium' : 'text-slate-400'}>
+                  {p.label}
+                </span>
+                <span className="text-xs text-slate-400 ml-2">{p.detail}</span>
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+
+      <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
+        <Tile label="Found"     n={job.scanned} />
+        <Tile label="Pages"     n={job.pages} />
+        <Tile label="Submitted" n={job.submitted} />
+        <Tile label="Confirmed" n={job.confirmed} tone="good" />
+        <Tile label="Failed"    n={job.failed} tone="bad" />
+      </div>
+    </div>
+  );
+}
+
+/** The outcome, kept on screen until another wipe replaces it. */
+function ClearFinished({ job }: { job: ClearProgress }) {
+  const failed = job.phase === 'failed';
+  return (
+    <div className={`rounded-lg border p-4 ${failed ? 'border-red-300 bg-red-50' : 'border-emerald-200 bg-emerald-50'}`}>
+      <h3 className={`text-sm font-semibold flex items-center gap-2 ${failed ? 'text-red-900' : 'text-emerald-900'}`}>
+        {failed ? <AlertTriangle className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />}
+        {failed ? 'Wipe failed' : job.dryRun ? 'Dry-run wipe finished — nothing was deleted' : 'Inventory cleared'}
+        <span className="font-normal text-xs opacity-70">{ago(job.finishedAt)}</span>
+      </h3>
+      {job.error && <p className="text-sm text-red-800 mt-1">{job.error}</p>}
+      <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 mt-3">
+        <Tile label="Found"      n={job.scanned} />
+        <Tile label="Submitted"  n={job.submitted} />
+        <Tile label="Confirmed"  n={job.confirmed} tone="good" />
+        <Tile label="Failed"     n={job.failed} tone="bad" />
+        <Tile label="Rows reset" n={job.rowsReset} />
+      </div>
+      {job.truncated && (
+        <p className="text-xs text-red-800 mt-2">
+          The export was truncated, so listings beyond the page cap were not touched. Run it again.
+        </p>
+      )}
+      {!failed && !job.dryRun && job.rowsReset > 0 && (
+        <p className="text-xs text-emerald-800 mt-2">
+          {job.rowsReset.toLocaleString()} row(s) are queued to be re-created. Starting the worker
+          rebuilds the book; leaving it stopped keeps StubHub empty.
+        </p>
+      )}
+    </div>
+  );
 }
