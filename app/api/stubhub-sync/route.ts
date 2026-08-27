@@ -7,6 +7,7 @@
  *   POST { action: 'stop' }      → stop it
  *   POST { action: 'audit' }     → drift sweep (read-only)
  *   POST { action: 'settings' }  → change dryRun / marketplaces while running
+ *   POST { action: 'retry' }     → return parked rows to the queue
  *
  * A single manual pass exists because it is how you validate a cutover: run one
  * drain in dry-run, read exactly what it would have sent, and only then start the
@@ -26,6 +27,7 @@ import { requireFeatureFlag } from '@/lib/featureFlags';
 import dbConnect from '@/lib/dbConnect';
 import { auditDrift, summariseDrift } from '@/lib/sync/audit.ts';
 import { currentLease } from '@/lib/sync/leader.ts';
+import { recentFailures, skipBreakdown, pendingByEvent, stateBreakdown } from '@/lib/sync/queue.ts';
 import { createErrorLog } from '@/actions/errorLogActions';
 
 // PM2 reloads and Next's module re-evaluation can both re-import this file. Without
@@ -52,7 +54,24 @@ export async function GET() {
     // Ensure the settings document exists so the UI has something to render on a
     // fresh install rather than a spinner and no explanation.
     await getStubhubSyncSettings();
-    const [status, lease] = await Promise.all([syncStatus(), currentLease()]);
+
+    // Everything the page renders comes from this one call, deliberately.
+    //
+    // It used to return the counters only, and the page filled in the detail
+    // panels from the server render — which meant the header said one thing and
+    // "waiting, by event" said another as soon as the first poll landed, because
+    // one half was live and the other was frozen at page load. Two numbers that
+    // disagree on a diagnostic page are worse than one number that is slightly
+    // stale: the operator stops trusting either. So the whole snapshot is
+    // assembled together and replaced together.
+    const [status, lease, failures, skips, byEvent, states] = await Promise.all([
+      syncStatus(),
+      currentLease().catch(() => null),
+      recentFailures(25).catch(() => []),
+      skipBreakdown().catch(() => []),
+      pendingByEvent(12).catch(() => []),
+      stateBreakdown().catch(() => ({})),
+    ]);
     const s = state();
 
     return NextResponse.json({
@@ -63,6 +82,11 @@ export async function GET() {
       ...status,
       // Sync lag in human terms: how long the oldest unpushed change has waited.
       lagSeconds: Math.round(status.lagMs / 1000),
+      failures,
+      skips,
+      byEvent,
+      states,
+      observedAt: new Date().toISOString(),
     });
   } catch (error) {
     return NextResponse.json(
@@ -85,6 +109,12 @@ export async function POST(request: NextRequest) {
       const result = await drainOnce();
       await recordDrain(result);
       return NextResponse.json({ success: !result.aborted, ...result });
+    }
+
+    if (action === 'retry') {
+      const { retryParked } = await import('@/lib/sync/queue.ts');
+      const revived = await retryParked();
+      return NextResponse.json({ success: true, revived });
     }
 
     if (action === 'settings') {

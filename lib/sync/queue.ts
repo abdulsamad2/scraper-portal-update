@@ -488,3 +488,52 @@ export async function pendingByEvent(limit = 10): Promise<Array<{
     oldest: r.oldest ?? null,
   }));
 }
+
+/**
+ * Return parked rows to the queue.
+ *
+ * A row is parked after MAX_ATTEMPTS so that something permanently broken stops
+ * consuming budget the working rows need. That is right, but it needs an undo:
+ * when the cause was a bug in this code rather than in the data — and so far it
+ * has been, twice — every parked row is fine and simply needs another go. Without
+ * this the only remedy is a hand-written database update, which is not something
+ * an operator should be doing at speed.
+ */
+export async function retryParked(): Promise<number> {
+  await dbConnect();
+  const res = await ConsecutiveGroup.updateMany(
+    { 'inventory.syncState': { $in: ['failed', 'skipped'] } },
+    {
+      $set: {
+        'inventory.syncState': 'dirty',
+        'inventory.syncPendingSince': new Date(),
+        'inventory.syncAttempts': 0,
+      },
+      $unset: { 'inventory.syncLeaseUntil': '', 'inventory.syncError': '' },
+    }
+  );
+  await InventoryTombstone.updateMany(
+    { syncState: 'failed' },
+    { $set: { syncState: 'pending', syncAttempts: 0 }, $unset: { syncLeaseUntil: '', syncError: '' } }
+  );
+  return res.modifiedCount;
+}
+
+/**
+ * Rows in each sync state.
+ *
+ * The pipeline is pending -> creating -> created -> updating -> synced, and a
+ * single "rows waiting" number collapses all of it. Seeing where rows actually
+ * sit is what distinguishes "creating steadily" from "stuck mid-create", which
+ * look identical from a queue depth.
+ */
+export async function stateBreakdown(): Promise<Record<string, number>> {
+  await dbConnect();
+  const rows = await ConsecutiveGroup.aggregate([
+    { $match: { 'inventory.syncState': { $exists: true } } },
+    { $group: { _id: '$inventory.syncState', n: { $sum: 1 } } },
+  ]);
+  return Object.fromEntries(
+    (rows as Array<{ _id: string; n: number }>).map(r => [r._id ?? 'unknown', r.n])
+  );
+}

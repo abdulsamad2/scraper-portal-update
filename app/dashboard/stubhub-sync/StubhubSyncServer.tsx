@@ -3,7 +3,7 @@ import dbConnect from '@/lib/dbConnect';
 import { FeatureFlags } from '@/models/featureFlagModel.js';
 import { syncStatus } from '@/lib/sync/worker.ts';
 import { currentLease } from '@/lib/sync/leader.ts';
-import { recentFailures, skipBreakdown, pendingByEvent } from '@/lib/sync/queue.ts';
+import { recentFailures, skipBreakdown, pendingByEvent, stateBreakdown } from '@/lib/sync/queue.ts';
 import { getStubhubSyncSettings } from '@/models/stubhubSyncModel.js';
 import StubhubSyncClient, { type SyncSnapshot } from './StubhubSyncClient';
 
@@ -56,12 +56,13 @@ export default async function StubhubSyncServer() {
     // must fail loudly rather than render zeros. The diagnostics below are
     // best-effort — losing the failure list is a degraded page, losing the queue
     // depth is a misleading one.
-    const [status, lease, failures, skips, byEvent] = await Promise.all([
+    const [status, lease, failures, skips, byEvent, states] = await Promise.all([
       syncStatus(),
       currentLease().catch(() => null),
-      recentFailures(20).catch(() => []),
+      recentFailures(25).catch(() => []),
       skipBreakdown().catch(() => []),
-      pendingByEvent(8).catch(() => []),
+      pendingByEvent(12).catch(() => []),
+      stateBreakdown().catch(() => ({})),
     ]);
 
     snapshot = {
@@ -73,6 +74,8 @@ export default async function StubhubSyncServer() {
       failures,
       skips,
       byEvent: byEvent.map(e => ({ ...e, oldest: e.oldest ? e.oldest.toISOString() : null })),
+      states,
+      observedAt: new Date().toISOString(),
       settings: {
         ...status.settings,
         lastDrainAt: status.settings.lastDrainAt ? new Date(status.settings.lastDrainAt).toISOString() : null,
