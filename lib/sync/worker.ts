@@ -59,7 +59,7 @@ import {
   type CreateItem, type UpdateItem, type ItemOutcome,
 } from './batcher.ts';
 import { verifyPrices, verifyGone } from './verify.ts';
-import { acquireLease, releaseLease, makeHolderId, RENEW_INTERVAL_MS } from './leader.ts';
+import { acquireLease, releaseLease, currentLease, makeHolderId, RENEW_INTERVAL_MS } from './leader.ts';
 import { getStubhubSyncSettings, StubhubSyncSettings } from '@/models/stubhubSyncModel.js';
 import type { ApiMarketplace } from '@/lib/stubhub/types.ts';
 
@@ -762,11 +762,39 @@ async function processRows(
  * The API has no concurrency control to catch that mistake, so this is the only
  * place it can be caught.
  */
-export async function runWorker(signal?: AbortSignal): Promise<void> {
+export interface WorkerStart {
+  /** True only if this call took the lease and is now the writer. */
+  started: boolean;
+  holder: string;
+  reason?: 'not-configured' | 'lease-held-elsewhere';
+  /** Who has it, when we could not take it. */
+  heldBy?: string;
+}
+
+/**
+ * @param onStart called once, as soon as it is known whether this call became
+ *   the writer. Callers need this because standing down is silent otherwise:
+ *   runWorker simply returns, and a caller that only knows "the promise is still
+ *   pending" cannot tell a healthy loop from one that gave up in the first
+ *   millisecond. That ambiguity is what made the dashboard's Start button appear
+ *   to do nothing — it reported success, the loop had already exited, and the
+ *   button flipped back with no explanation.
+ */
+export async function runWorker(
+  signal?: AbortSignal,
+  onStart?: (info: WorkerStart) => void,
+): Promise<void> {
   const holder = makeHolderId();
+  let announced = false;
+  const announce = (info: WorkerStart) => {
+    if (announced) return;
+    announced = true;
+    try { onStart?.(info); } catch { /* a bad listener must not stop the worker */ }
+  };
 
   if (!new StubHubClient().configured) {
     console.warn('[stubhub:worker] not configured — set STUBHUB_BEARER_TOKEN and STUBHUB_ACCOUNT_ID');
+    announce({ started: false, holder, reason: 'not-configured' });
     return;
   }
 
@@ -774,9 +802,16 @@ export async function runWorker(signal?: AbortSignal): Promise<void> {
 
   try {
     if (!(await acquireLease(holder))) {
+      const held = await currentLease().catch(() => null);
       console.log('[stubhub:worker] another instance holds the lease; standing down');
+      announce({
+        started: false, holder,
+        reason: 'lease-held-elsewhere',
+        heldBy: held?.holder,
+      });
       return;
     }
+    announce({ started: true, holder });
     renewTimer = setInterval(() => { void acquireLease(holder); }, RENEW_INTERVAL_MS);
 
     while (!signal?.aborted) {
@@ -810,6 +845,10 @@ export async function runWorker(signal?: AbortSignal): Promise<void> {
     }
   } finally {
     if (renewTimer) clearInterval(renewTimer);
+    // If we fell out before announcing — an exception during acquisition, say —
+    // say so rather than leaving the caller waiting on a promise that will never
+    // settle.
+    announce({ started: false, holder });
     await releaseLease(holder).catch(() => {});
   }
 }

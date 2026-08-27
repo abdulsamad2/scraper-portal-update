@@ -55,6 +55,10 @@ export interface SyncSnapshot {
   startedAt?: string | null;
   observedAt?: string;
   lease: { holder: string; expiresAt: string } | null;
+  /** A live lease exists somewhere — possibly on another instance. */
+  leaseActive: boolean;
+  /** That lease belongs to the instance answering this request. */
+  leaseIsOurs: boolean;
   pendingRows: number;
   pendingTombstones: number;
   failedRows: number;
@@ -196,10 +200,10 @@ export default function StubhubSyncClient({ initial }: { initial: SyncSnapshot }
   useEffect(() => { record(initial); }, [initial, record]);
 
   useEffect(() => {
-    const ms = snap.running ? 2000 : 8000;
-    const t = setInterval(load, ms);
+    const active = snap.running || snap.leaseActive;
+    const t = setInterval(load, active ? 2000 : 8000);
     return () => clearInterval(t);
-  }, [load, snap.running]);
+  }, [load, snap.running, snap.leaseActive]);
 
   const act = async (action: string, extra: Record<string, unknown> = {}) => {
     setBusy(action);
@@ -231,6 +235,12 @@ export default function StubhubSyncClient({ initial }: { initial: SyncSnapshot }
   };
 
   const live = snap.ok && snap.dryRun === false;
+  // The loop is per-process; the lease is global. Under PM2 the instance serving
+  // this page is often not the one draining, and treating that as "Stopped" was
+  // what made the Start button look broken — it offered an action that would
+  // correctly refuse, then flipped straight back.
+  const elsewhere = !snap.running && snap.leaseActive === true;
+  const draining = snap.running || elsewhere;
   const totals = snap.settings?.totals;
   const marketplaces = snap.settings?.marketplaces ?? ['StubHub'];
 
@@ -309,7 +319,7 @@ export default function StubhubSyncClient({ initial }: { initial: SyncSnapshot }
     );
   }
 
-  const verdict = assess(snap, trend);
+  const verdict = assess(snap, trend, elsewhere);
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -340,11 +350,18 @@ export default function StubhubSyncClient({ initial }: { initial: SyncSnapshot }
             {live ? 'LIVE' : 'DRY RUN'}
           </span>
 
-          <span className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full border ${
-            snap.running ? 'bg-teal-50 text-teal-700 border-teal-200' : 'bg-slate-100 text-slate-600 border-slate-200'
-          }`}>
-            <span className={`w-1.5 h-1.5 rounded-full ${snap.running ? 'bg-teal-500 animate-pulse' : 'bg-slate-400'}`} />
-            {snap.running ? 'Draining' : 'Stopped'}
+          <span
+            title={
+              elsewhere
+                ? `The drain loop is running on another instance (lease ${snap.lease?.holder}). Only one writer is allowed.`
+                : undefined
+            }
+            className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full border ${
+              draining ? 'bg-teal-50 text-teal-700 border-teal-200' : 'bg-slate-100 text-slate-600 border-slate-200'
+            }`}
+          >
+            <span className={`w-1.5 h-1.5 rounded-full ${draining ? 'bg-teal-500 animate-pulse' : 'bg-slate-400'}`} />
+            {snap.running ? 'Draining' : elsewhere ? 'Draining elsewhere' : 'Stopped'}
           </span>
 
           <div className="flex items-center gap-2">
@@ -382,9 +399,13 @@ export default function StubhubSyncClient({ initial }: { initial: SyncSnapshot }
               </button>
             ) : (
               <button
-                disabled={busy !== null || !snap.configured}
+                // Disabled rather than hidden when another instance holds the
+                // lease: the operator needs to see that starting is not the
+                // missing step, which an absent button would not tell them.
+                disabled={busy !== null || !snap.configured || elsewhere}
                 onClick={() => act('start')}
-                className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-teal-600 text-white hover:bg-teal-700 flex items-center gap-1.5 disabled:opacity-40"
+                title={elsewhere ? 'Already draining on another instance — only one writer is allowed.' : undefined}
+                className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-teal-600 text-white hover:bg-teal-700 flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 {busy === 'start' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
                 Start
@@ -859,6 +880,10 @@ export default function StubhubSyncClient({ initial }: { initial: SyncSnapshot }
           )}
           {snap.startedAt && <span>Worker up {ago(snap.startedAt)?.replace(' ago', '')}</span>}
           <span>Replaces the CSV upload to Automatiq.</span>
+          <span className="w-full">
+            The worker runs in the server process, not in this browser — closing this page or
+            navigating away does not stop it, and it is restored automatically after a restart.
+          </span>
         </footer>
 
         {snap.settings?.lastError && (
@@ -878,7 +903,7 @@ export default function StubhubSyncClient({ initial }: { initial: SyncSnapshot }
  * a stopped worker with a backlog is more urgent than a large backlog being
  * worked through, even though the second has the bigger number.
  */
-function assess(snap: SyncSnapshot, trend: number) {
+function assess(snap: SyncSnapshot, trend: number, elsewhere: boolean) {
   const notes: string[] = [];
   if (snap.failedRows > 0) notes.push(`${snap.failedRows.toLocaleString()} row(s) parked after ${snap.maxAttempts} attempts — use "Return to the queue" once the cause is fixed.`);
   if (snap.pendingTombstones > 0) notes.push(`${snap.pendingTombstones.toLocaleString()} removal(s) queued for StubHub.`);
@@ -895,6 +920,14 @@ function assess(snap: SyncSnapshot, trend: number) {
     return { ...tones.bad, icon: <ShieldAlert className="w-6 h-6" />, notes,
       title: 'Not configured',
       detail: 'No StubHub credentials are loaded, so nothing can be written. Changes still queue safely.' };
+  }
+
+  if (elsewhere) {
+    return { ...tones.good, icon: <CheckCircle2 className="w-6 h-6" />, notes,
+      title: 'Draining on another instance',
+      detail: `The sync lease is held by ${snap.lease?.holder ?? 'another process'}, so the loop is running there, not here. `
+        + 'That is normal under PM2 and nothing needs doing — only one writer is allowed, because the POS API has no '
+        + 'concurrency control and two writers would silently overwrite each other. Start is disabled for that reason.' };
   }
 
   if (!snap.running && snap.pendingRows + snap.pendingTombstones > 0) {

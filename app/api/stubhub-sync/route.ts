@@ -21,7 +21,8 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { drainOnce, runWorker, syncStatus, recordDrain } from '@/lib/sync/worker.ts';
+import { drainOnce, syncStatus, recordDrain } from '@/lib/sync/worker.ts';
+import { workerHandle, startWorker, stopWorker } from '@/lib/sync/runtime.ts';
 import { StubhubSyncSettings, getStubhubSyncSettings } from '@/models/stubhubSyncModel.js';
 import { requireFeatureFlag } from '@/lib/featureFlags';
 import dbConnect from '@/lib/dbConnect';
@@ -30,22 +31,9 @@ import { currentLease } from '@/lib/sync/leader.ts';
 import { recentFailures, skipBreakdown, pendingByEvent, stateBreakdown } from '@/lib/sync/queue.ts';
 import { createErrorLog } from '@/actions/errorLogActions';
 
-// PM2 reloads and Next's module re-evaluation can both re-import this file. Without
-// a global handle the old loop would keep running unreferenced and a second one
-// would start beside it — the exact scenario the lease protects against, but there
-// is no reason to rely on the lease for something this avoidable.
-const KEY = '__stubhubSyncWorker__';
-
-interface WorkerState {
-  controller: AbortController | null;
-  startedAt: number | null;
-}
-
-function state(): WorkerState {
-  const g = globalThis as Record<string, unknown>;
-  if (!g[KEY]) g[KEY] = { controller: null, startedAt: null } satisfies WorkerState;
-  return g[KEY] as WorkerState;
-}
+// The worker handle and the start/stop logic live in lib/sync/runtime.ts because
+// instrumentation.ts needs them too — a restored loop the API could not see or
+// stop would be worse than one that was never restored.
 
 export async function GET() {
   const blocked = await requireFeatureFlag('stubhubSync');
@@ -72,13 +60,20 @@ export async function GET() {
       pendingByEvent(12).catch(() => []),
       stateBreakdown().catch(() => ({})),
     ]);
-    const s = state();
+    const s = workerHandle();
 
     return NextResponse.json({
       success: true,
       running: Boolean(s.controller),
       startedAt: s.startedAt ? new Date(s.startedAt).toISOString() : null,
       lease: lease ? { holder: lease.holder, expiresAt: lease.expiresAt } : null,
+      // "Running" is per-instance; the lease is global. Under PM2 the instance
+      // answering this request is often not the one draining, and reporting only
+      // the local handle made a perfectly healthy system read as "Stopped" —
+      // which invites an operator to press Start on an instance that will
+      // correctly refuse, and see nothing happen.
+      leaseActive: Boolean(lease && lease.expiresAt.getTime() > Date.now()),
+      leaseIsOurs: Boolean(lease && s.holder && lease.holder === s.holder),
       ...status,
       // Sync lag in human terms: how long the oldest unpushed change has waited.
       lagSeconds: Math.round(status.lagMs / 1000),
@@ -130,46 +125,12 @@ export async function POST(request: NextRequest) {
     }
 
     if (action === 'start') {
-      const s = state();
-      if (s.controller) {
-        return NextResponse.json({ success: true, message: 'already running' });
-      }
-      s.controller = new AbortController();
-      s.startedAt = Date.now();
-      // Persisted so the loop comes back by itself after a restart, the same way
-      // the CSV scheduler restores isScheduled. A deploy should not silently stop
-      // inventory syncing until somebody notices.
-      await dbConnect();
-      await StubhubSyncSettings.updateOne({}, { $set: { isRunning: true } }, { upsert: true });
-
-      // Intentionally not awaited: the loop runs until stopped. Failures are
-      // logged and clear the handle so a later start can succeed.
-      void runWorker(s.controller.signal)
-        .catch(async (error) => {
-          console.error('[stubhub:worker] loop failed:', error);
-          await createErrorLog({
-            eventUrl: 'STUBHUB_SYNC_WORKER',
-            errorType: 'DATABASE_ERROR',
-            message: error instanceof Error ? error.message : String(error),
-            metadata: { operation: 'runWorker', timestamp: new Date() },
-          }).catch(() => {});
-        })
-        .finally(() => {
-          const cur = state();
-          cur.controller = null;
-          cur.startedAt = null;
-        });
-
-      return NextResponse.json({ success: true, message: 'worker started' });
+      const outcome = await startWorker();
+      return NextResponse.json(outcome, { status: outcome.success ? 200 : 409 });
     }
 
     if (action === 'stop') {
-      const s = state();
-      s.controller?.abort();
-      s.controller = null;
-      s.startedAt = null;
-      await dbConnect();
-      await StubhubSyncSettings.updateOne({}, { $set: { isRunning: false } }, { upsert: true });
+      await stopWorker();
       return NextResponse.json({ success: true, message: 'worker stopping' });
     }
 

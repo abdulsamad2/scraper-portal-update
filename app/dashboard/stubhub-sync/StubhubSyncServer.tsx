@@ -3,6 +3,7 @@ import dbConnect from '@/lib/dbConnect';
 import { FeatureFlags } from '@/models/featureFlagModel.js';
 import { syncStatus } from '@/lib/sync/worker.ts';
 import { currentLease } from '@/lib/sync/leader.ts';
+import { workerHandle } from '@/lib/sync/runtime.ts';
 import { recentFailures, skipBreakdown, pendingByEvent, stateBreakdown } from '@/lib/sync/queue.ts';
 import { getStubhubSyncSettings } from '@/models/stubhubSyncModel.js';
 import StubhubSyncClient, { type SyncSnapshot } from './StubhubSyncClient';
@@ -67,10 +68,12 @@ export default async function StubhubSyncServer() {
 
     snapshot = {
       ok: true,
-      running: false, // in-process handle is per-instance; the client refreshes it
+      running: Boolean(workerHandle().controller),
       ...status,
       lagSeconds: Math.round(status.lagMs / 1000),
       lease: lease ? { holder: lease.holder, expiresAt: lease.expiresAt.toISOString() } : null,
+      leaseActive: Boolean(lease && lease.expiresAt.getTime() > Date.now()),
+      leaseIsOurs: Boolean(lease && workerHandle().holder === lease.holder),
       failures,
       skips,
       byEvent: byEvent.map(e => ({ ...e, oldest: e.oldest ? e.oldest.toISOString() : null })),
