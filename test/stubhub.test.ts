@@ -21,6 +21,7 @@ import { mapRow, type InventoryRowInput } from '../lib/stubhub/mapRow.ts';
 import { comparePriceEcho, ASK_PRICE_FIELD } from '../lib/stubhub/price.ts';
 import { chooseWritePath, itemsPerMinute, MAX_BATCH_ITEMS, RATE_LIMITS, RECONCILIATION } from '../lib/stubhub/limits.ts';
 import { planBatch, resolveRemoval, REAPPEARANCE_GRACE_MS } from '../lib/stubhub/policy.ts';
+import { verifyEvent, clearEventCache } from '../lib/stubhub/eventVerifier.ts';
 
 describe('resolveSplitType', () => {
   // Every case here appeared in the 1,537-row export, with its observed frequency.
@@ -115,9 +116,17 @@ describe('resolveEventId', () => {
     assert.equal(resolveEventId('SE26_JAB3').ok, false);
   });
 
-  test('rejects empty and legacy 7-digit ids', () => {
+  test('accepts any numeric id — digit count carries no information', () => {
+    // Learned the hard way in production: 454452424 is nine digits and does not
+    // exist on StubHub, while 2546456 is seven digits and does. The shape check
+    // is only a pre-filter now; eventVerifier asks the API.
+    assert.equal(resolveEventId('2546456').ok, true);
+    assert.equal(resolveEventId('454452424').ok, true);
+  });
+
+  test('rejects empty ids and anything too large to be an int32', () => {
     assert.equal((resolveEventId('') as { reason: string }).reason, 'no-mapping');
-    assert.equal((resolveEventId('5964629') as { reason: string }).reason, 'not-stubhub-shaped');
+    assert.equal((resolveEventId('99999999999') as { reason: string }).reason, 'not-stubhub-shaped');
   });
 });
 
@@ -416,5 +425,54 @@ describe('removal policy — protect instantly, churn never', () => {
   test('a listing that never existed resolves locally with no API call', () => {
     const d = resolveRemoval({ stubhubListingId: null, delistedAt: null, reappeared: false, reason: 'scraper-removed', now });
     assert.equal(d.action, 'cancel');
+  });
+});
+
+describe('event verification', () => {
+  const stub = (event: unknown) => ({
+    request: async () => ({ data: event ? { event } : {}, status: 200, traceId: null, skipped: false }),
+  }) as unknown as Parameters<typeof verifyEvent>[0];
+
+  test('rejects non-numeric ids without spending a request', async () => {
+    let called = false;
+    const spy = { request: async () => { called = true; return { data: {}, status: 200, traceId: null, skipped: false }; } };
+    const r = await verifyEvent(spy as unknown as Parameters<typeof verifyEvent>[0], 'tc-1787216947276');
+    assert.equal(r.ok, false);
+    assert.equal((r as { reason: string }).reason, 'not-numeric');
+    assert.equal(called, false, 'a lookup for something that cannot be an id is wasted budget');
+  });
+
+  test('accepts an event whose date matches ours', async () => {
+    clearEventCache();
+    const r = await verifyEvent(stub({ id: 159262123, name: 'Braves', date: '2026-05-22T19:15:00' }),
+      '159262123', { name: 'Braves', date: '2026-05-22T19:15:00' });
+    assert.equal(r.ok, true);
+  });
+
+  test('rejects a real id that belongs to a different event', async () => {
+    // The production case: 2546456 exists, but it is a 2018 baseball game while
+    // our row is a Bruno Mars concert. Listing against it would have succeeded.
+    clearEventCache();
+    const r = await verifyEvent(
+      stub({ id: 2546456, name: 'Cleveland Indians At Arizona Diamondbacks', date: '2018-03-26T18:40:00' }),
+      '2546456',
+      { name: 'Bruno Mars The Romantic Tour', date: '2026-11-01T20:00:00' }
+    );
+    assert.equal(r.ok, false);
+    assert.equal((r as { reason: string }).reason, 'wrong-event');
+    assert.match((r as { detail: string }).detail, /days apart/);
+  });
+
+  test('tolerates a rescheduled event rather than refusing to list it', async () => {
+    clearEventCache();
+    const r = await verifyEvent(stub({ id: 1, name: 'Show', date: '2026-05-25T19:00:00' }),
+      '1', { name: 'Show', date: '2026-05-22T19:00:00' });
+    assert.equal(r.ok, true, 'three days is a reschedule, not a different event');
+  });
+
+  test('an id StubHub does not know is not-found, not a wrong match', async () => {
+    clearEventCache();
+    const r = await verifyEvent(stub(null), '454452424', { date: '2026-01-01' });
+    assert.equal((r as { reason: string }).reason, 'not-found');
   });
 });

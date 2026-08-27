@@ -14,13 +14,21 @@
  * be looked up by name and date — the only alternative is the fuzzy `eventMapping`
  * object on create, which we deliberately don't use (it can silently mis-map).
  *
- * Consequence: anything that isn't nine digits is skipped and reported. It is never
- * guessed at, and — this is the part that matters — a skip must never reach the
- * delete path. A row we can't resolve is a row we can't talk about, not a row that
- * should be removed from the marketplace.
+ * This module only answers "could this be an event id at all". It used to require
+ * exactly nine digits, and production showed that heuristic to be wrong in both
+ * directions: 454452424 is nine digits and does not exist on StubHub, while
+ * 2546456 is seven digits and does. Digit count carries no information here.
+ *
+ * The real check is eventVerifier.ts, which asks the API and compares the answer
+ * against the event we hold. This stays as the cheap pre-filter that rejects
+ * things that are obviously not ids — tickets.com "tc-…", eVenue venue codes —
+ * without spending a request on them.
+ *
+ * A skip must never reach the delete path. A row we cannot resolve is a row we
+ * cannot talk about, not a row that should be removed from the marketplace.
  */
 
-const STUBHUB_EVENT_ID = /^[0-9]{9}$/;
+const STUBHUB_EVENT_ID = /^[0-9]+$/;
 const TICKETSCOM_SYNTHETIC = /^tc-/i;
 
 export type SkipReason =
@@ -40,8 +48,12 @@ export function resolveEventId(mappingId: string | undefined | null): EventResol
   }
 
   if (STUBHUB_EVENT_ID.test(raw)) {
-    // int32 in the spec (EventRequest.id); 9 digits is comfortably inside range.
-    return { ok: true, eventId: Number.parseInt(raw, 10) };
+    const parsed = Number.parseInt(raw, 10);
+    // EventRequest.id is int32 in the spec, so anything larger cannot be one.
+    if (parsed > 2_147_483_647) {
+      return { ok: false, reason: 'not-stubhub-shaped', detail: `${raw} exceeds int32` };
+    }
+    return { ok: true, eventId: parsed };
   }
 
   if (TICKETSCOM_SYNTHETIC.test(raw)) {
@@ -55,7 +67,7 @@ export function resolveEventId(mappingId: string | undefined | null): EventResol
   return {
     ok: false,
     reason: 'not-stubhub-shaped',
-    detail: `${raw} is not a 9-digit StubHub event id`,
+    detail: `${raw} is not numeric, so it cannot be a StubHub event id`,
   };
 }
 

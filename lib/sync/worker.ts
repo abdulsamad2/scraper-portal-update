@@ -42,6 +42,7 @@
 import { generateInventoryCsv } from '@/actions/csvActions';
 import { StubHubClient, StubHubError, loadConfig } from '@/lib/stubhub/client.ts';
 import { mapRow, type InventoryRowInput } from '@/lib/stubhub/mapRow.ts';
+import { verifyEvent } from '@/lib/stubhub/eventVerifier.ts';
 import { payloadHash } from '@/lib/stubhub/hash.ts';
 import { planBatch, resolveRemoval, IDLE_POLL_MS } from '@/lib/stubhub/policy.ts';
 import { SINGLE_CALL_THRESHOLD } from '@/lib/stubhub/limits.ts';
@@ -250,6 +251,28 @@ async function processRows(
   const byInventoryId = new Map<number, InventoryRowInput>();
   for (const r of allRows) byInventoryId.set(Number(r.inventory_id), r);
 
+  // Confirm each event exists AND is ours before building a single payload.
+  //
+  // Without this a bad id fails the entire 250-item batch as a unit — one event
+  // took down every create in the first live run — and, far worse, an id that is
+  // real but belongs to someone else's event would succeed, listing our
+  // inventory against the wrong game. Verified once per event per drain, cached.
+  const verified = new Map<string, number>();
+  const eventSkips = new Map<string, string>();
+  for (const mappingId of mappingIds) {
+    const sample = allRows.find(r => r.event_id === mappingId);
+    const check = await verifyEvent(client, mappingId, {
+      name: sample?.event_name,
+      date: sample?.event_date,
+    });
+    if (check.ok) verified.set(mappingId, check.eventId);
+    else eventSkips.set(mappingId, `${check.reason}: ${check.detail}`);
+  }
+
+  for (const [mappingId, reason] of eventSkips) {
+    console.warn(`[stubhub:worker] event ${mappingId} unusable — ${reason}`);
+  }
+
   const creates: CreateItem[] = [];
   const updates: UpdateItem[] = [];
   const byExternalId = new Map<string, { rowId: unknown; hash: string; attempts: number }>();
@@ -260,6 +283,17 @@ async function processRows(
       // Claimed but absent from the export — excluded by a rule, a stopped event,
       // or already gone. Not an error; it simply has nothing to say right now.
       await markSkipped(row._id, 'row not present in current export');
+      out.skipped++;
+      continue;
+    }
+
+    // An event that failed verification takes all of its rows with it.
+    const eventProblem = eventSkips.get(row.mapping_id);
+    if (eventProblem) {
+      // A transient lookup failure is not the row's fault: leave it queued so the
+      // next drain retries, rather than marking the book unlistable over a blip.
+      if (eventProblem.startsWith('lookup-failed')) { out.skipped++; continue; }
+      await markSkipped(row._id, eventProblem);
       out.skipped++;
       continue;
     }
