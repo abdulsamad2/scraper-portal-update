@@ -67,6 +67,9 @@ interface LeanTombstoneDoc {
   _id: unknown;
   inventoryId: number;
   stubhubListingId?: string | null;
+  mapping_id?: string | null;
+  section?: string | null;
+  row?: string | null;
   reason: string;
   createdAt: Date;
   delistedAt?: Date | null;
@@ -93,6 +96,10 @@ export interface ClaimedTombstone {
   _id: unknown;
   inventoryId: number;
   stubhubListingId: string | null;
+  /** Carried for tracing: what a human recognises the ticket by. */
+  mapping_id: string | null;
+  section: string | null;
+  row: string | null;
   reason: string;
   createdAt: Date;
   delistedAt: Date | null;
@@ -204,6 +211,9 @@ export async function claimTombstones(limit: number, now = new Date()): Promise<
     syncAttempts: c.syncAttempts ?? 0,
     syncState: c.syncState ?? 'pending',
     syncBatchId: c.syncBatchId ?? null,
+    mapping_id: c.mapping_id ?? null,
+    section: c.section ?? null,
+    row: c.row ?? null,
   }));
 }
 

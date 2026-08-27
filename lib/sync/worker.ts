@@ -45,7 +45,7 @@ import { StubHubClient, StubHubError, isAlreadyQueued, loadConfig } from '@/lib/
 import { mapRow, type InventoryRowInput } from '@/lib/stubhub/mapRow.ts';
 import { verifyEvent } from '@/lib/stubhub/eventVerifier.ts';
 import { payloadHash, deriveBatchId } from '@/lib/stubhub/hash.ts';
-import { resolveRemoval, IDLE_POLL_MS } from '@/lib/stubhub/policy.ts';
+import { resolveRemoval, IDLE_POLL_MS, REAPPEARANCE_GRACE_MS } from '@/lib/stubhub/policy.ts';
 import { MAX_BATCH_ITEMS } from '@/lib/stubhub/limits.ts';
 import {
   claimRows, claimTombstones, markSynced, markCreated, markFailed, markSkipped,
@@ -227,6 +227,33 @@ const MAX_SETTLE_MS = 120_000;
  */
 const DEFER_MS = 2_000;
 
+/**
+ * Per-item tracing.
+ *
+ * The pass summary (`0C 288U 0= 9L 0D 0S 0F`) says how much happened and nothing
+ * about what. When a listing is not behaving as expected — a ticket goes into a
+ * cart on Ticketmaster and you want to watch it leave StubHub — a count is
+ * useless: you cannot tell whether your row was one of the nine, and the only
+ * alternative is querying the database by hand while the worker runs.
+ *
+ * On by default outside production, because this is a development aid and the
+ * cost of it being off when you need it is another hour of blind debugging.
+ * STUBHUB_TRACE=1 forces it on, STUBHUB_TRACE=0 off.
+ */
+const TRACE = process.env.STUBHUB_TRACE
+  ? process.env.STUBHUB_TRACE !== '0'
+  : process.env.NODE_ENV !== 'production';
+
+/**
+ * One line per listing acted on.
+ *
+ * The listing id leads because it is the handle you paste into StubHub to check
+ * the result; section/row follows because it is what you recognise the ticket by.
+ */
+function trace(action: string, detail: string): void {
+  if (TRACE) console.log(`  [stubhub] ${action.padEnd(9)} ${detail}`);
+}
+
 export interface DrainResult {
   claimed: number;
   created: number;
@@ -339,9 +366,21 @@ async function processTombstones(
       reason: t.reason,
       now,
     });
-    if (decision.action === 'cancel') toCancel.push(t);
-    else if (decision.action === 'delete' && t.stubhubListingId) toDelete.push(t);
-    else if (decision.action === 'delist' && t.stubhubListingId) toDelist.push(t);
+    const where = `listing ${t.stubhubListingId ?? '(never listed)'}  ` +
+      `${t.mapping_id ?? '?'} ${t.section ?? ''} ${t.row ?? ''}`.trimEnd() +
+      `  [${t.reason}]`;
+
+    if (decision.action === 'cancel') { trace('cancel', `${where} — ${decision.reason}`); toCancel.push(t); }
+    else if (decision.action === 'delete' && t.stubhubListingId) { trace('DELETE', `${where} — ${decision.reason}`); toDelete.push(t); }
+    else if (decision.action === 'delist' && t.stubhubListingId) { trace('DELIST', `${where} — ${decision.reason}`); toDelist.push(t); }
+    else if (decision.action === 'wait') {
+      // The one that looks like nothing happening, and the usual reason a removal
+      // appears stuck: the listing is already delisted and is serving out the
+      // reappearance window before it is deleted.
+      const waited = t.delistedAt ? Math.round((now.getTime() - t.delistedAt.getTime()) / 1000) : 0;
+      const left = Math.max(0, Math.round((REAPPEARANCE_GRACE_MS - waited * 1000) / 1000));
+      trace('wait', `${where} — delisted ${waited}s ago, deletes in ${left}s`);
+    }
     // 'wait' is left untouched; its lease expires and a later pass reconsiders it
     // once the grace window has passed.
   }
@@ -603,7 +642,10 @@ async function processRows(
 
     byExternalId.set(mapped.externalId, { rowId: row._id, hash, attempts: row.syncAttempts });
 
+    const seat = `${row.mapping_id ?? '?'} ${source.section ?? ''} ${source.row ?? ''}`.trimEnd();
+
     if (row.stubhubListingId) {
+      trace('PRICE', `listing ${row.stubhubListingId}  ${seat}  -> ${round2(source.list_price)}`);
       updates.push({
         rowId: row._id,
         externalId: mapped.externalId,
@@ -612,6 +654,7 @@ async function processRows(
         hash,
       });
     } else {
+      trace('CREATE', `${seat}  qty ${source.quantity}  @ ${round2(source.list_price)}  ext ${mapped.externalId}`);
       creates.push({ rowId: row._id, externalId: mapped.externalId, payload: mapped.create, hash });
     }
   }
@@ -649,6 +692,7 @@ async function processRows(
     for (const w of waiting) {
       const outcome = outcomes.get(w.externalId);
       if (outcome?.ok && outcome.entityId) {
+        trace('CREATED', `listing ${outcome.entityId}  ext ${w.externalId}`);
         await markCreated(w.rowId, String(outcome.entityId));
         out.created++;
       } else if (outcome && !outcome.ok) {
@@ -675,6 +719,7 @@ async function processRows(
     for (const v of pendingVerify) {
       const verdict = verdicts.get(v.listingId);
       if (verdict?.ok) {
+        trace('ok', `listing ${v.listingId}  holds ${verdict.actualPrice}`);
         await markSynced(v.rowId, v.hash);
         out.noop++;   // settled without a write this pass
       } else if (verdict?.actualPrice == null && Date.now() - v.submittedAt < MAX_SETTLE_MS) {
@@ -693,6 +738,7 @@ async function processRows(
         // Not confirmed: put it back as dirty so the next pass re-sends. Safe
         // because every write here is idempotent, and far better than assuming a
         // batch landed because it was accepted.
+        trace('FAIL', `listing ${v.listingId}  ${verdict?.detail ?? 'unverified after batch'}`);
         await markFailed(v.rowId, verdict?.detail ?? 'unverified after batch', v.attempts);
         out.failed++;
       }
