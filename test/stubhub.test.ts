@@ -22,6 +22,7 @@ import { comparePriceEcho, ASK_PRICE_FIELD } from '../lib/stubhub/price.ts';
 import { chooseWritePath, itemsPerMinute, MAX_BATCH_ITEMS, RATE_LIMITS, RECONCILIATION } from '../lib/stubhub/limits.ts';
 import { planBatch, resolveRemoval, REAPPEARANCE_GRACE_MS } from '../lib/stubhub/policy.ts';
 import { verifyEvent, clearEventCache } from '../lib/stubhub/eventVerifier.ts';
+import { outcomes as __testOutcomes } from '../lib/sync/bulkResults.ts';
 
 describe('resolveSplitType', () => {
   // Every case here appeared in the 1,537-row export, with its observed frequency.
@@ -474,5 +475,34 @@ describe('event verification', () => {
     clearEventCache();
     const r = await verifyEvent(stub(null), '454452424', { date: '2026-01-01' });
     assert.equal((r as { reason: string }).reason, 'not-found');
+  });
+});
+
+describe('bulk result matching', () => {
+  test('an update result is matched by entityId when it carries no externalId', () => {
+    // The shape StubHub actually returns for updates: identified by the id the
+    // request supplied, which for an update is inventoryId, not externalId.
+    // Keying only on externalId discarded every outcome silently — the writes
+    // succeeded while the worker believed nothing had happened.
+    const summary = { finished: true, completed: [{ entityId: 1818287155 }], failed: [], skipped: [] };
+    const map = __testOutcomes(summary);
+    assert.equal(map.get('1818287155')?.ok, true);
+  });
+
+  test('a create result is still matched by externalId', () => {
+    const summary = { finished: true, completed: [{ entityId: 99, externalId: '2540402267' }], failed: [], skipped: [] };
+    const map = __testOutcomes(summary);
+    assert.equal(map.get('2540402267')?.ok, true);
+    assert.equal(map.get('99')?.ok, true, 'reachable by either id');
+  });
+
+  test('a failure carries the per-field reason under both keys', () => {
+    const summary = {
+      finished: true, completed: [], skipped: [],
+      failed: [{ entityId: 7, error: { code: 'bad_request', message: 'nope', errors: { splitType: ['not allowed'] } } }],
+    };
+    const map = __testOutcomes(summary);
+    assert.equal(map.get('7')?.ok, false);
+    assert.match(map.get('7')!.error!, /splitType=not allowed/);
   });
 });

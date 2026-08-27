@@ -28,6 +28,7 @@ import { StubHubClient, StubHubError } from '@/lib/stubhub/client.ts';
 import { deriveBatchId, payloadHash } from '@/lib/stubhub/hash.ts';
 import { MAX_BATCH_ITEMS } from '@/lib/stubhub/limits.ts';
 import { bulkPollDelay } from '@/lib/stubhub/policy.ts';
+import { outcomes, type ItemOutcome } from './bulkResults.ts';
 import type {
   BulkInventoryRequest,
   BulkProcessingResultSummaryResponse,
@@ -56,13 +57,6 @@ export interface UpdateItem {
 export interface DeleteItem {
   tombstoneId: unknown;
   listingId: number;
-}
-
-export interface ItemOutcome {
-  externalId: string;
-  ok: boolean;
-  entityId?: number;
-  error?: string;
 }
 
 /**
@@ -116,37 +110,6 @@ async function runBulk(
   return summary ?? null;
 }
 
-/**
- * Flatten a bulk summary into per-item outcomes.
- *
- * Per-item rather than per-batch on purpose: one malformed row must never abandon
- * the other 249. The error object carries a per-field `errors` map, which is the
- * single most useful thing for fixing a mapper, so it is preserved rather than
- * flattened to a status code.
- */
-function outcomes(summary: BulkProcessingResultSummaryResponse | null): Map<string, ItemOutcome> {
-  const map = new Map<string, ItemOutcome>();
-  if (!summary) return map;
-
-  for (const r of summary.completed ?? []) {
-    if (r.externalId) map.set(r.externalId, { externalId: r.externalId, ok: true, entityId: r.entityId ?? undefined });
-  }
-  for (const bucket of [summary.failed ?? [], summary.skipped ?? []]) {
-    for (const r of bucket) {
-      if (!r.externalId) continue;
-      const fields = r.error?.errors
-        ? ' ' + Object.entries(r.error.errors).map(([k, v]) => `${k}=${v.join('/')}`).join(' ')
-        : '';
-      map.set(r.externalId, {
-        externalId: r.externalId,
-        ok: false,
-        error: `${r.error?.code ?? 'error'}: ${r.error?.message ?? 'unknown'}${fields}`,
-      });
-    }
-  }
-  return map;
-}
-
 export async function submitCreates(
   client: StubHubClient,
   items: CreateItem[]
@@ -163,19 +126,18 @@ export async function submitCreates(
 }
 
 /**
- * Bulk update — NOT USED, and kept only so the finding is not lost.
+ * Bulk update. Works — a batch settles in about six seconds — but the worker uses
+ * patchOne instead.
  *
- * The API accepts a bulk update and never processes it. The submit returns 200
- * with the item in `queued`, and every poll thereafter returns the same:
- * finished:false, completed/failed/skipped all empty, indefinitely. The change is
- * never applied — verified by hand on a single-item batch whose price was
- * unchanged minutes later.
+ * Not because bulk is broken: an earlier reading of this said so and was wrong.
+ * PATCH is preferred because it applies immediately rather than after a
+ * submit-and-poll round trip, allows 12,880/min against bulk's 760, and returns
+ * its outcome directly instead of in a summary that has to be matched back by id.
+ * For a system whose whole point is that a price change lands now, that is the
+ * better trade even though it spends more requests.
  *
- * Bulk CREATE works, so this is specific to updates rather than the bulk
- * endpoint as a whole. Worth raising with StubHub: a write that is accepted,
- * queued and silently never executed is the hardest possible failure to notice.
- *
- * The worker uses patchOne instead, which works and has 17x the rate allowance.
+ * Kept because it is the right tool for a large backfill, where 250 listings per
+ * request beats 250 requests and nobody is watching the clock.
  */
 export async function submitUpdates(
   client: StubHubClient,
@@ -278,3 +240,4 @@ export async function deleteOne(client: StubHubClient, listingId: number): Promi
 
 /** Re-exported so callers hash the payload the same way the batch id does. */
 export { payloadHash };
+export type { ItemOutcome };

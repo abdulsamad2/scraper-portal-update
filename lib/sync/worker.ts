@@ -381,21 +381,22 @@ async function processRows(
   }
 
   if (updates.length > 0) {
-    // Updates go one at a time, concurrently — NOT through bulk.
+    // Updates go one at a time, concurrently, rather than through bulk.
     //
-    // Bulk update is accepted by the API and then never processed. Submitting one
-    // returns 200 with the item in `queued`, and every subsequent poll returns the
-    // same thing: finished:false, completed/failed/skipped all empty, forever. The
-    // price is never applied. Confirmed by hand on a single-item batch and by 967
-    // listings sitting created-but-unpriced while the worker reported 0 updates —
-    // it had no outcomes to record because none ever arrived.
+    // Bulk update works — a batch settles in about six seconds. What did not work
+    // was matching its results back: a bulk result identifies an item by whichever
+    // id the request supplied, and an update supplies inventoryId, so results
+    // return as { entityId } with no externalId. Keying outcomes on externalId
+    // alone silently discarded every one of them, which is why 967 listings were
+    // correctly priced on StubHub while the worker reported zero updates and
+    // re-sent the same work on every pass. That is fixed in batcher.outcomes.
     //
-    // PATCH /inventory/{id} works, is idempotent, and allows 12,880/min against a
-    // bulk allowance of 760, so the single path is not even a compromise here.
-    // Concurrency keeps it fast: the limiter paces to roughly 100/s, so a
-    // thousand listings price in about ten seconds.
-    //
-    // Bulk CREATE does work and is still used — the defect is specific to updates.
+    // PATCH is still the better choice here: it applies immediately instead of
+    // after a submit-and-poll round trip, allows 12,880/min against bulk's 760,
+    // and returns its outcome directly rather than in a summary to be matched by
+    // id. For a system whose point is that a price change lands now, spending more
+    // requests to remove a polling delay is the right trade. At the limiter's
+    // ~100/s a thousand listings price in about ten seconds.
     const outcomes = await pooled(updates, PATCH_CONCURRENCY, item => patchOne(client, item));
     for (let i = 0; i < updates.length; i++) {
       const meta = byExternalId.get(updates[i].externalId)!;
