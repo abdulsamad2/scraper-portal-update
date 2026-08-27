@@ -153,7 +153,8 @@ describe('retry policy', () => {
 
     assert.equal(calls.length, 2);
     const state = client.limiterState().find(s => s.endpoint === 'PATCH /inventory/{id}');
-    assert.equal(state!.intervalMs >= 1_000, true, 'a throttle must widen the interval');
+    const ceiling = 12_880 * 0.8;
+    assert.equal(state!.perMinute < ceiling, true, 'a throttle must cut the permitted rate');
   });
 });
 

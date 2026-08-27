@@ -36,7 +36,7 @@ export interface SyncSnapshot {
   dryRun: boolean;
   dryRunPinnedByEnv: boolean;
   maxAttempts: number;
-  limiters: Array<{ endpoint: string; intervalMs: number }>;
+  limiters: Array<{ endpoint: string; perMinute: number }>;
   failures: Array<{ inventoryId: number; mappingId: string; section: string; row: string; error: string; attempts: number }>;
   skips: Array<{ reason: string; count: number }>;
   byEvent: Array<{ mappingId: string; count: number; oldest: string | null }>;
@@ -453,7 +453,7 @@ export default function StubhubSyncClient({ initial }: { initial: SyncSnapshot }
         )}
         {snap.limiters?.length > 0 && (
           <div className="text-xs text-slate-500 pt-3 border-t border-slate-100">
-            Throttle: {snap.limiters.map(l => `${l.endpoint} every ${l.intervalMs}ms`).join(' · ')}
+            Rate allowance in use: {snap.limiters.map(l => `${l.endpoint} ${l.perMinute}/min`).join(' · ')}
           </div>
         )}
       </section>

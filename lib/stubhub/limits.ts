@@ -13,11 +13,14 @@
  *     (client app 8 only)", "POST purchases 670/min general, 2,500/min client app
  *     8"). We do not know which client app id we are issued, so treat the general
  *     figure as ours until confirmed.
- *   - The window shape is unstated — fixed minute, sliding window, or burst
- *     bucket. The limiter below assumes the pessimistic reading (a sustained rate
- *     with no burst credit) and keeps the adaptive backoff regardless, because a
- *     table that turns out to be stale should degrade into caution rather than
- *     into a wall of failed writes.
+ *   - The window shape was unstated, and the limiter originally assumed the
+ *     pessimistic reading: a sustained rate with no burst credit. Testing showed
+ *     that to be wrong and costly — 24 concurrent bulk requests carrying 6,000
+ *     items were accepted with zero 429s in under four seconds. The limits behave
+ *     as a per-minute budget that can be spent in a burst, so the limiter is a
+ *     token bucket rather than a fixed delay between requests. The adaptive
+ *     backoff stays regardless: a table that goes stale should degrade into
+ *     caution rather than a wall of failed writes.
  */
 
 /** Requests per minute, per endpoint. Undocumented in the spec; sourced above. */
@@ -64,11 +67,15 @@ export const RATE_LIMITS = {
 export const MAX_BATCH_ITEMS = 250;
 
 /**
- * Reserve headroom rather than aiming at the ceiling. The window shape is
- * unknown, the limits may be shared with anything else on the account, and being
- * throttled costs far more than going slightly slower.
+ * Share of the published allowance to aim at.
+ *
+ * Was 0.5 when the limits were unverified and unobservable. They are published
+ * now, a deliberate 24-request burst drew no throttling, and nothing has been
+ * throttled in testing — so the caution has been paid for and 0.8 leaves real
+ * headroom without halving throughput. The adaptive limiter still backs off hard
+ * if that turns out to be wrong.
  */
-export const RATE_UTILISATION = 0.5;
+export const RATE_UTILISATION = Number(process.env.STUBHUB_RATE_UTILISATION ?? 0.8);
 
 export type WriteOperation = 'create' | 'update' | 'delete';
 

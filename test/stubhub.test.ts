@@ -354,10 +354,11 @@ describe('rate limits and write-path selection', () => {
   });
 
   test('bulk is roughly an order of magnitude more capable than single PATCH', () => {
+    // Ratio, not absolutes: utilisation is a tuning knob and the point is that
+    // batching wins by more than 10x whatever it is set to.
     const bulk = itemsPerMinute('bulk', 'update');
     const single = itemsPerMinute('single', 'update');
-    assert.equal(bulk, 760 * 250 * 0.5);
-    assert.equal(single, 12_880 * 0.5);
+    assert.equal(Math.round(bulk / single), Math.round((760 * 250) / 12_880));
     assert.equal(bulk > single * 10, true);
   });
 
