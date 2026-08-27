@@ -1,6 +1,7 @@
 export { Event } from "./eventModel.js";
 export { TcEvent } from "./tcEventModel.js";
 export { ConsecutiveGroup } from "./seatModel.js";
+export { InventoryTombstone } from "./inventoryTombstoneModel.js";
 export { EvenueEvent, EvenueConsecutiveGroup } from "./evenueEventModel.js";
 export { ErrorLog } from "./errorModel.js";
 export { SchedulerSettings } from "./schedulerModel.js";
