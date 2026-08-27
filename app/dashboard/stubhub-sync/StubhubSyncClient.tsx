@@ -89,7 +89,7 @@ export interface SyncSnapshot {
 export interface ClearProgress {
   phase: 'idle' | 'stopping' | 'scanning' | 'deleting' | 'verifying' | 'resetting' | 'done' | 'failed';
   scanned: number; pages: number; submitted: number; confirmed: number;
-  failed: number; rowsReset: number; dryRun: boolean;
+  failed: number; rowsReset: number; verifyAttempts: number; dryRun: boolean;
   startedAt: string | null; finishedAt: string | null; error: string | null; truncated: boolean;
 }
 
@@ -1262,7 +1262,7 @@ function ClearRunning({ job }: { job: ClearProgress }) {
     { key: 'stopping',  label: 'Stopping the worker', detail: 'So nothing writes while the book is being cleared' },
     { key: 'scanning',  label: 'Reading StubHub',     detail: 'Full export — capped at one page per two minutes' },
     { key: 'deleting',  label: 'Deleting',            detail: '250 listings per request, 32 requests in flight' },
-    { key: 'verifying', label: 'Confirming',          detail: 'Reading back to prove they are gone' },
+    { key: 'verifying', label: 'Confirming',          detail: 'Reading back until they are gone — bulk deletes apply asynchronously' },
     { key: 'resetting', label: 'Resetting local rows', detail: 'Forgetting listing ids so our record matches' },
   ];
   const current = phases.findIndex(p => p.key === job.phase);
@@ -1310,6 +1310,13 @@ function ClearRunning({ job }: { job: ClearProgress }) {
         <Tile label="Confirmed" n={job.confirmed} tone="good" />
         <Tile label="Failed"    n={job.failed} tone="bad" />
       </div>
+      {job.phase === 'verifying' && job.verifyAttempts > 1 && (
+        <p className="text-xs text-slate-500">
+          Read-back round {job.verifyAttempts} — still waiting on{' '}
+          {(job.submitted - job.confirmed).toLocaleString()} listing(s). Deletes are queued by
+          StubHub and applied a moment later, so this normally settles on its own.
+        </p>
+      )}
     </div>
   );
 }

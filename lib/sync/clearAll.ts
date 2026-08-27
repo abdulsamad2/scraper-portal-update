@@ -49,8 +49,21 @@ const BATCH_CONCURRENCY = 32;
 /** Seek calls in flight while confirming the deletes landed. */
 const VERIFY_CONCURRENCY = 16;
 
-/** Safety valve on export paging: 20 x 5,000 is 100,000 listings. */
+/** Safety valve on export paging: 40 x 5,000 is 200,000 listings. */
 const MAX_PAGES = 40;
+
+/**
+ * How long to let bulk deletes settle before believing a read-back, and how many
+ * times to look again.
+ *
+ * Widening rather than fixed: most of the book clears in the first second or two,
+ * and a long flat delay would make a fast wipe feel broken. Total patience is
+ * just over a minute, which is far longer than any observed bulk turnaround and
+ * still short enough that a genuine failure is reported promptly.
+ */
+const SETTLE_DELAYS_MS = [2_000, 3_000, 5_000, 10_000, 20_000, 30_000];
+
+const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
 export type ClearPhase =
   | 'idle' | 'stopping' | 'scanning' | 'deleting' | 'verifying' | 'resetting'
@@ -70,6 +83,8 @@ export interface ClearProgress {
   failed: number;
   /** Local rows whose recorded listing id was cleared. */
   rowsReset: number;
+  /** Read-back rounds spent waiting for the deletes to land. */
+  verifyAttempts: number;
   dryRun: boolean;
   startedAt: string | null;
   finishedAt: string | null;
@@ -140,6 +155,7 @@ export async function startClearAll(opts: { stop: () => Promise<void> }): Promis
   const progress: ClearProgress = {
     phase: 'stopping',
     scanned: 0, pages: 0, submitted: 0, confirmed: 0, failed: 0, rowsReset: 0,
+    verifyAttempts: 0,
     dryRun: client.config.dryRun,
     startedAt: new Date().toISOString(),
     finishedAt: null,
@@ -203,19 +219,40 @@ export async function startClearAll(opts: { stop: () => Promise<void> }): Promis
           }
         });
 
-        // 4. Confirm by absence rather than by status code.
+        // 4. Confirm by absence rather than by status code, and give the
+        //    deletes time to actually happen first.
         //
-        // Bulk submits are accepted and processed asynchronously, and this
-        // integration has twice seen a write accepted and silently not applied.
-        // A listing that seek no longer returns is gone; a status code only says
-        // the request was taken.
+        // Bulk submits are accepted and processed asynchronously: POST returns a
+        // processing id, not a result. Reading back the instant the last submit
+        // returns therefore measures how fast StubHub queues work, not whether
+        // the work was done — and it reports every listing as still present,
+        // which is indistinguishable from a total failure.
+        //
+        // That is exactly what the first live run of this did: 2,745 submitted,
+        // 0 confirmed, 2,745 reported failed, against an account that in fact
+        // held nothing at all a moment later. The same mistake has now been made
+        // three times in this integration, each time by trusting a read issued
+        // too early, so this retries on a widening delay and only calls a
+        // listing failed once it has survived all of them.
         progress.phase = 'verifying';
-        const probes = chunk(ids, 500);
-        await pooled(probes, VERIFY_CONCURRENCY, async probe => {
-          const gone = await verifyGone(client, probe);
-          progress.confirmed += gone.size;
-        });
-        progress.failed = Math.max(0, ids.length - progress.confirmed);
+        let outstanding = ids.slice();
+
+        for (const delay of SETTLE_DELAYS_MS) {
+          if (outstanding.length === 0) break;
+          await sleep(delay);
+          progress.verifyAttempts++;
+
+          const stillPresent: number[] = [];
+          await pooled(chunk(outstanding, 500), VERIFY_CONCURRENCY, async probe => {
+            const gone = await verifyGone(client, probe);
+            for (const id of probe) if (!gone.has(id)) stillPresent.push(id);
+          });
+
+          progress.confirmed = ids.length - stillPresent.length;
+          outstanding = stillPresent;
+        }
+
+        progress.failed = outstanding.length;
       }
 
       // 5. Put our record back in agreement with an empty marketplace.
