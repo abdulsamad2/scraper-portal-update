@@ -287,7 +287,7 @@ export async function startClearAll(opts: { stop: () => Promise<void> }): Promis
         // record the resulting nothing as failures.
         await InventoryTombstone.updateMany(
           { syncState: { $in: ['pending', 'deleting', 'failed'] } },
-          { $set: { syncState: 'done', completedAt: new Date() } }
+          { $set: { syncState: 'done', processedAt: new Date() } }
         );
       }
 
