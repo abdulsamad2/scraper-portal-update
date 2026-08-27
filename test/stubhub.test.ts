@@ -185,9 +185,18 @@ describe('mapRow', () => {
     assert.equal(r.create.splitType, 'Pairs');
     assert.equal(r.create.deliveryType, 'InApp');
     assert.equal(r.create.unitCost, 529.66);
-    assert.equal(r.create.hideSeats, true);
+    assert.equal(r.create.hideSeats, undefined, 'omitted unless the account has the feature');
     assert.deepEqual(r.create.seating, { section: 'Courtside 103', row: 'D' });
     assert.equal(r.create.inHandAt, '2026-08-24T00:00:00');
+  });
+
+  test('hideSeats is sent only when the account supports it', () => {
+    // Without ExtApiInvCreateFeatures the API rejects the whole create with
+    // "hideSeats is not enabled for this account", and through bulk that arrives
+    // as an undebuggable "internal error occurred while processing this item".
+    assert.equal(mapRow(base).ok && (mapRow(base) as { create: { hideSeats?: boolean } }).create.hideSeats, undefined);
+    const enabled = mapRow(base, { hideSeatsSupported: true });
+    assert.equal(enabled.ok && enabled.create.hideSeats, true);
   });
 
   test('never broadcasts at create — nothing goes live without a price', () => {

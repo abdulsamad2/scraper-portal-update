@@ -261,13 +261,22 @@ export class StubHubClient {
       const parsed = text ? safeJson(text) : null;
 
       if (!response.ok) {
-        const err = (parsed ?? {}) as { code?: string; message?: string; errors?: Record<string, string[]> };
+        // Two error shapes come back from this API. Documented failures use
+        // ErrorResource (code/message/errors); ASP.NET model validation returns
+        // RFC 9110 problem+json instead, with `title` in place of `message` and a
+        // W3C traceparent in the body rather than the x-trace-id header. Read both
+        // rather than falling back to a raw string slice, because the per-field
+        // `errors` map is the only thing that says which field was wrong.
+        const err = (parsed ?? {}) as {
+          code?: string; message?: string; title?: string;
+          errors?: Record<string, string[]>; traceId?: string;
+        };
         throw new StubHubError({
-          message: err.message || text.slice(0, 500) || response.statusText,
+          message: err.message || err.title || text.slice(0, 500) || response.statusText,
           status: response.status,
           code: err.code ?? null,
           fieldErrors: err.errors ?? null,
-          traceId,
+          traceId: traceId ?? err.traceId ?? null,
           // 4xx other than 429 means the request is wrong; repeating it will not
           // make it right.
           retryable: response.status === 429 || response.status >= 500,

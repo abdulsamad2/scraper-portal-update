@@ -59,10 +59,26 @@ export interface ListingNoteRequest {
   isDelete?: boolean | null;
 }
 
+/** ApiTagValueDataType. String is what plain category labels are. */
+export type ApiTagValueDataType =
+  | 'String' | 'Decimal' | 'Int' | 'Boolean' | 'Json' | 'Url'
+  | 'Marketplace' | 'Date' | 'POSUser' | 'Vendor' | 'UserGroup';
+
 export interface TagRequest {
   name?: string | null;
-  /** Stringified JSON values. The serialised array must stay under 2000 chars. */
+  /**
+   * The serialised array must stay under 2000 chars.
+   *
+   * Required in practice despite the spec marking nothing required: a tag sent
+   * with only a name is rejected with
+   * "Tags[0].Values: The Values field is required".
+   */
   values?: string[] | null;
+  /**
+   * Also required in practice — "Tags[0].ValueDataType: Please provide a valid
+   * data type" without it.
+   */
+  valueDataType?: ApiTagValueDataType;
   isDelete?: boolean | null;
 }
 

@@ -86,12 +86,25 @@ export interface MapOptions {
    */
   priceField?: 'listPrice' | 'allInPrice';
   currencyCode?: string;
+  /**
+   * Whether this account may set hideSeats at create time.
+   *
+   * Gated behind the ExtApiInvCreateFeatures feature. Sending it without that
+   * flag fails the whole create with "hideSeats is not enabled for this account"
+   * — and through the bulk endpoint that surfaces only as "An internal error
+   * occurred while processing this item", which is not a debuggable message.
+   *
+   * Omitted by default, which the spec says falls back to the account default.
+   * Enable with STUBHUB_HIDE_SEATS=true once StubHub turns the feature on.
+   */
+  hideSeatsSupported?: boolean;
 }
 
 const DEFAULTS: Required<MapOptions> = {
   marketplaces: ['StubHub'],
   priceField: ASK_PRICE_FIELD,
   currencyCode: 'USD',
+  hideSeatsSupported: process.env.STUBHUB_HIDE_SEATS === 'true',
 };
 
 export interface MappedRow {
@@ -114,6 +127,12 @@ export interface SkippedRow {
 
 /** Synthetic row labels the scrapers mint for general admission — never a real row. */
 const SYNTHETIC_GA_ROW = /^GA\d+$/i;
+
+/**
+ * Tag key under which the exporter's categories (STANDARD, RESALE, RESALE BROKER,
+ * GA_*) are stored. Stable because it is a search key, not a display label.
+ */
+export const TAG_KEY = 'ptsCategory';
 
 export function mapRow(row: InventoryRowInput, options: MapOptions = {}): MappedRow | SkippedRow {
   const opts = { ...DEFAULTS, ...options };
@@ -153,11 +172,23 @@ export function mapRow(row: InventoryRowInput, options: MapOptions = {}): Mapped
     ? [{ note: row.public_notes.trim() }]
     : [];
 
-  const tags: TagRequest[] = (row.tags || '')
+  // One tag key carrying the row's categories as values, rather than one tag per
+  // label. Two reasons: the API rejects a tag with no `values` (the spec marks
+  // nothing required, but the server returns
+  // "Tags[0].Values: The Values field is required"), and a single stable key is
+  // what makes the rows findable — GET /inventory/search filters on tagKey plus
+  // tagValue, so `ptsCategory=RESALE BROKER` is a query while a bare tag name is
+  // only a label.
+  const tagValues = (row.tags || '')
     .split(',')
     .map(t => t.trim())
-    .filter(Boolean)
-    .map(name => ({ name }));
+    .filter(Boolean);
+  // valueDataType is likewise required in practice — the server answers
+  // "Tags[0].ValueDataType: Please provide a valid data type" without it. Our
+  // categories are plain labels, so String.
+  const tags: TagRequest[] = tagValues.length
+    ? [{ name: TAG_KEY, values: tagValues, valueDataType: 'String' }]
+    : [];
 
   const inHandAt = normaliseInHandDate(row.in_hand_date);
   if (row.in_hand_date && !inHandAt) {
@@ -174,7 +205,8 @@ export function mapRow(row: InventoryRowInput, options: MapOptions = {}): Mapped
     deliveryType: delivery.deliveryType,
     splitType: split.splitType,
     seating: { section: row.section || null, row: seatingRow },
-    hideSeats: row.hide_seats === 'Y',
+    // Omitted unless the account has the feature; see MapOptions.hideSeatsSupported.
+    ...(opts.hideSeatsSupported ? { hideSeats: row.hide_seats === 'Y' } : {}),
     zoneFill: isZone,
     inHandAt,
     listingNotes: listingNotes.length ? listingNotes : null,

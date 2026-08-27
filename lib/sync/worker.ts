@@ -44,7 +44,7 @@
  */
 
 import { generateInventoryCsv } from '@/actions/csvActions';
-import { StubHubClient, loadConfig } from '@/lib/stubhub/client.ts';
+import { StubHubClient, StubHubError, loadConfig } from '@/lib/stubhub/client.ts';
 import { mapRow, type InventoryRowInput } from '@/lib/stubhub/mapRow.ts';
 import { payloadHash } from '@/lib/stubhub/hash.ts';
 import { planBatch, resolveRemoval, IDLE_POLL_MS } from '@/lib/stubhub/policy.ts';
@@ -56,7 +56,7 @@ import {
 } from './queue.ts';
 import {
   submitCreates, submitUpdates, patchOne, delistOne, deleteOne,
-  type CreateItem, type UpdateItem,
+  type CreateItem, type UpdateItem, type ItemOutcome,
 } from './batcher.ts';
 import { acquireLease, releaseLease, makeHolderId, RENEW_INTERVAL_MS } from './leader.ts';
 
@@ -278,7 +278,26 @@ async function processRows(
   // be picked up for pricing on the next one.
   for (let i = 0; i < creates.length; i += 250) {
     const chunk = creates.slice(i, i + 250);
-    const results = await submitCreates(client, chunk);
+
+    // A batch that throws — a validation rejection, a network failure — must not
+    // leave its rows holding a lease until it expires. Five minutes of a stalled
+    // queue for something that will still be broken next pass is worse than
+    // recording the failure now, and the attempt counter is what eventually parks
+    // a row that can never succeed.
+    let results: Map<string, ItemOutcome>;
+    try {
+      results = await submitCreates(client, chunk);
+    } catch (error) {
+      const reason = error instanceof StubHubError ? error.summary : String(error);
+      console.error(`[stubhub:worker] create batch failed: ${reason}`);
+      for (const item of chunk) {
+        const meta = byExternalId.get(item.externalId)!;
+        await markFailed(meta.rowId, reason, meta.attempts);
+        out.failed++;
+      }
+      continue;
+    }
+
     for (const item of chunk) {
       const meta = byExternalId.get(item.externalId)!;
       const outcome = results.get(item.externalId);
@@ -308,7 +327,21 @@ async function processRows(
     } else {
       for (let i = 0; i < updates.length; i += 250) {
         const chunk = updates.slice(i, i + 250);
-        const results = await submitUpdates(client, chunk);
+
+        let results: Map<string, ItemOutcome>;
+        try {
+          results = await submitUpdates(client, chunk);
+        } catch (error) {
+          const reason = error instanceof StubHubError ? error.summary : String(error);
+          console.error(`[stubhub:worker] update batch failed: ${reason}`);
+          for (const item of chunk) {
+            const meta = byExternalId.get(item.externalId)!;
+            await markFailed(meta.rowId, reason, meta.attempts);
+            out.failed++;
+          }
+          continue;
+        }
+
         for (const item of chunk) {
           const meta = byExternalId.get(item.externalId)!;
           const outcome = results.get(item.externalId);
