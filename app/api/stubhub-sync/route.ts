@@ -1,11 +1,12 @@
 /**
  * Control surface for the StubHub sync worker.
  *
- *   GET                        → queue depth, lag, lease holder, limiter state
- *   POST { action: 'drain' }   → run exactly one pass and report what happened
- *   POST { action: 'start' }   → run the drain loop until stopped
- *   POST { action: 'stop' }    → stop it
- *   POST { action: 'audit' }   → drift sweep (read-only)
+ *   GET                          → queue depth, lag, lease, settings, limiter state
+ *   POST { action: 'drain' }     → run exactly one pass and report what happened
+ *   POST { action: 'start' }     → run the drain loop until stopped
+ *   POST { action: 'stop' }      → stop it
+ *   POST { action: 'audit' }     → drift sweep (read-only)
+ *   POST { action: 'settings' }  → change dryRun / marketplaces while running
  *
  * A single manual pass exists because it is how you validate a cutover: run one
  * drain in dry-run, read exactly what it would have sent, and only then start the
@@ -19,7 +20,10 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { drainOnce, runWorker, syncStatus } from '@/lib/sync/worker.ts';
+import { drainOnce, runWorker, syncStatus, recordDrain } from '@/lib/sync/worker.ts';
+import { StubhubSyncSettings, getStubhubSyncSettings } from '@/models/stubhubSyncModel.js';
+import { requireFeatureFlag } from '@/lib/featureFlags';
+import dbConnect from '@/lib/dbConnect';
 import { auditDrift, summariseDrift } from '@/lib/sync/audit.ts';
 import { currentLease } from '@/lib/sync/leader.ts';
 import { createErrorLog } from '@/actions/errorLogActions';
@@ -42,7 +46,12 @@ function state(): WorkerState {
 }
 
 export async function GET() {
+  const blocked = await requireFeatureFlag('stubhubSync');
+  if (blocked) return blocked;
   try {
+    // Ensure the settings document exists so the UI has something to render on a
+    // fresh install rather than a spinner and no explanation.
+    await getStubhubSyncSettings();
     const [status, lease] = await Promise.all([syncStatus(), currentLease()]);
     const s = state();
 
@@ -64,6 +73,9 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
+  const blocked = await requireFeatureFlag('stubhubSync');
+  if (blocked) return blocked;
+
   let action = 'drain';
   try {
     const body = await request.json().catch(() => ({}));
@@ -71,7 +83,20 @@ export async function POST(request: NextRequest) {
 
     if (action === 'drain') {
       const result = await drainOnce();
+      await recordDrain(result);
       return NextResponse.json({ success: !result.aborted, ...result });
+    }
+
+    if (action === 'settings') {
+      const update: Record<string, unknown> = {};
+      if (typeof body?.dryRun === 'boolean') update.dryRun = body.dryRun;
+      if (Array.isArray(body?.marketplaces)) update.marketplaces = body.marketplaces;
+      if (Object.keys(update).length === 0) {
+        return NextResponse.json({ success: false, message: 'nothing to update' }, { status: 400 });
+      }
+      await dbConnect();
+      await StubhubSyncSettings.updateOne({}, { $set: update }, { upsert: true });
+      return NextResponse.json({ success: true, ...update });
     }
 
     if (action === 'start') {
@@ -81,6 +106,11 @@ export async function POST(request: NextRequest) {
       }
       s.controller = new AbortController();
       s.startedAt = Date.now();
+      // Persisted so the loop comes back by itself after a restart, the same way
+      // the CSV scheduler restores isScheduled. A deploy should not silently stop
+      // inventory syncing until somebody notices.
+      await dbConnect();
+      await StubhubSyncSettings.updateOne({}, { $set: { isRunning: true } }, { upsert: true });
 
       // Intentionally not awaited: the loop runs until stopped. Failures are
       // logged and clear the handle so a later start can succeed.
@@ -108,6 +138,8 @@ export async function POST(request: NextRequest) {
       s.controller?.abort();
       s.controller = null;
       s.startedAt = null;
+      await dbConnect();
+      await StubhubSyncSettings.updateOne({}, { $set: { isRunning: false } }, { upsert: true });
       return NextResponse.json({ success: true, message: 'worker stopping' });
     }
 

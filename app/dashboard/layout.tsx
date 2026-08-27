@@ -3,25 +3,7 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useState, useEffect } from 'react';
-import {
-  LayoutDashboard,
-  Calendar,
-  Plus,
-  Menu,
-  Package,
-  Download,
-  LogOut,
-  ShoppingCart,
-  X,
-  SignalHigh,
-  Filter,
-  Search,
-  Shield,
-  Users,
-  Bell,
-  ChevronsLeft,
-  ChevronsRight,
-} from 'lucide-react';
+import { LayoutDashboard, Calendar, Plus, Menu, Package, Download, LogOut, ShoppingCart, X, SignalHigh, Filter, Search, Shield, Users, Bell, ChevronsLeft, ChevronsRight, Radio } from 'lucide-react';
 
 interface FeatureFlags {
   events: string;
@@ -31,13 +13,14 @@ interface FeatureFlags {
   addEvent: string;
   orders: string;
   exportCsv: string;
+  stubhubSync: string;
   purchaseAccounts: string;
   proxies: string;
 }
 
 const DEFAULT_FLAGS: FeatureFlags = {
   events: 'enabled', inventory: 'enabled', exclusionRules: 'enabled', importEvents: 'enabled',
-  addEvent: 'enabled', orders: 'enabled', exportCsv: 'enabled',
+  addEvent: 'enabled', orders: 'enabled', exportCsv: 'enabled', stubhubSync: 'enabled',
   purchaseAccounts: 'enabled', proxies: 'enabled',
 };
 
@@ -168,6 +151,12 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
       label: 'Export CSV',
       icon: <Download className="w-5 h-5" />,
       flagKey: 'exportCsv' as keyof FeatureFlags,
+    },
+    {
+      path: '/dashboard/stubhub-sync',
+      label: 'StubHub Sync',
+      icon: <Radio className="w-5 h-5" />,
+      flagKey: 'stubhubSync' as keyof FeatureFlags,
     },
     {
       path: '/dashboard/inventory-watcher',

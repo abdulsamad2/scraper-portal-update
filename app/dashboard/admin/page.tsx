@@ -15,6 +15,7 @@ interface FeatureFlags {
   addEvent: FlagState;
   orders: FlagState;
   exportCsv: FlagState;
+  stubhubSync: FlagState;
   purchaseAccounts: FlagState;
   // Sub-features
   csvScheduler: FlagState;
@@ -30,7 +31,7 @@ interface FeatureFlags {
 
 const DEFAULT_FLAGS: FeatureFlags = {
   events: 'enabled', inventory: 'enabled', exclusionRules: 'enabled', importEvents: 'enabled',
-  addEvent: 'enabled', orders: 'enabled', exportCsv: 'enabled',
+  addEvent: 'enabled', orders: 'enabled', exportCsv: 'enabled', stubhubSync: 'enabled',
   purchaseAccounts: 'enabled',
   csvScheduler: 'enabled', csvManualExport: 'enabled', csvDownload: 'enabled',
   minSeatFilter: 'enabled', lowSeatAutoStop: 'enabled',
@@ -63,6 +64,7 @@ const FLAG_GROUPS: FlagGroup[] = [
       { key: 'addEvent', label: 'Add Event', description: 'Manually add a new event' },
       { key: 'orders', label: 'Orders', description: 'Order management and tracking' },
       { key: 'exportCsv', label: 'Export CSV', description: 'CSV generation and sync settings' },
+      { key: 'stubhubSync', label: 'StubHub Sync', description: 'Push inventory to StubHub via the POS API' },
       { key: 'purchaseAccounts', label: 'Purchase Accounts', description: 'TM account usage tracking per event' },
     ],
   },

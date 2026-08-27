@@ -47,12 +47,26 @@ export interface StubHubConfig {
   maxRetries: number;
 }
 
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): StubHubConfig {
+/**
+ * @param overrides  operator settings from the database, which the UI writes.
+ *
+ * The environment still wins where it is explicit. Setting STUBHUB_DRY_RUN pins a
+ * machine regardless of what anyone clicks, which is what you want on a box that
+ * must never write — a staging instance sharing the production database, say.
+ * Where the environment is silent, the stored setting decides, so going live is a
+ * click rather than an edit and a redeploy.
+ */
+export function loadConfig(
+  env: NodeJS.ProcessEnv = process.env,
+  overrides: { dryRun?: boolean } = {}
+): StubHubConfig {
+  const envDryRun = env.STUBHUB_DRY_RUN === undefined ? undefined : env.STUBHUB_DRY_RUN !== 'false';
   return {
     baseUrl: env.STUBHUB_BASE_URL || 'https://pointofsaleapi.stubhub.net',
     bearerToken: env.STUBHUB_BEARER_TOKEN || '',
     accountId: env.STUBHUB_ACCOUNT_ID || '',
-    dryRun: env.STUBHUB_DRY_RUN !== 'false',
+    // env > stored setting > safe default.
+    dryRun: envDryRun ?? overrides.dryRun ?? true,
     timeoutMs: Number(env.STUBHUB_TIMEOUT_MS) || 30_000,
     maxRetries: Number(env.STUBHUB_MAX_RETRIES) || 4,
   };

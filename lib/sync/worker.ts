@@ -55,6 +55,23 @@ import {
   type CreateItem, type UpdateItem, type ItemOutcome,
 } from './batcher.ts';
 import { acquireLease, releaseLease, makeHolderId, RENEW_INTERVAL_MS } from './leader.ts';
+import { getStubhubSyncSettings, StubhubSyncSettings } from '@/models/stubhubSyncModel.js';
+import type { ApiMarketplace } from '@/lib/stubhub/types.ts';
+
+/**
+ * A client configured from the operator's stored settings.
+ *
+ * Built per call rather than once, because dryRun and the marketplace list are
+ * meant to be changeable while the loop is running — flipping to live, or
+ * stopping writes, should not need a restart.
+ */
+export async function configuredClient(): Promise<{ client: StubHubClient; marketplaces: ApiMarketplace[] }> {
+  const settings = await getStubhubSyncSettings();
+  return {
+    client: new StubHubClient(loadConfig(process.env, { dryRun: settings.dryRun })),
+    marketplaces: (settings.marketplaces?.length ? settings.marketplaces : ['StubHub']) as ApiMarketplace[],
+  };
+}
 
 /**
  * Abort a cycle if this share of claimed rows cannot be resolved to a StubHub
@@ -135,8 +152,14 @@ const EMPTY: DrainResult = {
  * Returns `more: true` when work remains, so the caller loops again immediately
  * instead of sleeping.
  */
-export async function drainOnce(client = new StubHubClient()): Promise<DrainResult> {
+export async function drainOnce(client?: StubHubClient, marketplaces?: ApiMarketplace[]): Promise<DrainResult> {
   const result: DrainResult = { ...EMPTY };
+
+  if (!client || !marketplaces) {
+    const configured = await configuredClient();
+    client = client ?? configured.client;
+    marketplaces = marketplaces ?? configured.marketplaces;
+  }
 
   const rows = await claimRows(CLAIM_SIZE);
   const tombstones = await claimTombstones(CLAIM_SIZE);
@@ -149,7 +172,7 @@ export async function drainOnce(client = new StubHubClient()): Promise<DrainResu
   Object.assign(result, await processTombstones(client, tombstones, result));
 
   if (rows.length > 0) {
-    const rowResult = await processRows(client, rows);
+    const rowResult = await processRows(client, rows, marketplaces);
     result.created += rowResult.created;
     result.updated += rowResult.updated;
     result.noop += rowResult.noop;
@@ -209,7 +232,8 @@ async function processTombstones(
 
 async function processRows(
   client: StubHubClient,
-  rows: Awaited<ReturnType<typeof claimRows>>
+  rows: Awaited<ReturnType<typeof claimRows>>,
+  marketplaces: ApiMarketplace[]
 ): Promise<{ created: number; updated: number; noop: number; skipped: number; failed: number; aborted: string | null }> {
   const out = { created: 0, updated: 0, noop: 0, skipped: 0, failed: 0, aborted: null as string | null };
 
@@ -240,7 +264,7 @@ async function processRows(
       continue;
     }
 
-    const mapped = mapRow(source);
+    const mapped = mapRow(source, { marketplaces });
     if (!mapped.ok) {
       await markSkipped(row._id, `${mapped.reason}: ${mapped.detail}`);
       out.skipped++;
@@ -378,14 +402,10 @@ async function processRows(
  */
 export async function runWorker(signal?: AbortSignal): Promise<void> {
   const holder = makeHolderId();
-  const client = new StubHubClient(loadConfig());
 
-  if (!client.configured) {
+  if (!new StubHubClient().configured) {
     console.warn('[stubhub:worker] not configured — set STUBHUB_BEARER_TOKEN and STUBHUB_ACCOUNT_ID');
     return;
-  }
-  if (client.config.dryRun) {
-    console.log('[stubhub:worker] DRY RUN — writes will be logged, not sent');
   }
 
   let renewTimer: NodeJS.Timeout | null = null;
@@ -403,7 +423,11 @@ export async function runWorker(signal?: AbortSignal): Promise<void> {
         break;
       }
 
-      const result = await drainOnce(client);
+      // Re-read settings each pass so dryRun and the marketplace list can be
+      // changed from the dashboard without restarting the loop.
+      const { client, marketplaces } = await configuredClient();
+      const result = await drainOnce(client, marketplaces);
+      await recordDrain(result);
 
       if (result.aborted) {
         console.error(`[stubhub:worker] cycle aborted: ${result.aborted}`);
@@ -428,11 +452,54 @@ export async function runWorker(signal?: AbortSignal): Promise<void> {
   }
 }
 
+/** Persist counters and the last outcome, so the dashboard has history. */
+export async function recordDrain(result: DrainResult): Promise<void> {
+  if (result.claimed === 0 && !result.aborted) return;
+  await StubhubSyncSettings.updateOne(
+    {},
+    {
+      $set: {
+        lastDrainAt: new Date(),
+        lastDrainResult:
+          `${result.created}C ${result.updated}U ${result.noop}= ${result.delisted}L ` +
+          `${result.deleted}D ${result.skipped}S ${result.failed}F`,
+        lastError: result.aborted ?? null,
+      },
+      $inc: {
+        totalCreated: result.created,
+        totalUpdated: result.updated,
+        totalDelisted: result.delisted,
+        totalDeleted: result.deleted,
+        totalFailed: result.failed,
+      },
+    },
+    { upsert: true }
+  );
+}
+
 /** Snapshot for the dashboard. */
 export async function syncStatus() {
   const depth = await queueDepth();
-  const client = new StubHubClient();
+  const settings = await getStubhubSyncSettings();
+  const client = new StubHubClient(loadConfig(process.env, { dryRun: settings.dryRun }));
   return {
+    settings: {
+      isRunning: settings.isRunning,
+      dryRun: settings.dryRun,
+      marketplaces: settings.marketplaces ?? ['StubHub'],
+      lastDrainAt: settings.lastDrainAt,
+      lastDrainResult: settings.lastDrainResult,
+      lastError: settings.lastError,
+      totals: {
+        created: settings.totalCreated ?? 0,
+        updated: settings.totalUpdated ?? 0,
+        delisted: settings.totalDelisted ?? 0,
+        deleted: settings.totalDeleted ?? 0,
+        failed: settings.totalFailed ?? 0,
+      },
+    },
+    /** True when the environment pins dryRun, so the UI toggle cannot change it. */
+    dryRunPinnedByEnv: process.env.STUBHUB_DRY_RUN !== undefined,
     ...depth,
     lagMs: depth.oldestPendingAt ? Date.now() - depth.oldestPendingAt.getTime() : 0,
     configured: client.configured,
