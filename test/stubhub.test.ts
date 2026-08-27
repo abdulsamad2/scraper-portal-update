@@ -19,6 +19,7 @@ import { resolveEventId } from '../lib/stubhub/eventResolver.ts';
 import { payloadHash, stableStringify, deriveBatchId } from '../lib/stubhub/hash.ts';
 import { mapRow, type InventoryRowInput } from '../lib/stubhub/mapRow.ts';
 import { comparePriceEcho, ASK_PRICE_FIELD } from '../lib/stubhub/price.ts';
+import { chooseWritePath, itemsPerMinute, MAX_BATCH_ITEMS, RATE_LIMITS, RECONCILIATION } from '../lib/stubhub/limits.ts';
 
 describe('resolveSplitType', () => {
   // Every case here appeared in the 1,537-row export, with its observed frequency.
@@ -304,5 +305,40 @@ describe('price echo verification', () => {
     assert.equal(r.ok, true);
     if (!r.ok) return;
     assert.equal((r.update.prices![0] as unknown as Record<string, unknown>)[ASK_PRICE_FIELD], 130);
+  });
+});
+
+describe('rate limits and write-path selection', () => {
+  test('creates always take the bulk path — they are the only non-idempotent write', () => {
+    assert.equal(chooseWritePath('create', 1), 'bulk');
+    assert.equal(chooseWritePath('create', 1, { urgent: true }), 'bulk');
+  });
+
+  test('small urgent updates go direct — PATCH is idempotent, so retry is safe', () => {
+    assert.equal(chooseWritePath('update', 1, { urgent: true }), 'single');
+    assert.equal(chooseWritePath('delete', 2), 'single');
+  });
+
+  test('volume goes to bulk', () => {
+    assert.equal(chooseWritePath('update', 500), 'bulk');
+    assert.equal(chooseWritePath('delete', 500), 'bulk');
+  });
+
+  test('bulk is roughly an order of magnitude more capable than single PATCH', () => {
+    const bulk = itemsPerMinute('bulk', 'update');
+    const single = itemsPerMinute('single', 'update');
+    assert.equal(bulk, 760 * 250 * 0.5);
+    assert.equal(single, 12_880 * 0.5);
+    assert.equal(bulk > single * 10, true);
+  });
+
+  test('batch cap is StubHub-stated, not guessed', () => {
+    assert.equal(MAX_BATCH_ITEMS, 250);
+  });
+
+  test('the export cap is what forces the local-hash diff', () => {
+    // One call per two minutes cannot serve a per-cycle diff on a 2-minute scrape.
+    assert.equal(RECONCILIATION.minExportIntervalSeconds, 120);
+    assert.equal(RATE_LIMITS['GET /inventory/search'], 10);
   });
 });
