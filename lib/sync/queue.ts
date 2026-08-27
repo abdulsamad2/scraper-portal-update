@@ -46,6 +46,7 @@ interface LeanRowDoc {
     syncHash?: string;
     syncAttempts?: number;
     syncPendingSince?: Date;
+    syncBatchId?: string;
   };
 }
 
@@ -70,6 +71,7 @@ export interface ClaimedRow {
   syncState: string;
   syncHash: string | null;
   syncAttempts: number;
+  syncBatchId: string | null;
 }
 
 export interface ClaimedTombstone {
@@ -116,6 +118,7 @@ export async function claimRows(limit: number, now = new Date()): Promise<Claime
       'inventory.syncState': 1,
       'inventory.syncHash': 1,
       'inventory.syncAttempts': 1,
+      'inventory.syncBatchId': 1,
     }
   )
     .sort({ event_date: 1 })
@@ -148,6 +151,7 @@ export async function claimRows(limit: number, now = new Date()): Promise<Claime
     syncState: c.inventory?.syncState ?? 'pending',
     syncHash: c.inventory?.syncHash ?? null,
     syncAttempts: c.inventory?.syncAttempts ?? 0,
+    syncBatchId: c.inventory?.syncBatchId ?? null,
   }));
 }
 
@@ -228,6 +232,27 @@ export async function markUpdating(id: unknown, batchId: string): Promise<void> 
     {
       $set: {
         'inventory.syncState': 'updating',
+        'inventory.syncBatchId': batchId,
+        'inventory.syncPendingSince': new Date(),
+      },
+      $unset: { 'inventory.syncLeaseUntil': '' },
+    }
+  );
+}
+
+/**
+ * Submitted in a create batch, awaiting its listing id.
+ *
+ * Stays in the queue so the next pass reads the batch result once and settles it.
+ * Recording the batch id is what makes that possible without re-sending: the id
+ * is derived from the batch's contents, so it names this exact submission.
+ */
+export async function markCreating(id: unknown, batchId: string): Promise<void> {
+  await ConsecutiveGroup.updateOne(
+    { _id: id },
+    {
+      $set: {
+        'inventory.syncState': 'creating',
         'inventory.syncBatchId': batchId,
         'inventory.syncPendingSince': new Date(),
       },

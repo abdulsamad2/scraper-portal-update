@@ -49,12 +49,12 @@ import { resolveRemoval, IDLE_POLL_MS } from '@/lib/stubhub/policy.ts';
 import { MAX_BATCH_ITEMS } from '@/lib/stubhub/limits.ts';
 import {
   claimRows, claimTombstones, markSynced, markCreated, markFailed, markSkipped,
-  markUpdating, markDelisted, markTombstoneDone, markTombstoneFailed,
+  markUpdating, markCreating, markDelisted, markTombstoneDone, markTombstoneFailed,
   markTombstoneSubmitted, cancelTombstone,
   queueDepth, MAX_ATTEMPTS,
 } from './queue.ts';
 import {
-  submitCreates, submitUpdates, submitDeletes, submitDelists,
+  submitCreates, submitUpdates, submitDeletes, submitDelists, readBatchOutcomes,
   patchOne, delistOne, deleteOne,
   type CreateItem, type UpdateItem, type ItemOutcome,
 } from './batcher.ts';
@@ -454,6 +454,7 @@ async function processRows(
   const pendingVerify: Array<{
     rowId: unknown; listingId: number; expectedPrice: number; hash: string; attempts: number;
   }> = [];
+  const awaitingCreate = new Map<string, Array<{ rowId: unknown; externalId: string; attempts: number }>>();
   const byExternalId = new Map<string, { rowId: unknown; hash: string; attempts: number }>();
 
   for (const row of rows) {
@@ -500,6 +501,15 @@ async function processRows(
       continue;
     }
 
+    // Submitted in a create batch by an earlier pass — read that batch's result
+    // rather than creating the listing a second time.
+    if (row.syncState === 'creating' && row.syncBatchId && !row.stubhubListingId) {
+      const list = awaitingCreate.get(row.syncBatchId) ?? [];
+      list.push({ rowId: row._id, externalId: mapped.externalId, attempts: row.syncAttempts });
+      awaitingCreate.set(row.syncBatchId, list);
+      continue;
+    }
+
     // Already submitted in a batch — read it back rather than sending again.
     if (row.syncState === 'updating' && row.stubhubListingId) {
       pendingVerify.push({
@@ -524,6 +534,28 @@ async function processRows(
       });
     } else {
       creates.push({ rowId: row._id, externalId: mapped.externalId, payload: mapped.create, hash });
+    }
+  }
+
+  // Settle create batches submitted by an earlier pass. One status read each, no
+  // looping — the read is what used to make a pass take ninety seconds.
+  for (const [batchId, waiting] of awaitingCreate) {
+    let outcomes: Map<string, ItemOutcome>;
+    try {
+      ({ outcomes } = await readBatchOutcomes(client, batchId));
+    } catch {
+      continue; // still queued or unreadable; try again next pass
+    }
+    for (const w of waiting) {
+      const outcome = outcomes.get(w.externalId);
+      if (outcome?.ok && outcome.entityId) {
+        await markCreated(w.rowId, String(outcome.entityId));
+        out.created++;
+      } else if (outcome && !outcome.ok) {
+        await markFailed(w.rowId, outcome.error ?? 'create failed', w.attempts);
+        out.failed++;
+      }
+      // No entry yet: the batch has not settled. Left as-is for the next pass.
     }
   }
 
@@ -574,8 +606,11 @@ async function processRows(
     // recording the failure now, and the attempt counter is what eventually parks
     // a row that can never succeed.
     let results: Map<string, ItemOutcome>;
+    let batchId = '';
     try {
-      results = await submitCreates(client, chunk);
+      const submitted = await submitCreates(client, chunk);
+      results = submitted.outcomes;
+      batchId = submitted.batchId;
     } catch (error) {
       const reason = error instanceof StubHubError ? error.summary : String(error);
       console.error(`[stubhub:worker] create batch failed: ${reason}`);
@@ -597,9 +632,12 @@ async function processRows(
       } else if (outcome) {
         await markFailed(meta.rowId, outcome.error ?? 'create failed', meta.attempts);
         out.failed++;
+      } else {
+        // Still draining. Record the batch so the next pass reads its result once
+        // rather than waiting here or re-sending — the id names this exact
+        // submission, so re-reading is always safe.
+        await markCreating(meta.rowId, batchId);
       }
-      // No outcome at all means the batch is still draining. The lease expires and
-      // the next pass re-reads it; nothing is resubmitted blind.
     }
   }
 

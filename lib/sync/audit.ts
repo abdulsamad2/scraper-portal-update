@@ -36,6 +36,7 @@
 
 import dbConnect from '@/lib/dbConnect';
 import { ConsecutiveGroup } from '@/models/seatModel.js';
+import { InventoryTombstone } from '@/models/inventoryTombstoneModel.js';
 import { StubHubClient } from '@/lib/stubhub/client.ts';
 import { RECONCILIATION } from '@/lib/stubhub/limits.ts';
 import type { InventoryExportResource, ListingResource } from '@/lib/stubhub/types.ts';
@@ -46,6 +47,8 @@ export interface DriftReport {
   orphans: Array<{ listingId: number; externalId: string | null }>;
   ghosts: Array<{ inventoryId: number; listingId: string }>;
   priceMismatches: Array<{ externalId: string; ours: number; theirs: number }>;
+  /** Listings with a removal already queued — accounted for, not orphaned. */
+  pendingRemoval: number;
   pages: number;
   truncated: boolean;
 }
@@ -67,7 +70,8 @@ export async function auditDrift(opts: {
   const maxPages = opts.maxPages ?? 20;
 
   const report: DriftReport = {
-    scanned: 0, tracked: 0, orphans: [], ghosts: [], priceMismatches: [], pages: 0, truncated: false,
+    scanned: 0, tracked: 0, orphans: [], ghosts: [], priceMismatches: [],
+    pendingRemoval: 0, pages: 0, truncated: false,
   };
 
   // What we believe is live, keyed by the id StubHub knows it by.
@@ -90,7 +94,25 @@ export async function auditDrift(opts: {
       });
     }
   }
+  // Listings queued for removal are accounted for, not orphaned.
+  //
+  // Without this the audit cries wolf during ordinary work: stopping an event
+  // deletes its rows and records tombstones holding the listing ids, so for as
+  // long as those removals are in flight the listings exist on StubHub with no
+  // live row pointing at them — which looks exactly like an orphan and is not
+  // one. A live run reported 401 orphans this way, every one of them a deletion
+  // already scheduled.
+  const removing = new Set<string>();
+  for await (const t of InventoryTombstone.find(
+    { syncState: { $in: ['pending', 'deleting'] }, stubhubListingId: { $ne: null } },
+    { stubhubListingId: 1 }
+  ).lean().cursor()) {
+    const id = (t as { stubhubListingId?: string }).stubhubListingId;
+    if (id) removing.add(String(id));
+  }
+
   report.tracked = ours.size;
+  report.pendingRemoval = removing.size;
 
   const seen = new Set<string>();
   let paginationToken: number | null = null;
@@ -123,7 +145,10 @@ export async function auditDrift(opts: {
 
       const mine = ours.get(id);
       if (!mine) {
-        report.orphans.push({ listingId: listing.id, externalId: listing.externalId ?? null });
+        // Already queued for removal — expected, not drift.
+        if (!removing.has(id)) {
+          report.orphans.push({ listingId: listing.id, externalId: listing.externalId ?? null });
+        }
         continue;
       }
 
@@ -189,6 +214,7 @@ export function summariseDrift(report: DriftReport): string {
   const parts = [
     `${report.scanned} scanned`,
     `${report.tracked} tracked`,
+    `${report.pendingRemoval} awaiting removal`,
     `${report.orphans.length} orphan${report.orphans.length === 1 ? '' : 's'}`,
     `${report.ghosts.length} ghost${report.ghosts.length === 1 ? '' : 's'}`,
     `${report.priceMismatches.length} price mismatch${report.priceMismatches.length === 1 ? '' : 'es'}`,

@@ -27,7 +27,6 @@
 import { StubHubClient, StubHubError } from '@/lib/stubhub/client.ts';
 import { deriveBatchId, payloadHash } from '@/lib/stubhub/hash.ts';
 import { MAX_BATCH_ITEMS } from '@/lib/stubhub/limits.ts';
-import { bulkPollDelay } from '@/lib/stubhub/policy.ts';
 import { outcomes, type ItemOutcome } from './bulkResults.ts';
 import type {
   BulkInventoryRequest,
@@ -36,8 +35,6 @@ import type {
   InventoryUpdateRequest,
   ListingResource,
 } from '@/lib/stubhub/types.ts';
-
-const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
 export interface CreateItem {
   rowId: unknown;
@@ -71,6 +68,7 @@ async function runBulk(
   request: BulkInventoryRequest,
   operation: string
 ): Promise<BulkProcessingResultSummaryResponse | null> {
+  void operation;
   const submit = await client.request<BulkProcessingResultSummaryResponse>({
     method: 'POST',
     path: '/inventory/bulk',
@@ -81,48 +79,68 @@ async function runBulk(
     isWrite: true,
   });
 
-  if (submit.skipped) return null;
-
-  // Bounded so a batch that never reports finished cannot hold the drain open.
-  // Giving up here is safe: the batch id is derived from content, so the next
-  // pass recomputes it and re-reads the result rather than resubmitting.
-  const MAX_POLLS = 18;
-
-  let summary = submit.data;
-  for (let attempt = 0; attempt < MAX_POLLS && !summary?.finished; attempt++) {
-    await sleep(bulkPollDelay(attempt));
-    const poll = await client.request<BulkProcessingResultSummaryResponse>({
-      method: 'GET',
-      path: `/inventory/bulk/${request.bulkProcessingId}`,
-      endpoint: 'DEFAULT',
-      idempotent: true,
-    });
-    summary = poll.data ?? summary;
-    if (summary?.finished) break;
-  }
-
-  if (!summary?.finished) {
-    console.warn(
-      `[stubhub:${operation}] batch ${request.bulkProcessingId} did not finish while polling; ` +
-      `it will be re-read next drain rather than resubmitted`
-    );
-  }
-  return summary ?? null;
+  return submit.data ?? null;
 }
 
+/**
+ * Read a submitted batch's status. Exactly one request, never a loop.
+ *
+ * The loop this replaces was the reason a drain pass took ninety seconds. The
+ * status endpoint shares the general 100/min allowance, so the limiter paces it
+ * to one call every 1.2 seconds; polling a batch up to eighteen times therefore
+ * cost up to twenty seconds per batch, and a pass with four batches spent well
+ * over a minute doing nothing but asking whether the work had finished yet.
+ *
+ * A batch settles in about six seconds. Reading it once per pass — with passes a
+ * few hundred milliseconds apart — resolves it just as quickly without any of
+ * that waiting, and leaves the drain free to do real work in between.
+ */
+export async function readBatch(
+  client: StubHubClient,
+  batchId: string
+): Promise<BulkProcessingResultSummaryResponse | null> {
+  const res = await client.request<BulkProcessingResultSummaryResponse>({
+    method: 'GET',
+    path: `/inventory/bulk/${batchId}`,
+    endpoint: 'DEFAULT',
+    idempotent: true,
+  });
+  return res.data ?? null;
+}
+
+/** Per-item outcomes for a batch submitted on an earlier pass. */
+export async function readBatchOutcomes(
+  client: StubHubClient,
+  batchId: string
+): Promise<{ finished: boolean; outcomes: Map<string, ItemOutcome> }> {
+  const summary = await readBatch(client, batchId);
+  return { finished: Boolean(summary?.finished), outcomes: outcomes(summary) };
+}
+
+/**
+ * Submit a create batch and return immediately.
+ *
+ * The batch id is returned so the caller can record it against the rows and read
+ * the result on a later pass. Nothing here waits: a create batch settles in a few
+ * seconds, and blocking a drain for that is how passes ended up ninety seconds
+ * long.
+ */
 export async function submitCreates(
   client: StubHubClient,
   items: CreateItem[]
-): Promise<Map<string, ItemOutcome>> {
-  if (items.length === 0) return new Map();
+): Promise<{ batchId: string; outcomes: Map<string, ItemOutcome> }> {
+  if (items.length === 0) return { batchId: '', outcomes: new Map() };
 
   const chunk = items.slice(0, MAX_BATCH_ITEMS);
-  const request: BulkInventoryRequest = {
-    bulkProcessingId: deriveBatchId('create', chunk.map(i => `${i.externalId}:${i.hash}`)),
+  const batchId = deriveBatchId('create', chunk.map(i => `${i.externalId}:${i.hash}`));
+  const summary = await runBulk(client, {
+    bulkProcessingId: batchId,
     createRequests: chunk.map(i => i.payload),
-  };
+  }, 'create');
 
-  return outcomes(await runBulk(client, request, 'create'));
+  // A submit occasionally comes back already complete for a small batch; take
+  // those outcomes rather than waiting a whole pass to ask again.
+  return { batchId, outcomes: outcomes(summary) };
 }
 
 /**
