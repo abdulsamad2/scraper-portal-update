@@ -157,12 +157,14 @@ export function resolveRemoval(opts: {
     return { action: 'cancel', reason: 'row reappeared — re-broadcast the existing listing' };
   }
 
-  // Some removals are not flapping and should not wait out a grace window.
+  // Some removals are not flapping and should not wait out a grace window — nor
+  // take the delist-then-delete detour. Delisting first exists to stop a listing
+  // selling while we decide whether it is coming back; a final removal has
+  // already decided, and DELETE stops it selling just as immediately. Going
+  // straight there halves the calls and removes a whole pass of latency.
   const FINAL = new Set(['event-deleted', 'event-expired', 'manual', 'seats-changed']);
   if (FINAL.has(reason)) {
-    return delistedAt
-      ? { action: 'delete', reason: `${reason} is final` }
-      : { action: 'delist', reason: `${reason} — stop selling first, delete next pass` };
+    return { action: 'delete', reason: `${reason} is final — delete outright` };
   }
 
   // Stop it selling immediately. This is the half that actually protects us.

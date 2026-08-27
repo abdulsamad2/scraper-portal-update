@@ -272,7 +272,12 @@ async function processTombstones(
   let delisted = 0, deleted = 0, cancelled = 0, failed = acc.failed;
   const now = new Date();
 
-  for (const t of tombstones) {
+  // Concurrent, not sequential. These are independent listings, and a for-loop
+  // with an API call in it made removals the slowest thing in the system: 766
+  // queued removals took four minutes at one call at a time, and every drain
+  // pass waited behind them. DELETE allows 2,730/min, so the only thing that was
+  // ever limiting this was the shape of the loop.
+  await pooled(tombstones, PATCH_CONCURRENCY, async (t) => {
     const decision = resolveRemoval({
       stubhubListingId: t.stubhubListingId,
       delistedAt: t.delistedAt,
@@ -304,7 +309,7 @@ async function processTombstones(
       await markTombstoneFailed(t._id, String(error), t.syncAttempts);
       failed++;
     }
-  }
+  });
 
   return { delisted, deleted, cancelled, failed };
 }

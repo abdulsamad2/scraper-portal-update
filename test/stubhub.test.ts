@@ -419,9 +419,14 @@ describe('removal policy — protect instantly, churn never', () => {
     assert.equal(d.action, 'delete');
   });
 
-  test('final reasons skip the grace window once delisted', () => {
-    const d = resolveRemoval({ stubhubListingId: '1', delistedAt: ago(1000), reappeared: false, reason: 'event-expired', now });
-    assert.equal(d.action, 'delete');
+  test('final reasons delete outright rather than delisting first', () => {
+    // Delisting first exists to stop a listing selling while we decide whether it
+    // is coming back. A final removal has already decided, and DELETE stops it
+    // selling just as immediately — so the detour only costs a second pass.
+    for (const reason of ['event-expired', 'event-deleted', 'manual', 'seats-changed']) {
+      const d = resolveRemoval({ stubhubListingId: '1', delistedAt: null, reappeared: false, reason, now });
+      assert.equal(d.action, 'delete', `${reason} should delete in one step`);
+    }
   });
 
   test('a listing that never existed resolves locally with no API call', () => {
