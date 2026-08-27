@@ -28,8 +28,21 @@ import dbConnect from '@/lib/dbConnect';
 import { ConsecutiveGroup } from '@/models/seatModel.js';
 import { InventoryTombstone } from '@/models/inventoryTombstoneModel.js';
 
-/** How long a claimed row stays claimed before it can be picked up again. */
-export const CLAIM_TTL_MS = 5 * 60 * 1000;
+/**
+ * How long a claimed row stays claimed before it can be picked up again.
+ *
+ * This is a crash guard — it exists so a worker that dies mid-pass cannot strand
+ * rows — and it was set to five minutes, which is far longer than a pass takes.
+ * That turned out to throttle the whole system: a pass claims up to
+ * CLAIM_SIZE x PIPELINE_CONCURRENCY rows, and any it cannot settle immediately
+ * (an unfinished batch, a write still landing) stays locked for the full lease.
+ * The loop then had nothing claimable and idled, so the queue moved in a burst
+ * every five minutes instead of continuously.
+ *
+ * A minute is still many times the length of a pass, so it does the crash-guard
+ * job, without turning a deferral into a five-minute stall.
+ */
+export const CLAIM_TTL_MS = Number(process.env.STUBHUB_CLAIM_TTL_MS ?? 60_000);
 
 /** Attempts before a row is parked as failed and stops consuming budget. */
 export const MAX_ATTEMPTS = 5;

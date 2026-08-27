@@ -317,3 +317,46 @@ export async function deleteOne(client: StubHubClient, listingId: number): Promi
 /** Re-exported so callers hash the payload the same way the batch id does. */
 export { payloadHash };
 export type { ItemOutcome };
+
+/**
+ * Find listings by the externalId we gave them.
+ *
+ * The batch record is not a durable source of truth. StubHub keeps a bulk
+ * processing result only for a while and then returns 404 for it, at which point
+ * reading the batch can never tell us what happened — and a create whose outcome
+ * we cannot read leaves its rows stuck in 'creating' forever, retrying a dead id.
+ * 254 rows sat that way across five expired batches.
+ *
+ * externalId is ours and permanent, so it answers the question the batch record
+ * used to: did this listing get created, and what id did it get. At 1,180/min
+ * this is also a cheaper lookup than the 100/min bulk status read it replaces.
+ *
+ * Returns only the ids that exist; anything absent was never created and should
+ * be sent again.
+ */
+export async function resolveByExternalIds(
+  client: StubHubClient,
+  externalIds: string[]
+): Promise<Map<string, number>> {
+  const found = new Map<string, number>();
+
+  await Promise.all(externalIds.map(async externalId => {
+    try {
+      const res = await client.request<ListingResource | ListingResource[]>({
+        method: 'GET',
+        path: `/inventory/external/${encodeURIComponent(externalId)}`,
+        endpoint: 'GET /inventory/external/{externalId}',
+        idempotent: true,
+      });
+      const body = res.data;
+      const listing = Array.isArray(body) ? body[0] : body;
+      if (listing?.id != null) found.set(externalId, Number(listing.id));
+    } catch {
+      // A 404 is the expected answer for "never created", and any other failure
+      // is indistinguishable from it here. Both mean: send it again. Re-creating
+      // is safe because the next create carries the same externalId.
+    }
+  }));
+
+  return found;
+}

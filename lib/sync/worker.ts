@@ -56,7 +56,7 @@ import {
   submitCreates, submitUpdates, submitDeletes, submitDelists, readBatchOutcomes,
   patchOne, delistOne, deleteOne,
   type CreateItem, type UpdateItem, type ItemOutcome,
-} from './batcher.ts';
+ resolveByExternalIds,} from './batcher.ts';
 import { verifyPrices, verifyGone } from './verify.ts';
 import { acquireLease, releaseLease, currentLease, makeHolderId, RENEW_INTERVAL_MS } from './leader.ts';
 import { getStubhubSyncSettings, StubhubSyncSettings } from '@/models/stubhubSyncModel.js';
@@ -623,9 +623,27 @@ async function processRows(
     try {
       ({ outcomes } = await readBatchOutcomes(client, batchId));
     } catch {
-      // Still queued or unreadable; try again next pass — but give the claim
-      // back, or the whole batch is frozen for the lease's full duration.
-      for (const w of waiting) deferred.push(w.rowId);
+      // The batch record is gone, or unreadable.
+      //
+      // StubHub keeps a bulk processing result only for a while and then 404s
+      // it, so retrying this id can never succeed — the rows would sit in
+      // 'creating' forever. Ask the durable question instead: does a listing
+      // exist carrying the externalId we sent? That settles a create without
+      // the batch record existing at all.
+      const resolved = await resolveByExternalIds(client, waiting.map(w => w.externalId));
+      for (const w of waiting) {
+        const listingId = resolved.get(w.externalId);
+        if (listingId != null) {
+          await markCreated(w.rowId, String(listingId));
+          out.created++;
+        } else {
+          // Never created. Send it back to be created again — safe, because the
+          // retry carries the same externalId, so a listing that did exist would
+          // have been found above.
+          await markFailed(w.rowId, 'create batch expired before it could be read', w.attempts);
+          out.failed++;
+        }
+      }
       continue;
     }
     for (const w of waiting) {
