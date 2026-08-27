@@ -162,7 +162,14 @@ export function resolveRemoval(opts: {
   // selling while we decide whether it is coming back; a final removal has
   // already decided, and DELETE stops it selling just as immediately. Going
   // straight there halves the calls and removes a whole pass of latency.
-  const FINAL = new Set(['event-deleted', 'event-expired', 'manual', 'seats-changed']);
+  // quantity-changed sits here for the same reason seats-changed does, and it is
+  // not merely an optimisation. Both delete a row and immediately recreate it
+  // under the same key, so the reappearance check above would otherwise cancel
+  // the removal — leaving the old listing live alongside the new one, selling the
+  // wrong count. Final means final: delete, and let the create stand on its own.
+  const FINAL = new Set([
+    'event-deleted', 'event-expired', 'manual', 'seats-changed', 'quantity-changed',
+  ]);
   if (FINAL.has(reason)) {
     return { action: 'delete', reason: `${reason} is final — delete outright` };
   }

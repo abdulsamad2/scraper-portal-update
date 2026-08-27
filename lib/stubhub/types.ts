@@ -145,6 +145,27 @@ export interface InventoryUpdateRequest {
   listingNotes?: ListingNoteRequest[] | null;
   tags?: TagRequest[] | null;
   internalNotes?: string | null;
+  /**
+   * Cost fields. Updatable, and originally omitted here — which meant a cost
+   * change on an existing listing was never sent: the row hashed differently, an
+   * update went out, and the payload carried no cost. Silent, because
+   * verification only compares price.
+   */
+  unitCost?: number | null;
+  faceValueCost?: number | null;
+  zoneFill?: boolean | null;
+  /**
+   * NOT usable for ordinary listings, despite appearing here.
+   *
+   * The spec is explicit: "The number of tickets in a placeholder (SeatSaver)
+   * listing. Only updatable on placeholder listings. Requires the
+   * ExtApiPlaceholderListingQtyPatch feature to be enabled for the seller."
+   *
+   * Ours are seated listings and the feature is not enabled, so a quantity change
+   * cannot be patched — the listing has to be deleted and recreated. Declared so
+   * the next person reads this note instead of rediscovering it.
+   */
+  quantity?: number | null;
 }
 
 export interface BulkInventoryDeleteRequest {

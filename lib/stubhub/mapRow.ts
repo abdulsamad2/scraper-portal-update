@@ -247,6 +247,15 @@ export function mapRow(row: InventoryRowInput, options: MapOptions = {}): Mapped
     maxDisplayQuantity: create.maxDisplayQuantity,
     listingNotes: create.listingNotes,
     tags: create.tags,
+    // Cost travels with the update, not only the create. Omitting it meant a
+    // cost change produced a different hash, sent an update, and changed
+    // nothing on StubHub — invisible, because verification compares price.
+    //
+    // ticketCount is deliberately absent: the update schema's `quantity` is for
+    // placeholder listings only and needs a feature we do not have, so a
+    // quantity change has to be a delete and recreate. See InventoryUpdateRequest.
+    unitCost: create.unitCost,
+    faceValueCost: create.faceValueCost,
   };
 
   return { ok: true, externalId, eventId: event.eventId, create, update, warnings };

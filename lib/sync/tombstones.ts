@@ -24,6 +24,7 @@ import { InventoryTombstone } from '@/models/inventoryTombstoneModel.js';
 export type RemovalReason =
   | 'scraper-removed'
   | 'seats-changed'
+  | 'quantity-changed'
   | 'event-deleted'
   | 'event-expired'
   | 'low-seat-auto-stop'
