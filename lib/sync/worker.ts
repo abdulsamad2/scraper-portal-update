@@ -44,11 +44,12 @@ import { generateInventoryCsv, generateInventoryRowsForIds } from '@/actions/csv
 import { StubHubClient, StubHubError, loadConfig } from '@/lib/stubhub/client.ts';
 import { mapRow, type InventoryRowInput } from '@/lib/stubhub/mapRow.ts';
 import { verifyEvent } from '@/lib/stubhub/eventVerifier.ts';
-import { payloadHash } from '@/lib/stubhub/hash.ts';
+import { payloadHash, deriveBatchId } from '@/lib/stubhub/hash.ts';
 import { resolveRemoval, IDLE_POLL_MS } from '@/lib/stubhub/policy.ts';
+import { MAX_BATCH_ITEMS } from '@/lib/stubhub/limits.ts';
 import {
   claimRows, claimTombstones, markSynced, markCreated, markFailed, markSkipped,
-  markDelisted, markTombstoneDone, markTombstoneFailed, cancelTombstone,
+  markUpdating, markDelisted, markTombstoneDone, markTombstoneFailed, cancelTombstone,
   queueDepth, MAX_ATTEMPTS,
 } from './queue.ts';
 import {
@@ -100,6 +101,27 @@ const SKIP_ABORT_RATIO = Number(process.env.STUBHUB_SKIP_ABORT_RATIO ?? 0.9);
  * time, just across more passes.
  */
 const CLAIM_SIZE = Number(process.env.STUBHUB_CLAIM_SIZE ?? 100);
+
+/**
+ * How many claim-build-push pipelines run at once.
+ *
+ * This is what decides whether the system keeps up, and it took measuring to see
+ * why. The API is not the constraint: seek-verified bulk sustains ~2,333 items/s,
+ * or 280,000 changes per two-minute cycle. Building the rows to send is —
+ * fetching and mapping costs roughly 5-6ms per row, so a single sequential
+ * pipeline tops out near 19,000 changes per cycle.
+ *
+ * At 363 events that is about 3% of the book per cycle and comfortable. At 1,500
+ * events the same absolute number is 0.7% of a far larger book, and even a 1%
+ * change rate needs more throughput than one pipeline can give. The work is
+ * embarrassingly parallel — separate rows, separate listings — so the answer is
+ * to run several.
+ *
+ * Concurrency multiplies build capacity almost linearly until the database or the
+ * API limits bite, whichever comes first. Four is a conservative default; the
+ * arithmetic for a given book size is in the capacity tests.
+ */
+const PIPELINE_CONCURRENCY = Number(process.env.STUBHUB_PIPELINES ?? 4);
 
 /**
  * How many listings may be updated concurrently on the single-call fast path.
@@ -190,7 +212,9 @@ export async function drainOnce(client?: StubHubClient, marketplaces?: ApiMarket
     marketplaces = marketplaces ?? configured.marketplaces;
   }
 
-  const rows = await claimRows(CLAIM_SIZE);
+  // Claim enough to keep every pipeline busy. Claiming per-pipeline instead would
+  // mean a round trip each, and the claim query is the cheap part.
+  const rows = await claimRows(CLAIM_SIZE * PIPELINE_CONCURRENCY);
   const tombstones = await claimTombstones(CLAIM_SIZE);
   result.claimed = rows.length + tombstones.length;
   if (result.claimed === 0) return result;
@@ -201,16 +225,28 @@ export async function drainOnce(client?: StubHubClient, marketplaces?: ApiMarket
   Object.assign(result, await processTombstones(client, tombstones, result));
 
   if (rows.length > 0) {
-    const rowResult = await processRows(client, rows, marketplaces);
-    result.created += rowResult.created;
-    result.updated += rowResult.updated;
-    result.noop += rowResult.noop;
-    result.skipped += rowResult.skipped;
-    result.failed += rowResult.failed;
-    result.aborted = rowResult.aborted;
+    // Split the claim across pipelines and run them concurrently. Each builds and
+    // pushes its own slice; they share nothing but the client's rate limiter,
+    // which is where contention belongs.
+    const slices: (typeof rows)[] = [];
+    for (let i = 0; i < rows.length; i += CLAIM_SIZE) slices.push(rows.slice(i, i + CLAIM_SIZE));
+
+    const results = await pooled(slices, PIPELINE_CONCURRENCY,
+      slice => processRows(client!, slice, marketplaces!));
+
+    for (const r of results) {
+      result.created += r.created;
+      result.updated += r.updated;
+      result.noop += r.noop;
+      result.skipped += r.skipped;
+      result.failed += r.failed;
+      // One slice aborting is enough to stop the cycle: the circuit breaker fires
+      // on a book we cannot describe, and that is not a per-slice condition.
+      if (r.aborted && !result.aborted) result.aborted = r.aborted;
+    }
   }
 
-  result.more = result.claimed >= CLAIM_SIZE && !result.aborted;
+  result.more = result.claimed >= CLAIM_SIZE * PIPELINE_CONCURRENCY && !result.aborted;
   return result;
 }
 
@@ -303,6 +339,9 @@ async function processRows(
 
   const creates: CreateItem[] = [];
   const updates: UpdateItem[] = [];
+  const pendingVerify: Array<{
+    rowId: unknown; listingId: number; expectedPrice: number; hash: string; attempts: number;
+  }> = [];
   const byExternalId = new Map<string, { rowId: unknown; hash: string; attempts: number }>();
 
   for (const row of rows) {
@@ -338,9 +377,24 @@ async function processRows(
     // The hash gate. A row whose payload matches what StubHub already accepted
     // costs nothing — no request, no rate budget, no risk — and in steady state
     // this is the overwhelming majority.
-    if (row.syncHash === hash && row.stubhubListingId) {
-      await markSynced(row._id, hash);
+    //
+    // Requires syncState 'synced' as well as a matching hash: a row still in
+    // flight from a previous batch has no confirmed hash yet, and treating it as
+    // settled would close the loop on a write nobody has checked.
+    if (row.syncState === 'synced' && row.syncHash === hash && row.stubhubListingId) {
       out.noop++;
+      continue;
+    }
+
+    // Already submitted in a batch — read it back rather than sending again.
+    if (row.syncState === 'updating' && row.stubhubListingId) {
+      pendingVerify.push({
+        rowId: row._id,
+        listingId: Number(row.stubhubListingId),
+        expectedPrice: round2(source.list_price),
+        hash,
+        attempts: row.syncAttempts,
+      });
       continue;
     }
 
@@ -356,6 +410,31 @@ async function processRows(
       });
     } else {
       creates.push({ rowId: row._id, externalId: mapped.externalId, payload: mapped.create, hash });
+    }
+  }
+
+  // Settle anything submitted by an earlier pass, before sending anything new.
+  //
+  // One seek call covers 200 listings, so confirming a batch costs a fraction of
+  // what sending it did. Doing it first also means a row that already landed is
+  // never re-sent, which is what keeps a backlog from feeding on itself.
+  if (pendingVerify.length > 0) {
+    const verdicts = await verifyPrices(client, pendingVerify.map(v => ({
+      listingId: v.listingId, expectedPrice: v.expectedPrice,
+    })));
+
+    for (const v of pendingVerify) {
+      const verdict = verdicts.get(v.listingId);
+      if (verdict?.ok) {
+        await markSynced(v.rowId, v.hash);
+        out.noop++;   // settled without a write this pass
+      } else {
+        // Not confirmed: put it back as dirty so the next pass re-sends. Safe
+        // because every write here is idempotent, and far better than assuming a
+        // batch landed because it was accepted.
+        await markFailed(v.rowId, verdict?.detail ?? 'unverified after batch', v.attempts);
+        out.failed++;
+      }
     }
   }
 
@@ -429,7 +508,7 @@ async function processRows(
     // take bulk and are confirmed by reading the listings back, which is also a
     // stronger check than a status code — it proves the price actually applied,
     // which this integration has twice found is not implied by acceptance.
-    if (updates.length > BULK_UPDATE_THRESHOLD) {
+    if (updates.length >= BULK_UPDATE_THRESHOLD) {
       await pushUpdatesInBulk(client, updates, byExternalId, out);
     } else {
     // Updates go one at a time, concurrently, rather than through bulk.
@@ -548,21 +627,33 @@ export async function recordDrain(result: DrainResult): Promise<void> {
 }
 
 /**
- * Above this many pending updates, batching wins.
+ * At or above this many pending updates, use bulk.
  *
- * Roughly where PATCH's 215 items/s stops keeping up with a drain that has work
- * queued behind it. Below it, a batch's submit-and-verify round trip costs more
- * latency than it saves requests.
+ * Low on purpose. Now that a batch is submitted without waiting for it to settle,
+ * bulk costs no more latency than a single PATCH — one request either way — while
+ * carrying up to 250 changes instead of one. The only reason to send individually
+ * at all is that a handful of PATCHes confirm themselves in the response, saving
+ * the verification pass entirely.
  */
-const BULK_UPDATE_THRESHOLD = Number(process.env.STUBHUB_BULK_THRESHOLD ?? 40);
+const BULK_UPDATE_THRESHOLD = Number(process.env.STUBHUB_BULK_THRESHOLD ?? 10);
 
 /**
- * Push updates as bulk batches, then confirm by reading the listings back.
+ * Submit updates as bulk batches and move on. Confirmation happens later.
  *
- * The confirmation deliberately does not poll bulk status. That endpoint is
- * capped at 100/min and would make itself the bottleneck; seek allows 700/min
- * over arbitrary id lists and answers a stronger question — not "did the batch
- * finish" but "does the listing hold the price we sent".
+ * A bulk batch takes several seconds to settle. Waiting for it would make every
+ * pass pay that cost, so the batch is submitted, its rows are marked in-flight,
+ * and the pass ends. The next pass finds those rows in `updating`, reads them
+ * back through seek in one call per 200 listings, and settles them.
+ *
+ * That is what makes bulk both efficient and immediate: one request carries 250
+ * changes, the change is on its way the moment it is detected, and nothing
+ * blocks waiting for an acknowledgement that arrives on its own schedule.
+ *
+ * Confirmation deliberately avoids GET /inventory/bulk/{id}: it shares the
+ * general 100/min allowance and would cap the whole system at 417 items/s, below
+ * what single PATCH manages. seek allows 700/min over arbitrary id lists, and
+ * answers a stronger question anyway — not "did the batch finish" but "does the
+ * listing hold the price we sent".
  */
 async function pushUpdatesInBulk(
   client: StubHubClient,
@@ -570,8 +661,9 @@ async function pushUpdatesInBulk(
   meta: Map<string, { rowId: unknown; hash: string; attempts: number }>,
   out: { updated: number; failed: number }
 ): Promise<void> {
-  for (let i = 0; i < updates.length; i += 250) {
-    const chunk = updates.slice(i, i + 250);
+  for (let i = 0; i < updates.length; i += MAX_BATCH_ITEMS) {
+    const chunk = updates.slice(i, i + MAX_BATCH_ITEMS);
+    const batchId = deriveBatchId('update', chunk.map(c => `${c.externalId}:${c.hash}`));
 
     try {
       await submitUpdates(client, chunk);
@@ -586,38 +678,15 @@ async function pushUpdatesInBulk(
       continue;
     }
 
-    // Bulk is asynchronous — a batch settles in a few seconds — so give it a
-    // moment before reading back, rather than recording a failure for work that
-    // simply has not happened yet.
-    await sleep(BULK_SETTLE_MS);
-
-    const verdicts = await verifyPrices(
-      client,
-      chunk.map(item => ({
-        listingId: item.listingId,
-        expectedPrice: Number(item.payload.prices?.[0]?.listPrice ?? item.payload.prices?.[0]?.allInPrice ?? 0),
-      }))
-    );
-
+    // In flight, not done. Counted as updated because the write has been accepted
+    // and is on its way; the next pass proves it or re-sends.
     for (const item of chunk) {
       const m = meta.get(item.externalId)!;
-      const verdict = verdicts.get(item.listingId);
-      if (verdict?.ok) {
-        await markSynced(m.rowId, m.hash);
-        out.updated++;
-      } else {
-        // Left dirty rather than failed when merely unverified: the row keeps its
-        // retry budget and the next pass re-sends, which is safe because every
-        // write here is idempotent.
-        await markFailed(m.rowId, verdict?.detail ?? 'unverified', m.attempts);
-        out.failed++;
-      }
+      await markUpdating(m.rowId, batchId);
+      out.updated++;
     }
   }
 }
-
-/** How long to let a bulk batch settle before reading the listings back. */
-const BULK_SETTLE_MS = Number(process.env.STUBHUB_BULK_SETTLE_MS ?? 7_000);
 
 /** Snapshot for the dashboard. */
 export async function syncStatus() {
@@ -652,3 +721,6 @@ export async function syncStatus() {
 }
 
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+
+/** Match the rounding the mapper applies, so verification compares like with like. */
+const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;

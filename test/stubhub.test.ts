@@ -538,6 +538,27 @@ describe('capacity model — what 3,000 events actually needs', () => {
     assert.equal(Math.round(seekPerSecond / bulkStatusPerSecond), 6);
   });
 
+  test('row building, not the API, is what limits a large book', () => {
+    // ~6ms per row to fetch and map, measured against the live collection.
+    const buildMsPerRow = 6.3;
+    const perPipelinePerCycle = CYCLE_S / (buildMsPerRow / 1000);
+    assert.equal(Math.round(perPipelinePerCycle), 19_048);
+
+    const apiPerCycle = Math.min(bulkSubmitPerSecond, seekPerSecond) * CYCLE_S;
+    assert.equal(perPipelinePerCycle < apiPerCycle / 10, true,
+      'one sequential pipeline is more than an order of magnitude below the API ceiling');
+  });
+
+  test('1,500 events needs several pipelines even at a 1% change rate', () => {
+    const book = ROWS_PER_EVENT * 1500;
+    const perPipelinePerCycle = CYCLE_S / (6.3 / 1000);
+    const needed = (pct: number) => (book * pct / 100) / perPipelinePerCycle;
+
+    assert.equal(Math.ceil(needed(1)), 2, '1% needs 2 pipelines');
+    assert.equal(Math.ceil(needed(5)), 7, '5% needs 7');
+    assert.equal(needed(10) < 14, true, 'even 10% is reachable by parallelism, not a redesign');
+  });
+
   test('the resulting ceiling is a real number we can quote', () => {
     // Verification is still marginally the binding constraint (2,333/s against
     // bulk submit's 3,167/s) — worth knowing, because it means a larger seek

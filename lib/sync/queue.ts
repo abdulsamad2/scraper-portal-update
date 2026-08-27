@@ -209,6 +209,28 @@ export async function markSynced(id: unknown, hash: string, listingId?: string):
 }
 
 /**
+ * Submitted in a bulk batch, not yet confirmed.
+ *
+ * The row stays in the queue on purpose. The next pass finds it in this state and
+ * reads the listing back rather than re-sending — which is what lets the drain
+ * submit a batch and move on instead of blocking for the several seconds a bulk
+ * batch takes to settle.
+ */
+export async function markUpdating(id: unknown, batchId: string): Promise<void> {
+  await ConsecutiveGroup.updateOne(
+    { _id: id },
+    {
+      $set: {
+        'inventory.syncState': 'updating',
+        'inventory.syncBatchId': batchId,
+        'inventory.syncPendingSince': new Date(),
+      },
+      $unset: { 'inventory.syncLeaseUntil': '' },
+    }
+  );
+}
+
+/**
  * A listing exists but has no price yet.
  *
  * Create carries no price field, so this state is real rather than an artefact —
