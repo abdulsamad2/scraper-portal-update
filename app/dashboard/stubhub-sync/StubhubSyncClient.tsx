@@ -82,7 +82,7 @@ export interface SyncSnapshot {
     lastDrainAt: string | null;
     lastDrainResult: string | null;
     lastError: string | null;
-    totals: { created: number; updated: number; delisted: number; deleted: number; failed: number };
+    totals: { created: number; updated: number; deleted: number; failed: number };
   };
 }
 
@@ -95,7 +95,7 @@ export interface ClearProgress {
 
 interface DrainResult {
   claimed: number; created: number; updated: number; noop: number;
-  skipped: number; failed: number; delisted: number; deleted: number;
+  skipped: number; failed: number; deleted: number;
   cancelled: number; settling: number; aborted: string | null; more: boolean;
 }
 
@@ -183,7 +183,7 @@ export default function StubhubSyncClient({ initial }: { initial: SyncSnapshot }
     const t = s.settings?.totals;
     if (!t) return;
     if (!baseline.current) baseline.current = { ...t };
-    const done = (t.created ?? 0) + (t.updated ?? 0) + (t.delisted ?? 0) + (t.deleted ?? 0);
+    const done = (t.created ?? 0) + (t.updated ?? 0) + (t.deleted ?? 0);
     setHistory(prev => {
       const next = [...prev, { at: Date.now(), pending: s.pendingRows ?? 0, done }];
       return next.length > HISTORY ? next.slice(-HISTORY) : next;
@@ -282,7 +282,6 @@ export default function StubhubSyncClient({ initial }: { initial: SyncSnapshot }
     ? {
         created: Math.max(0, totals.created - baseline.current.created),
         updated: Math.max(0, totals.updated - baseline.current.updated),
-        delisted: Math.max(0, totals.delisted - baseline.current.delisted),
         deleted: Math.max(0, totals.deleted - baseline.current.deleted),
         failed: Math.max(0, totals.failed - baseline.current.failed),
       }
@@ -554,7 +553,6 @@ export default function StubhubSyncClient({ initial }: { initial: SyncSnapshot }
               <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
                 <Tile label="Created"  n={sessionDone.created}  tone="good" />
                 <Tile label="Updated"  n={sessionDone.updated}  tone="good" />
-                <Tile label="Delisted" n={sessionDone.delisted} />
                 <Tile label="Deleted"  n={sessionDone.deleted} />
                 <Tile label="Failed"   n={sessionDone.failed}   tone="bad" />
               </div>
@@ -571,7 +569,6 @@ export default function StubhubSyncClient({ initial }: { initial: SyncSnapshot }
                   <Pill label="updated" n={lastDrain.updated} tone="good" />
                   <Pill label="unchanged" n={lastDrain.noop} />
                   <Pill label="settling" n={lastDrain.settling} />
-                  <Pill label="delisted" n={lastDrain.delisted} />
                   <Pill label="deleted" n={lastDrain.deleted} />
                   <Pill label="skipped" n={lastDrain.skipped} tone={lastDrain.skipped ? 'warn' : undefined} />
                   <Pill label="failed" n={lastDrain.failed} tone={lastDrain.failed ? 'bad' : undefined} />
@@ -588,7 +585,7 @@ export default function StubhubSyncClient({ initial }: { initial: SyncSnapshot }
             {totals && (
               <div className="pt-3 border-t border-slate-100 text-xs text-slate-500">
                 Lifetime: {totals.created.toLocaleString()} created · {totals.updated.toLocaleString()} updated ·{' '}
-                {totals.delisted.toLocaleString()} delisted · {totals.deleted.toLocaleString()} deleted ·{' '}
+                {totals.deleted.toLocaleString()} deleted ·{' '}
                 <span className={totals.failed > 0 ? 'text-slate-600 font-medium' : ''}>
                   {totals.failed.toLocaleString()} failed
                 </span>

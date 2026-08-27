@@ -45,16 +45,16 @@ import { StubHubClient, StubHubError, isAlreadyQueued, loadConfig } from '@/lib/
 import { mapRow, type InventoryRowInput } from '@/lib/stubhub/mapRow.ts';
 import { verifyEvent } from '@/lib/stubhub/eventVerifier.ts';
 import { payloadHash, deriveBatchId } from '@/lib/stubhub/hash.ts';
-import { resolveRemoval, IDLE_POLL_MS, REAPPEARANCE_GRACE_MS } from '@/lib/stubhub/policy.ts';
+import { resolveRemoval, IDLE_POLL_MS } from '@/lib/stubhub/policy.ts';
 import { MAX_BATCH_ITEMS } from '@/lib/stubhub/limits.ts';
 import {
   claimRows, claimTombstones, markSynced, markCreated, markFailed, markSkipped,
-  markUpdating, markCreating, markDelisted, markTombstoneDone, markTombstoneFailed,
+  markUpdating, markCreating, markTombstoneDone, markTombstoneFailed,
   markTombstoneSubmitted, cancelTombstone,
-  queueDepth, MAX_ATTEMPTS, deferRows, deferTombstonesUntil,} from './queue.ts';
+  queueDepth, MAX_ATTEMPTS, deferRows } from './queue.ts';
 import {
-  submitCreates, submitUpdates, submitDeletes, submitDelists, readBatchOutcomes,
-  patchOne, delistOne, deleteOne,
+  submitCreates, submitUpdates, submitDeletes, readBatchOutcomes,
+  patchOne, deleteOne,
   type CreateItem, type UpdateItem, type ItemOutcome,
  resolveByExternalIds,} from './batcher.ts';
 import { verifyPrices, verifyGone } from './verify.ts';
@@ -261,7 +261,6 @@ export interface DrainResult {
   noop: number;
   skipped: number;
   failed: number;
-  delisted: number;
   deleted: number;
   cancelled: number;
   /** Writes accepted and not yet visible — in flight, not failed. */
@@ -272,7 +271,7 @@ export interface DrainResult {
 
 const EMPTY: DrainResult = {
   claimed: 0, created: 0, updated: 0, noop: 0, skipped: 0,
-  failed: 0, delisted: 0, deleted: 0, cancelled: 0, settling: 0, aborted: null, more: false,
+  failed: 0, deleted: 0, cancelled: 0, settling: 0, aborted: null, more: false,
 };
 
 /**
@@ -337,19 +336,15 @@ async function processTombstones(
   tombstones: Awaited<ReturnType<typeof claimTombstones>>,
   acc: DrainResult
 ): Promise<Partial<DrainResult>> {
-  let delisted = 0, deleted = 0, cancelled = 0, failed = acc.failed;
-  const now = new Date();
+  let deleted = 0, cancelled = 0, failed = acc.failed;
 
   // Decide everything first, then act in batches. Deciding and acting in the same
   // loop is what made removals the slowest thing here: one API call at a time
   // meant 766 queued removals took four minutes, and because removals run before
   // rows, every drain pass waited behind them.
   const toDelete: typeof tombstones = [];
-  const toDelist: typeof tombstones = [];
   const toCancel: typeof tombstones = [];
   const inFlight: typeof tombstones = [];
-  /** Inside the grace window: parked until the moment it can be acted on. */
-  const waiting: Array<{ id: unknown; until: Date }> = [];
 
   for (const t of tombstones) {
     // Already submitted in a batch — confirm rather than send again.
@@ -359,50 +354,15 @@ async function processTombstones(
     }
     const decision = resolveRemoval({
       stubhubListingId: t.stubhubListingId,
-      delistedAt: t.delistedAt,
-      // The scraper deletes the row and writes the tombstone atomically, so a row
-      // that came back has a fresh document and a stale tombstone. Reappearance is
-      // detected by the row existing again, which the next claim surfaces as a
-      // pending create.
-      reappeared: false,
       reason: t.reason,
-      now,
     });
+
     const where = `listing ${t.stubhubListingId ?? '(never listed)'}  ` +
       `${t.mapping_id ?? '?'} ${t.section ?? ''} ${t.row ?? ''}`.trimEnd() +
       `  [${t.reason}]`;
 
     if (decision.action === 'cancel') { trace('cancel', `${where} — ${decision.reason}`); toCancel.push(t); }
-    else if (decision.action === 'delete' && t.stubhubListingId) { trace('DELETE', `${where} — ${decision.reason}`); toDelete.push(t); }
-    else if (decision.action === 'delist' && t.stubhubListingId) { trace('DELIST', `${where} — ${decision.reason}`); toDelist.push(t); }
-    else if (decision.action === 'wait') {
-      // The one that looks like nothing happening, and the usual reason a removal
-      // appears stuck: the listing is already delisted and is serving out the
-      // reappearance window before it is deleted.
-      //
-      // Parked until the window expires rather than left to the ordinary claim
-      // lease, so it is examined twice in total instead of once a minute for
-      // fifteen minutes.
-      const until = new Date((t.delistedAt?.getTime() ?? now.getTime()) + REAPPEARANCE_GRACE_MS);
-      const left = Math.max(0, Math.round((until.getTime() - now.getTime()) / 1000));
-      trace('wait', `${where} — delisted, deletes in ${left}s (sleeping until then)`);
-      waiting.push({ id: t._id, until });
-    }
-    // 'wait' is left untouched; its lease expires and a later pass reconsiders it
-    // once the grace window has passed.
-  }
-
-  if (waiting.length > 0) {
-    // Grouped by expiry so one update covers every removal that came from the
-    // same pass, which is the normal case.
-    const byUntil = new Map<number, unknown[]>();
-    for (const w of waiting) {
-      const key = w.until.getTime();
-      const list = byUntil.get(key) ?? [];
-      list.push(w.id);
-      byUntil.set(key, list);
-    }
-    for (const [ts, ids] of byUntil) await deferTombstonesUntil(ids, new Date(ts));
+    else if (t.stubhubListingId) { trace('DELETE', `${where} — ${decision.reason}`); toDelete.push(t); }
   }
 
   // Nothing on StubHub to act on — resolve locally, no requests at all.
@@ -433,12 +393,7 @@ async function processTombstones(
   // API offers and the easiest to saturate.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- signature is shared with the delist path
   await submitRemovals(client, toDelete, 'delete', async (_t) => { deleted++; }, () => { failed++; });
-  await submitRemovals(client, toDelist, 'delist', async (t) => {
-    await markDelisted(t._id, now);
-    delisted++;
-  }, () => { failed++; });
-
-  return { delisted, deleted, cancelled, failed };
+  return { deleted, cancelled, failed };
 }
 
 /**
@@ -472,7 +427,7 @@ async function submitRemovals(
       // worth more than the saved requests.
       await pooled(chunk, PATCH_CONCURRENCY, async (t) => {
         const id = Number(t.stubhubListingId);
-        const outcome = kind === 'delete' ? await deleteOne(client, id) : await delistOne(client, id);
+        const outcome = await deleteOne(client, id);
         if (!outcome.ok) { await markTombstoneFailed(t._id, outcome.error!, t.syncAttempts); onFail(); return; }
         if (kind === 'delete') await markTombstoneDone(t._id);
         await onOk(t);
@@ -481,9 +436,7 @@ async function submitRemovals(
     }
 
     try {
-      const batchId = kind === 'delete'
-        ? await submitDeletes(client, ids)
-        : await submitDelists(client, ids);
+      const batchId = await submitDeletes(client, ids);
 
       await pooled(chunk, PATCH_CONCURRENCY, async (t) => {
         if (kind === 'delete') await markTombstoneSubmitted(t._id, batchId);
@@ -977,7 +930,7 @@ export async function runWorker(
       if (result.claimed > 0) {
         console.log(
           `[stubhub:worker] ${result.created}C ${result.updated}U ${result.noop}= ${result.settling}~ ` +
-          `${result.delisted}L ${result.deleted}D ${result.cancelled}X ` +
+          `${result.deleted}D ${result.cancelled}X ` +
           `${result.skipped}S ${result.failed}F`
         );
       }
@@ -1004,14 +957,13 @@ export async function recordDrain(result: DrainResult): Promise<void> {
       $set: {
         lastDrainAt: new Date(),
         lastDrainResult:
-          `${result.created}C ${result.updated}U ${result.noop}= ${result.settling}~ ${result.delisted}L ` +
+          `${result.created}C ${result.updated}U ${result.noop}= ${result.settling}~ ` +
           `${result.deleted}D ${result.skipped}S ${result.failed}F`,
         lastError: result.aborted ?? null,
       },
       $inc: {
         totalCreated: result.created,
         totalUpdated: result.updated,
-        totalDelisted: result.delisted,
         totalDeleted: result.deleted,
         totalFailed: result.failed,
       },
@@ -1113,7 +1065,6 @@ export async function syncStatus() {
       totals: {
         created: settings.totalCreated ?? 0,
         updated: settings.totalUpdated ?? 0,
-        delisted: settings.totalDelisted ?? 0,
         deleted: settings.totalDeleted ?? 0,
         failed: settings.totalFailed ?? 0,
       },

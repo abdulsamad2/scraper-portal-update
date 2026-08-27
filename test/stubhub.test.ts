@@ -20,7 +20,7 @@ import { payloadHash, stableStringify, deriveBatchId } from '../lib/stubhub/hash
 import { mapRow, type InventoryRowInput } from '../lib/stubhub/mapRow.ts';
 import { comparePriceEcho, ASK_PRICE_FIELD } from '../lib/stubhub/price.ts';
 import { chooseWritePath, itemsPerMinute, MAX_BATCH_ITEMS, RATE_LIMITS, RECONCILIATION, RATE_UTILISATION } from '../lib/stubhub/limits.ts';
-import { planBatch, resolveRemoval, REAPPEARANCE_GRACE_MS } from '../lib/stubhub/policy.ts';
+import { planBatch, resolveRemoval } from '../lib/stubhub/policy.ts';
 import { verifyEvent, clearEventCache } from '../lib/stubhub/eventVerifier.ts';
 import { outcomes as __testOutcomes } from '../lib/sync/bulkResults.ts';
 import { VERIFY_CAPACITY } from '../lib/sync/verify.ts';
@@ -395,43 +395,29 @@ describe('drain policy — instant without spamming', () => {
   });
 });
 
-describe('removal policy — protect instantly, churn never', () => {
-  const now = new Date('2026-08-27T12:00:00Z');
-  const ago = (ms: number) => new Date(now.getTime() - ms);
-
-  test('a vanished row is delisted first, not deleted', () => {
-    const d = resolveRemoval({ stubhubListingId: '1', delistedAt: null, reappeared: false, reason: 'scraper-removed', now });
-    assert.equal(d.action, 'delist', 'stop it selling immediately — that is the half that matters');
-  });
-
-  test('inside the grace window it waits rather than deleting', () => {
-    const d = resolveRemoval({ stubhubListingId: '1', delistedAt: ago(60_000), reappeared: false, reason: 'scraper-removed', now });
-    assert.equal(d.action, 'wait');
-  });
-
-  test('a reappearing row is re-broadcast on its existing listing, not recreated', () => {
-    const d = resolveRemoval({ stubhubListingId: '1', delistedAt: ago(60_000), reappeared: true, reason: 'scraper-removed', now });
-    assert.equal(d.action, 'cancel');
-    assert.match(d.reason, /re-broadcast/);
-  });
-
-  test('past the window it finally deletes', () => {
-    const d = resolveRemoval({ stubhubListingId: '1', delistedAt: ago(REAPPEARANCE_GRACE_MS + 1000), reappeared: false, reason: 'scraper-removed', now });
+describe('removal policy — removals are final', () => {
+  test('a vanished row is deleted, not held', () => {
+    const d = resolveRemoval({ stubhubListingId: '1', reason: 'scraper-removed' });
     assert.equal(d.action, 'delete');
   });
 
-  test('final reasons delete outright rather than delisting first', () => {
-    // Delisting first exists to stop a listing selling while we decide whether it
-    // is coming back. A final removal has already decided, and DELETE stops it
-    // selling just as immediately — so the detour only costs a second pass.
-    for (const reason of ['event-expired', 'event-deleted', 'manual', 'seats-changed']) {
-      const d = resolveRemoval({ stubhubListingId: '1', delistedAt: null, reappeared: false, reason, now });
+  test('every reason deletes — none of them hold the listing back', () => {
+    // There used to be a delist-then-wait detour for scraper churn, on the theory
+    // that a returning row could reuse its listing. Nothing implemented the reuse:
+    // reappearance was never detected, and a returning row is minted a fresh
+    // inventoryId anyway, so it always became a new listing while the held one was
+    // deleted at the end of the window having served no purpose.
+    for (const reason of [
+      'scraper-removed', 'event-expired', 'event-deleted',
+      'manual', 'seats-changed', 'quantity-changed', 'low-seat-auto-stop',
+    ]) {
+      const d = resolveRemoval({ stubhubListingId: '1', reason });
       assert.equal(d.action, 'delete', `${reason} should delete in one step`);
     }
   });
 
   test('a listing that never existed resolves locally with no API call', () => {
-    const d = resolveRemoval({ stubhubListingId: null, delistedAt: null, reappeared: false, reason: 'scraper-removed', now });
+    const d = resolveRemoval({ stubhubListingId: null, reason: 'scraper-removed' });
     assert.equal(d.action, 'cancel');
   });
 });

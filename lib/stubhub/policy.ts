@@ -53,30 +53,6 @@
 import { MAX_BATCH_ITEMS, SINGLE_CALL_THRESHOLD, type WriteOperation } from './limits.ts';
 
 /**
- * How long a removed row must stay gone before its listing is actually deleted.
- *
- * Worth being clear about what this window does and does not delay, because it
- * reads as "the ticket is still for sale for fifteen minutes" and it is not that.
- * The listing stops selling at the delist, which happens on the first pass after
- * the row disappears — seconds. This window only governs when the empty listing
- * is destroyed. Nothing can be bought during it.
- *
- * What it buys is listing identity. Deleting is irreversible: the listing id is
- * gone, and a row that comes back has to be created afresh with a new id, losing
- * whatever age and history StubHub attaches to it. Rows come back constantly —
- * a ticket sits in someone's cart on Ticketmaster and is released minutes later,
- * and the scrapers revisit each event about every two minutes — so deleting on
- * the first absence means churning ids on ordinary browsing behaviour.
- *
- * Fifteen minutes spans several scrape cycles. That was a judgement, not a
- * measurement, and it is the right thing to tune once you can see how often rows
- * actually return: STUBHUB_GRACE_MINUTES=2 shortens it, 0 deletes immediately
- * without delisting first.
- */
-export const REAPPEARANCE_GRACE_MS =
-  Number(process.env.STUBHUB_GRACE_MINUTES ?? 15) * 60 * 1000;
-
-/**
  * Idle sleep when the queue is empty. Not a drain interval — when rows are
  * pending the loop drains continuously and never sleeps, so this is only the
  * delay before an idle worker notices new work.
@@ -136,7 +112,7 @@ export function planBatch(pendingCount: number, operation: WriteOperation): Batc
   return { size, path: 'bulk', more, reason: `batched to the ${MAX_BATCH_ITEMS}-item cap` };
 }
 
-export type RemovalAction = 'delist' | 'delete' | 'cancel' | 'wait';
+export type RemovalAction = 'delete' | 'cancel';
 
 export interface RemovalDecision {
   action: RemovalAction;
@@ -146,66 +122,41 @@ export interface RemovalDecision {
 /**
  * What to do about a row that has gone away.
  *
+ * Removals are final: the listing is deleted.
+ *
+ * This used to delist first and delete fifteen minutes later, on the theory that
+ * a row which came back could have its existing listing re-broadcast rather than
+ * recreated — cart holds are released constantly, and churning listing ids on
+ * ordinary browsing looked wasteful. The theory was never wired up. `reappeared`
+ * was hardcoded false so the re-broadcast branch could not fire, and a returning
+ * row is minted a fresh inventoryId by the scraper regardless, which makes a
+ * fresh externalId and therefore a new listing. The held listing was reused by
+ * nothing and deleted at the end of the window anyway.
+ *
+ * So the window bought nothing, and cost a delist call plus fifteen minutes of a
+ * dead listing sitting visible in the seller's inventory — which is exactly what
+ * someone watching a carted ticket disappear does not want to see.
+ *
+ * Reinstating it means implementing reappearance properly: the scraper matching a
+ * returning row to its old one and reusing the inventoryId, so the listing can be
+ * re-broadcast. Worth doing only if listing continuity turns out to matter to
+ * StubHub, which nobody has established.
+ *
  * @param opts.stubhubListingId  null when the listing was never created
- * @param opts.delistedAt        when we stopped it selling, null if not yet
- * @param opts.reappeared        the row is back in the current scrape
- * @param opts.reason            why it was removed — some reasons are final
- * @param opts.now               current time
+ * @param opts.reason            what the recorder said happened, for the log
  */
 export function resolveRemoval(opts: {
   stubhubListingId: string | null;
-  delistedAt: Date | null;
-  reappeared: boolean;
   reason: string;
-  now: Date;
 }): RemovalDecision {
-  const { stubhubListingId, delistedAt, reappeared, reason, now } = opts;
+  const { stubhubListingId, reason } = opts;
 
   // Never created, so there is nothing on StubHub to act on. Resolve locally.
   if (!stubhubListingId) {
     return { action: 'cancel', reason: 'no listing was ever created' };
   }
 
-  // It came back. Re-broadcast the existing listing rather than recreating it:
-  // one call, and the listing keeps its id, its age and its history.
-  if (reappeared) {
-    return { action: 'cancel', reason: 'row reappeared — re-broadcast the existing listing' };
-  }
-
-  // Some removals are not flapping and should not wait out a grace window — nor
-  // take the delist-then-delete detour. Delisting first exists to stop a listing
-  // selling while we decide whether it is coming back; a final removal has
-  // already decided, and DELETE stops it selling just as immediately. Going
-  // straight there halves the calls and removes a whole pass of latency.
-  // quantity-changed sits here for the same reason seats-changed does, and it is
-  // not merely an optimisation. Both delete a row and immediately recreate it
-  // under the same key, so the reappearance check above would otherwise cancel
-  // the removal — leaving the old listing live alongside the new one, selling the
-  // wrong count. Final means final: delete, and let the create stand on its own.
-  const FINAL = new Set([
-    'event-deleted', 'event-expired', 'manual', 'seats-changed', 'quantity-changed',
-  ]);
-  if (FINAL.has(reason)) {
-    return { action: 'delete', reason: `${reason} is final — delete outright` };
-  }
-
-  // A grace window of zero means the operator has asked for removals to be
-  // final, so there is nothing to hold the listing for. Delisting first would
-  // just cost an extra call and an extra pass before the same outcome.
-  if (REAPPEARANCE_GRACE_MS <= 0) {
-    return { action: 'delete', reason: 'no grace window configured — delete outright' };
-  }
-
-  // Stop it selling immediately. This is the half that actually protects us.
-  if (!delistedAt) {
-    return { action: 'delist', reason: 'stop selling now; hold the listing in case it returns' };
-  }
-
-  if (now.getTime() - delistedAt.getTime() < REAPPEARANCE_GRACE_MS) {
-    return { action: 'wait', reason: 'inside the reappearance window — no churn yet' };
-  }
-
-  return { action: 'delete', reason: 'stayed gone past the grace window' };
+  return { action: 'delete', reason: `${reason} — removed` };
 }
 
 /**
