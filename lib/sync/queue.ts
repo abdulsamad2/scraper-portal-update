@@ -610,3 +610,62 @@ export async function deferRows(ids: unknown[], ms: number): Promise<void> {
     { $set: { 'inventory.syncLeaseUntil': new Date(Date.now() + ms) } }
   );
 }
+
+/**
+ * Requeue an event's rows after a stage-2 markup change.
+ *
+ * ── Why this is needed at all ──────────────────────────────────────────────────
+ *
+ * The final price is built in two stages. The scraper computes
+ * inventory.listPrice from cost and the event's priceIncreasePercentage; the
+ * exporter then applies the event's standard/resale/broker adjustment on top:
+ *
+ *     list_price = listPrice x (1 + (defaultPct + adj) / 100) / (1 + defaultPct / 100)
+ *
+ * Stage 2 lives entirely in the event document and is recomputed on every export.
+ * Under CSV that was enough — the whole file was regenerated each cycle, so
+ * editing an adjustment took effect on the next upload with nothing to trigger.
+ *
+ * The outbox model removed that. Nothing is sent unless a row is queued, and a
+ * markup edit changes no row: the scraper sees the same cost and the same
+ * stage-1 price, so it writes nothing and marks nothing dirty. The new price
+ * would then never reach StubHub — silently, and for exactly the events someone
+ * has deliberately repriced.
+ *
+ * priceIncreasePercentage does not need this. It is a stage-1 input, so changing
+ * it already deletes the event's rows (with tombstones) and lets the scraper
+ * rebuild them at the new price. Only the three stage-2 adjustments are missing
+ * a path into the queue.
+ *
+ * ── Why it is safe to requeue the whole event ──────────────────────────────────
+ *
+ * The hash gate makes this cheap rather than brutal. Every requeued row is
+ * remapped and hashed, and any whose payload is genuinely unchanged is skipped
+ * with no API call at all. Clearing syncHash is what forces that comparison to
+ * happen against the freshly computed price rather than short-circuiting on a
+ * stale match.
+ *
+ * Rows mid-create keep their syncState: it carries the bulk batch id, and losing
+ * it would strand the batch and create the listing a second time. They stay in
+ * the queue instead, so they are repriced as soon as the create settles.
+ */
+export async function requeueEventForMarkup(eventId: string): Promise<number> {
+  await dbConnect();
+  const now = new Date();
+
+  const res = await ConsecutiveGroup.updateMany(
+    { eventId, 'inventory.syncState': { $ne: 'creating' } },
+    {
+      $set: { 'inventory.syncState': 'dirty', 'inventory.syncPendingSince': now },
+      $unset: { 'inventory.syncHash': '', 'inventory.syncLeaseUntil': '' },
+    }
+  );
+
+  // Mid-create rows: queued, but their state and batch id left intact.
+  const inFlight = await ConsecutiveGroup.updateMany(
+    { eventId, 'inventory.syncState': 'creating' },
+    { $set: { 'inventory.syncPendingSince': now }, $unset: { 'inventory.syncHash': '' } }
+  );
+
+  return res.modifiedCount + inFlight.modifiedCount;
+}

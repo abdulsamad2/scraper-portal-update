@@ -52,6 +52,19 @@ interface EvenueEventInput {
   includeResaleSeats?: boolean;
 }
 
+/**
+ * Stage-2 markup fields: applied by the exporter, not by the scraper.
+ *
+ * Editing one changes the price StubHub should hold without changing any
+ * inventory row, so nothing marks the rows dirty by itself. Kept as one list so
+ * the requeue and the eVenue writer cannot drift apart.
+ */
+const MARKUP_ADJUSTMENT_FIELDS = [
+  'standardMarkupAdjustment',
+  'resaleMarkupAdjustment',
+  'brokerMarkupAdjustment',
+] as const;
+
 /** Numeric fields the portal owns on an eVenue event; all default to 0. */
 const EVENUE_ADJUSTMENT_FIELDS = [
   'standardMarkupAdjustment',
@@ -599,6 +612,15 @@ export async function updateEvent(eventId: string, updateData: Partial<Event> & 
     const isStoppingScraping = updateData.Skip_Scraping === true && !currentEvent.Skip_Scraping;
     const isUpdatingPercentage = updateData.priceIncreasePercentage !== undefined && 
                                 updateData.priceIncreasePercentage !== currentEvent.priceIncreasePercentage;
+
+    // Stage-2 markup edits, which change the exported price without changing any
+    // row. See requeueEventForMarkup for why these need an explicit push into
+    // the sync queue and priceIncreasePercentage does not.
+    const changedAdjustments = MARKUP_ADJUSTMENT_FIELDS.filter(f => {
+      const next = (updateData as Record<string, unknown>)[f];
+      if (next === undefined) return false;
+      return Number(next ?? 0) !== Number((currentEvent as Record<string, unknown>)[f] ?? 0);
+    });
     
     const shouldDeleteSeats = deleteSeatGroups || isStoppingScraping || isUpdatingPercentage;
 
@@ -630,7 +652,28 @@ export async function updateEvent(eventId: string, updateData: Partial<Event> & 
     if (seatDeletionResult) {
       result.deletedSeatGroups = seatDeletionResult.deletedCount || 0;
     }
-    
+
+    // Requeue AFTER the event document is written, so the exporter recomputes
+    // against the new adjustment rather than racing the update it was told about.
+    // Skipped when the rows were just deleted — the scraper will recreate them.
+    if (changedAdjustments.length > 0 && !shouldDeleteSeats) {
+      try {
+        const { requeueEventForMarkup } = await import('@/lib/sync/queue.ts');
+        const requeued = await requeueEventForMarkup(currentEvent.Event_ID);
+        result.requeuedForMarkup = requeued;
+        console.log(
+          `[markup] ${changedAdjustments.join(', ')} changed on ${currentEvent.Event_ID} — ` +
+          `requeued ${requeued} row(s) for repricing`
+        );
+      } catch (error) {
+        // The event edit itself succeeded and must not be reported as failed.
+        // Surfaced rather than swallowed: the prices are now stale on StubHub
+        // until something else queues these rows.
+        console.error('[markup] requeue failed — StubHub prices will be stale:', error);
+        result.requeueError = (error as Error).message;
+      }
+    }
+
     return result;
   } catch (error) {
     console.error('Error updating event:', error);
