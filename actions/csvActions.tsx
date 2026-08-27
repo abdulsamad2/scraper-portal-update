@@ -1352,10 +1352,20 @@ export async function deleteInventoryBatchFromSync(inventoryIds: string[]): Prom
     const companyId = process.env.SYNC_COMPANY_ID;
     const apiToken = process.env.SYNC_API_TOKEN;
     
+    // The CSV service is being retired, so its credentials are increasingly
+    // absent. That is no longer an error: removals are recorded as tombstones by
+    // the caller and carried out by the StubHub sync worker. Throwing here made
+    // every event-stop look like a failure while the local delete had in fact
+    // succeeded.
     if (!companyId || !apiToken) {
-      throw new Error('Sync service credentials not configured. Please set SYNC_COMPANY_ID and SYNC_API_TOKEN environment variables.');
+      return {
+        success: true,
+        message: 'Automatiq sync not configured — removal recorded for the StubHub worker instead',
+        successful: [],
+        failed: [],
+      };
     }
-    
+
     if (!inventoryIds || inventoryIds.length === 0) {
       return {
         success: true,

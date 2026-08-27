@@ -5,6 +5,7 @@ import { ConsecutiveGroup } from '@/models/seatModel'; // Assuming models are al
 import { Event } from '@/models/eventModel'; // Assuming models are aliased to @/models
 import { UpdateQuery } from 'mongoose';
 import { deleteInventoryBatchFromSync } from './csvActions';
+import { recordRemovals, type RemovableGroup } from '@/lib/sync/tombstones.ts';
 import { EVENUE_GROUPS_COLLECTION, EVENUE_SOURCE, TICKETMASTER_SOURCE } from '@/lib/evenue';
 
 /**
@@ -303,6 +304,14 @@ export async function deleteConsecutiveGroupsByEventId(eventId: string) {
       console.log('Sample inventory IDs:', inventoryIdsToDelete.slice(0, 5)); // Show first 5 for debugging
     }
     
+    // Record the removals BEFORE deleting. Once the documents are gone so are
+    // their stubhubListingIds, and a listing that cannot be named cannot be
+    // un-listed — it would simply stay live with nothing pointing at it.
+    const tombstoned = await recordRemovals(groupsToDelete as unknown as RemovableGroup[], { reason: 'event-deleted' });
+    if (tombstoned > 0) {
+      console.log(`Recorded ${tombstoned} StubHub removal(s) for the sync worker`);
+    }
+
     const deleteResult = await ConsecutiveGroup.deleteMany({ eventId: eventId });
     console.log('Delete result:', deleteResult);
     
@@ -355,6 +364,13 @@ export async function deleteConsecutiveGroupsByEventIds(eventIds: string[]) {
     
     console.log(`Inventory IDs to delete from sync: ${inventoryIdsToDelete.length} items`);
     
+    // Recorded before the delete, for the same reason as the single-event path:
+    // once the rows are gone their stubhubListingIds are unrecoverable.
+    const tombstoned = await recordRemovals(groupsToDelete as unknown as RemovableGroup[], { reason: 'event-deleted' });
+    if (tombstoned > 0) {
+      console.log(`Recorded ${tombstoned} StubHub removal(s) for the sync worker`);
+    }
+
     const deleteResult = await ConsecutiveGroup.deleteMany({ eventId: { $in: eventIds } });
     console.log('Delete result:', deleteResult);
     
