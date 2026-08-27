@@ -51,7 +51,7 @@ import {
   claimRows, claimTombstones, markSynced, markCreated, markFailed, markSkipped,
   markUpdating, markCreating, markDelisted, markTombstoneDone, markTombstoneFailed,
   markTombstoneSubmitted, cancelTombstone,
-  queueDepth, MAX_ATTEMPTS, deferRows,} from './queue.ts';
+  queueDepth, MAX_ATTEMPTS, deferRows, deferTombstonesUntil,} from './queue.ts';
 import {
   submitCreates, submitUpdates, submitDeletes, submitDelists, readBatchOutcomes,
   patchOne, delistOne, deleteOne,
@@ -348,6 +348,8 @@ async function processTombstones(
   const toDelist: typeof tombstones = [];
   const toCancel: typeof tombstones = [];
   const inFlight: typeof tombstones = [];
+  /** Inside the grace window: parked until the moment it can be acted on. */
+  const waiting: Array<{ id: unknown; until: Date }> = [];
 
   for (const t of tombstones) {
     // Already submitted in a batch — confirm rather than send again.
@@ -377,12 +379,30 @@ async function processTombstones(
       // The one that looks like nothing happening, and the usual reason a removal
       // appears stuck: the listing is already delisted and is serving out the
       // reappearance window before it is deleted.
-      const waited = t.delistedAt ? Math.round((now.getTime() - t.delistedAt.getTime()) / 1000) : 0;
-      const left = Math.max(0, Math.round((REAPPEARANCE_GRACE_MS - waited * 1000) / 1000));
-      trace('wait', `${where} — delisted ${waited}s ago, deletes in ${left}s`);
+      //
+      // Parked until the window expires rather than left to the ordinary claim
+      // lease, so it is examined twice in total instead of once a minute for
+      // fifteen minutes.
+      const until = new Date((t.delistedAt?.getTime() ?? now.getTime()) + REAPPEARANCE_GRACE_MS);
+      const left = Math.max(0, Math.round((until.getTime() - now.getTime()) / 1000));
+      trace('wait', `${where} — delisted, deletes in ${left}s (sleeping until then)`);
+      waiting.push({ id: t._id, until });
     }
     // 'wait' is left untouched; its lease expires and a later pass reconsiders it
     // once the grace window has passed.
+  }
+
+  if (waiting.length > 0) {
+    // Grouped by expiry so one update covers every removal that came from the
+    // same pass, which is the normal case.
+    const byUntil = new Map<number, unknown[]>();
+    for (const w of waiting) {
+      const key = w.until.getTime();
+      const list = byUntil.get(key) ?? [];
+      list.push(w.id);
+      byUntil.set(key, list);
+    }
+    for (const [ts, ids] of byUntil) await deferTombstonesUntil(ids, new Date(ts));
   }
 
   // Nothing on StubHub to act on — resolve locally, no requests at all.

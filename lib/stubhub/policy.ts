@@ -55,11 +55,26 @@ import { MAX_BATCH_ITEMS, SINGLE_CALL_THRESHOLD, type WriteOperation } from './l
 /**
  * How long a removed row must stay gone before its listing is actually deleted.
  *
- * Long enough to absorb ordinary scrape flapping — the scrapers revisit each event
- * roughly every two minutes, so this spans several cycles — and short enough that
- * genuinely dead inventory doesn't linger delisted for hours.
+ * Worth being clear about what this window does and does not delay, because it
+ * reads as "the ticket is still for sale for fifteen minutes" and it is not that.
+ * The listing stops selling at the delist, which happens on the first pass after
+ * the row disappears — seconds. This window only governs when the empty listing
+ * is destroyed. Nothing can be bought during it.
+ *
+ * What it buys is listing identity. Deleting is irreversible: the listing id is
+ * gone, and a row that comes back has to be created afresh with a new id, losing
+ * whatever age and history StubHub attaches to it. Rows come back constantly —
+ * a ticket sits in someone's cart on Ticketmaster and is released minutes later,
+ * and the scrapers revisit each event about every two minutes — so deleting on
+ * the first absence means churning ids on ordinary browsing behaviour.
+ *
+ * Fifteen minutes spans several scrape cycles. That was a judgement, not a
+ * measurement, and it is the right thing to tune once you can see how often rows
+ * actually return: STUBHUB_GRACE_MINUTES=2 shortens it, 0 deletes immediately
+ * without delisting first.
  */
-export const REAPPEARANCE_GRACE_MS = 15 * 60 * 1000;
+export const REAPPEARANCE_GRACE_MS =
+  Number(process.env.STUBHUB_GRACE_MINUTES ?? 15) * 60 * 1000;
 
 /**
  * Idle sleep when the queue is empty. Not a drain interval — when rows are
@@ -172,6 +187,13 @@ export function resolveRemoval(opts: {
   ]);
   if (FINAL.has(reason)) {
     return { action: 'delete', reason: `${reason} is final — delete outright` };
+  }
+
+  // A grace window of zero means the operator has asked for removals to be
+  // final, so there is nothing to hold the listing for. Delisting first would
+  // just cost an extra call and an extra pass before the same outcome.
+  if (REAPPEARANCE_GRACE_MS <= 0) {
+    return { action: 'delete', reason: 'no grace window configured — delete outright' };
   }
 
   // Stop it selling immediately. This is the half that actually protects us.

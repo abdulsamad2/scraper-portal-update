@@ -679,3 +679,25 @@ export async function requeueEventForMarkup(eventId: string): Promise<number> {
 
   return res.modifiedCount + inFlight.modifiedCount;
 }
+
+/**
+ * Hold a tombstone until its reappearance window expires.
+ *
+ * A removal inside the grace window has nothing to do and nothing to decide: the
+ * listing is already delisted, and the only thing that changes is the clock. But
+ * the claim lease is measured in a minute and the window in fifteen, so it was
+ * being re-claimed, re-decided and re-logged ten times over before anything could
+ * happen — ten pointless database round trips per removal, and ten identical
+ * lines of log for each one, which buried the events that did matter.
+ *
+ * Leasing it to the moment it becomes actionable means it is looked at exactly
+ * twice: once to start the clock, once to act on it.
+ */
+export async function deferTombstonesUntil(ids: unknown[], until: Date): Promise<void> {
+  if (ids.length === 0) return;
+  await dbConnect();
+  await InventoryTombstone.updateMany(
+    { _id: { $in: ids as never[] } },
+    { $set: { syncLeaseUntil: until } }
+  );
+}
