@@ -72,6 +72,8 @@ export interface ClaimedRow {
   syncHash: string | null;
   syncAttempts: number;
   syncBatchId: string | null;
+  /** When this row entered its current state — used to let writes settle. */
+  syncPendingSince: Date | null;
 }
 
 export interface ClaimedTombstone {
@@ -119,6 +121,7 @@ export async function claimRows(limit: number, now = new Date()): Promise<Claime
       'inventory.syncHash': 1,
       'inventory.syncAttempts': 1,
       'inventory.syncBatchId': 1,
+      'inventory.syncPendingSince': 1,
     }
   )
     .sort({ event_date: 1 })
@@ -152,6 +155,7 @@ export async function claimRows(limit: number, now = new Date()): Promise<Claime
     syncHash: c.inventory?.syncHash ?? null,
     syncAttempts: c.inventory?.syncAttempts ?? 0,
     syncBatchId: c.inventory?.syncBatchId ?? null,
+    syncPendingSince: c.inventory?.syncPendingSince ?? null,
   }));
 }
 

@@ -208,6 +208,17 @@ async function pooled<T, R>(items: T[], limit: number, fn: (item: T) => Promise<
   return results;
 }
 
+/**
+ * How long to let a submitted price patch apply before reading it back, and how
+ * long to keep waiting before calling it a genuine failure.
+ *
+ * The floor exists because the loop does not sleep while there is a backlog, so
+ * consecutive passes can be milliseconds apart. The ceiling exists so a price
+ * that never arrives is still reported rather than retried forever.
+ */
+const MIN_SETTLE_MS = 5_000;
+const MAX_SETTLE_MS = 120_000;
+
 export interface DrainResult {
   claimed: number;
   created: number;
@@ -218,13 +229,15 @@ export interface DrainResult {
   delisted: number;
   deleted: number;
   cancelled: number;
+  /** Writes accepted and not yet visible — in flight, not failed. */
+  settling: number;
   aborted: string | null;
   more: boolean;
 }
 
 const EMPTY: DrainResult = {
   claimed: 0, created: 0, updated: 0, noop: 0, skipped: 0,
-  failed: 0, delisted: 0, deleted: 0, cancelled: 0, aborted: null, more: false,
+  failed: 0, delisted: 0, deleted: 0, cancelled: 0, settling: 0, aborted: null, more: false,
 };
 
 /**
@@ -270,6 +283,7 @@ export async function drainOnce(client?: StubHubClient, marketplaces?: ApiMarket
       result.noop += r.noop;
       result.skipped += r.skipped;
       result.failed += r.failed;
+      result.settling += r.settling;
       // One slice aborting is enough to stop the cycle: the circuit breaker fires
       // on a book we cannot describe, and that is not a per-slice condition.
       if (r.aborted && !result.aborted) result.aborted = r.aborted;
@@ -442,8 +456,8 @@ async function processRows(
   client: StubHubClient,
   rows: Awaited<ReturnType<typeof claimRows>>,
   marketplaces: ApiMarketplace[]
-): Promise<{ created: number; updated: number; noop: number; skipped: number; failed: number; aborted: string | null }> {
-  const out = { created: 0, updated: 0, noop: 0, skipped: 0, failed: 0, aborted: null as string | null };
+): Promise<{ created: number; updated: number; noop: number; skipped: number; failed: number; settling: number; aborted: string | null }> {
+  const out = { created: 0, updated: 0, noop: 0, skipped: 0, failed: 0, settling: 0, aborted: null as string | null };
 
   // Skips we cannot account for. A row skipped because its event was checked and
   // found unusable is explained; one that vanished from the export, or whose
@@ -494,6 +508,8 @@ async function processRows(
   const updates: UpdateItem[] = [];
   const pendingVerify: Array<{
     rowId: unknown; listingId: number; expectedPrice: number; hash: string; attempts: number;
+    /** When the write was submitted, so a read is not issued before it lands. */
+    submittedAt: number;
   }> = [];
   const awaitingCreate = new Map<string, Array<{ rowId: unknown; externalId: string; attempts: number }>>();
   const byExternalId = new Map<string, { rowId: unknown; hash: string; attempts: number }>();
@@ -553,12 +569,21 @@ async function processRows(
 
     // Already submitted in a batch — read it back rather than sending again.
     if (row.syncState === 'updating' && row.stubhubListingId) {
+      // But not yet. Bulk writes are accepted and applied asynchronously, and
+      // when there is a backlog the loop never sleeps, so "the next pass" can be
+      // a few hundred milliseconds after the submit. Reading that early measures
+      // queue latency, not correctness, and reports a listing that is about to
+      // be priced as one that failed to price.
+      const submittedAt = row.syncPendingSince?.getTime() ?? 0;
+      if (Date.now() - submittedAt < MIN_SETTLE_MS) continue;
+
       pendingVerify.push({
         rowId: row._id,
         listingId: Number(row.stubhubListingId),
         expectedPrice: round2(source.list_price),
         hash,
         attempts: row.syncAttempts,
+        submittedAt,
       });
       continue;
     }
@@ -615,6 +640,17 @@ async function processRows(
       if (verdict?.ok) {
         await markSynced(v.rowId, v.hash);
         out.noop++;   // settled without a write this pass
+      } else if (verdict?.actualPrice == null && Date.now() - v.submittedAt < MAX_SETTLE_MS) {
+        // The listing exists but carries no price yet.
+        //
+        // That is what a price patch looks like before it lands, not what a
+        // rejected one looks like — a rejected patch leaves the previous price
+        // in place, not an empty one. Marking it failed burns a retry and
+        // inflates the failure count for a write that is simply still in
+        // flight; the create path already models this correctly by leaving an
+        // unsettled batch alone. Left in 'updating' for a later pass, bounded so
+        // a price that never arrives is eventually reported.
+        out.settling++;
       } else {
         // Not confirmed: put it back as dirty so the next pass re-sends. Safe
         // because every write here is idempotent, and far better than assuming a
@@ -834,7 +870,7 @@ export async function runWorker(
 
       if (result.claimed > 0) {
         console.log(
-          `[stubhub:worker] ${result.created}C ${result.updated}U ${result.noop}= ` +
+          `[stubhub:worker] ${result.created}C ${result.updated}U ${result.noop}= ${result.settling}~ ` +
           `${result.delisted}L ${result.deleted}D ${result.cancelled}X ` +
           `${result.skipped}S ${result.failed}F`
         );
@@ -862,7 +898,7 @@ export async function recordDrain(result: DrainResult): Promise<void> {
       $set: {
         lastDrainAt: new Date(),
         lastDrainResult:
-          `${result.created}C ${result.updated}U ${result.noop}= ${result.delisted}L ` +
+          `${result.created}C ${result.updated}U ${result.noop}= ${result.settling}~ ${result.delisted}L ` +
           `${result.deleted}D ${result.skipped}S ${result.failed}F`,
         lastError: result.aborted ?? null,
       },

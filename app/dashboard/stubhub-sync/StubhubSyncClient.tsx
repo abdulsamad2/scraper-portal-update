@@ -96,7 +96,7 @@ export interface ClearProgress {
 interface DrainResult {
   claimed: number; created: number; updated: number; noop: number;
   skipped: number; failed: number; delisted: number; deleted: number;
-  cancelled: number; aborted: string | null; more: boolean;
+  cancelled: number; settling: number; aborted: string | null; more: boolean;
 }
 
 interface DriftResult {
@@ -339,7 +339,7 @@ export default function StubhubSyncClient({ initial }: { initial: SyncSnapshot }
     );
   }
 
-  const verdict = assess(snap, trend, elsewhere);
+  const verdict = assess(snap, trend, elsewhere, throughput, etaMinutes);
   const job = snap.clearJob;
 
   return (
@@ -570,6 +570,7 @@ export default function StubhubSyncClient({ initial }: { initial: SyncSnapshot }
                   <Pill label="created" n={lastDrain.created} tone="good" />
                   <Pill label="updated" n={lastDrain.updated} tone="good" />
                   <Pill label="unchanged" n={lastDrain.noop} />
+                  <Pill label="settling" n={lastDrain.settling} />
                   <Pill label="delisted" n={lastDrain.delisted} />
                   <Pill label="deleted" n={lastDrain.deleted} />
                   <Pill label="skipped" n={lastDrain.skipped} tone={lastDrain.skipped ? 'warn' : undefined} />
@@ -1035,7 +1036,13 @@ export default function StubhubSyncClient({ initial }: { initial: SyncSnapshot }
  * a stopped worker with a backlog is more urgent than a large backlog being
  * worked through, even though the second has the bigger number.
  */
-function assess(snap: SyncSnapshot, trend: number, elsewhere: boolean) {
+function assess(
+  snap: SyncSnapshot,
+  trend: number,
+  elsewhere: boolean,
+  throughput: number | null,
+  etaMinutes: number | null,
+) {
   const notes: string[] = [];
   if (snap.failedRows > 0) notes.push(`${snap.failedRows.toLocaleString()} row(s) parked after ${snap.maxAttempts} attempts — use "Return to the queue" once the cause is fixed.`);
   if (snap.pendingTombstones > 0) notes.push(`${snap.pendingTombstones.toLocaleString()} removal(s) queued for StubHub.`);
@@ -1080,16 +1087,35 @@ function assess(snap: SyncSnapshot, trend: number, elsewhere: boolean) {
       detail: 'Payloads are built and logged in full, but no write leaves the process. Reads still happen, so drift checks are real.' };
   }
 
-  if (snap.lagSeconds > 300) {
-    return { ...tones.bad, icon: <AlertTriangle className="w-6 h-6" />, notes,
+  // A growing queue is the real definition of falling behind, so it is tested
+  // first — and lag alone is not evidence of it.
+  if (trend > 50) {
+    return { ...tones.bad, icon: <TrendingUp className="w-6 h-6" />, notes,
       title: 'Falling behind',
-      detail: `The oldest unpushed change has waited ${fmtLag(snap.lagSeconds)}. StubHub is showing stale prices for those rows.` };
+      detail: `The queue has grown by ${trend.toLocaleString()} rows over the last few minutes. `
+        + 'Changes are arriving faster than they are being written, and the gap will keep widening on its own.' };
   }
 
-  if (trend > 50) {
-    return { ...tones.warn, icon: <TrendingUp className="w-6 h-6" />, notes,
-      title: 'Backlog is growing',
-      detail: `The queue has grown by ${trend.toLocaleString()} rows over the last few minutes. Changes are arriving faster than they are being written.` };
+  if (snap.lagSeconds > 300) {
+    // Lag is the age of the oldest unpushed change, and after a bulk requeue —
+    // a wipe, or returning parked rows — every row is stamped at once, so lag
+    // climbs a second per second however fast the worker is going. Reporting
+    // that as "falling behind" told the operator to intervene in a rebuild that
+    // was working exactly as intended. Draining steadily is a different state
+    // from losing ground, and only the second one needs a person.
+    const draining = throughput !== null && throughput > 0 && trend <= 0;
+    if (draining) {
+      return { ...tones.warn, icon: <Activity className="w-6 h-6" />, notes,
+        title: 'Working through a backlog',
+        detail: `The oldest change has waited ${fmtLag(snap.lagSeconds)}, but the queue is shrinking at `
+          + `${Math.round(throughput).toLocaleString()}/min`
+          + `${etaMinutes ? ` and should clear in about ${fmtLag(Math.round(etaMinutes * 60))}` : ''}. `
+          + 'Prices on StubHub are stale for the rows still queued.' };
+    }
+    return { ...tones.bad, icon: <AlertTriangle className="w-6 h-6" />, notes,
+      title: 'Falling behind',
+      detail: `The oldest unpushed change has waited ${fmtLag(snap.lagSeconds)} and nothing is draining it. `
+        + 'StubHub is showing stale prices for those rows.' };
   }
 
   if (snap.failedRows > 0) {
