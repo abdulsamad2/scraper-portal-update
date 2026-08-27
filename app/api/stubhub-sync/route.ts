@@ -134,7 +134,7 @@ export async function POST(request: NextRequest) {
       }
       // stopWorker is passed in rather than called here so the operation owns the
       // ordering: nothing may write to StubHub between the stop and the scan.
-      const job = startClearAll({ stop: stopWorker });
+      const job = await startClearAll({ stop: stopWorker });
       return NextResponse.json({ success: true, clearJob: job });
     }
 

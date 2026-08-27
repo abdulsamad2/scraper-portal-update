@@ -37,7 +37,7 @@
 import dbConnect from '@/lib/dbConnect';
 import { ConsecutiveGroup } from '@/models/seatModel.js';
 import { InventoryTombstone } from '@/models/inventoryTombstoneModel.js';
-import { StubHubClient } from '@/lib/stubhub/client.ts';
+import { configuredClient } from './worker.ts';
 import { MAX_BATCH_ITEMS, RECONCILIATION } from '@/lib/stubhub/limits.ts';
 import type { InventoryExportResource, ListingResource } from '@/lib/stubhub/types.ts';
 import { submitDeletes } from './batcher.ts';
@@ -122,11 +122,21 @@ function chunk<T>(items: T[], size: number): T[][] {
  * longer than any sensible HTTP timeout. Deleting is comparatively quick: bulk
  * accepts 250 ids per request at 760 requests/min.
  */
-export function startClearAll(opts: { stop: () => Promise<void> }): ClearProgress {
+export async function startClearAll(opts: { stop: () => Promise<void> }): Promise<ClearProgress> {
   const s = slot();
   if (s.running && s.progress) return s.progress;
 
-  const client = new StubHubClient();
+  // Built from the stored settings, NOT as a bare new StubHubClient().
+  //
+  // loadConfig resolves dryRun as `env ?? override ?? true`, so a client
+  // constructed with no override defaults to dry run — a good default, and a
+  // silent one. This wipe did exactly that: it reported "dry-run wipe finished,
+  // nothing was deleted" against an account whose dashboard said LIVE, because
+  // the dashboard's setting lives in the database and nothing had handed it to
+  // the client. The worker gets this right through configuredClient; anything
+  // that writes must go through the same door.
+  const { client } = await configuredClient();
+
   const progress: ClearProgress = {
     phase: 'stopping',
     scanned: 0, pages: 0, submitted: 0, confirmed: 0, failed: 0, rowsReset: 0,
@@ -267,7 +277,7 @@ export function startClearAll(opts: { stop: () => Promise<void> }): ClearProgres
  * leap of faith.
  */
 export async function countRemoteListings(): Promise<{ count: number; truncated: boolean }> {
-  const client = new StubHubClient();
+  const { client } = await configuredClient();
   let count = 0;
   let paginationToken: number | null = null;
   let truncated = false;
