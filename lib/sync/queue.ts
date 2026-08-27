@@ -541,3 +541,27 @@ export async function stateBreakdown(): Promise<Record<string, number>> {
     (rows as Array<{ _id: string; n: number }>).map(r => [r._id ?? 'unknown', r.n])
   );
 }
+
+/**
+ * Hand rows back early instead of sitting on the claim.
+ *
+ * claimRows takes a CLAIM_TTL_MS lease so a crashed worker cannot strand rows.
+ * That is right for a row being worked on, and badly wrong for one the pass
+ * looked at and deliberately deferred — a batch that has not finished yet, or a
+ * write still inside its settle window. Those rows kept the full five-minute
+ * lease, so the loop claimed a slice, declined to settle any of it, and then had
+ * nothing claimable to do until the lease aged out. 1,222 creates that StubHub
+ * had already completed sat untouched for five minutes at a time, and the
+ * dashboard showed a worker running flat out doing nothing.
+ *
+ * A deferred row gets a short lease instead: long enough not to spin on it,
+ * short enough that the next pass picks it up.
+ */
+export async function deferRows(ids: unknown[], ms: number): Promise<void> {
+  if (ids.length === 0) return;
+  await dbConnect();
+  await ConsecutiveGroup.updateMany(
+    { _id: { $in: ids as never[] } },
+    { $set: { 'inventory.syncLeaseUntil': new Date(Date.now() + ms) } }
+  );
+}

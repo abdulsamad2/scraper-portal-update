@@ -51,8 +51,7 @@ import {
   claimRows, claimTombstones, markSynced, markCreated, markFailed, markSkipped,
   markUpdating, markCreating, markDelisted, markTombstoneDone, markTombstoneFailed,
   markTombstoneSubmitted, cancelTombstone,
-  queueDepth, MAX_ATTEMPTS,
-} from './queue.ts';
+  queueDepth, MAX_ATTEMPTS, deferRows,} from './queue.ts';
 import {
   submitCreates, submitUpdates, submitDeletes, submitDelists, readBatchOutcomes,
   patchOne, delistOne, deleteOne,
@@ -113,7 +112,7 @@ const SKIP_ABORT_RATIO = Number(process.env.STUBHUB_SKIP_ABORT_RATIO ?? 0.9);
  * under a second while a thousand-row backfill still drains in the same total
  * time, just across more passes.
  */
-const CLAIM_SIZE = Number(process.env.STUBHUB_CLAIM_SIZE ?? 100);
+const CLAIM_SIZE = Number(process.env.STUBHUB_CLAIM_SIZE ?? MAX_BATCH_ITEMS);
 
 /**
  * How many claim-build-push pipelines run at once.
@@ -218,6 +217,15 @@ async function pooled<T, R>(items: T[], limit: number, fn: (item: T) => Promise<
  */
 const MIN_SETTLE_MS = 5_000;
 const MAX_SETTLE_MS = 120_000;
+
+/**
+ * Lease left on a row the pass deliberately deferred.
+ *
+ * Short, because the row is ready to be looked at again almost immediately; not
+ * zero, because re-reading the same unfinished batch in a tight loop spends rate
+ * budget to learn nothing.
+ */
+const DEFER_MS = 2_000;
 
 export interface DrainResult {
   claimed: number;
@@ -512,6 +520,8 @@ async function processRows(
     submittedAt: number;
   }> = [];
   const awaitingCreate = new Map<string, Array<{ rowId: unknown; externalId: string; attempts: number }>>();
+  /** Rows this pass looked at and chose not to settle. Their claim is handed back. */
+  const deferred: unknown[] = [];
   const byExternalId = new Map<string, { rowId: unknown; hash: string; attempts: number }>();
 
   for (const row of rows) {
@@ -575,7 +585,10 @@ async function processRows(
       // queue latency, not correctness, and reports a listing that is about to
       // be priced as one that failed to price.
       const submittedAt = row.syncPendingSince?.getTime() ?? 0;
-      if (Date.now() - submittedAt < MIN_SETTLE_MS) continue;
+      if (Date.now() - submittedAt < MIN_SETTLE_MS) {
+        deferred.push(row._id);
+        continue;
+      }
 
       pendingVerify.push({
         rowId: row._id,
@@ -610,7 +623,10 @@ async function processRows(
     try {
       ({ outcomes } = await readBatchOutcomes(client, batchId));
     } catch {
-      continue; // still queued or unreadable; try again next pass
+      // Still queued or unreadable; try again next pass — but give the claim
+      // back, or the whole batch is frozen for the lease's full duration.
+      for (const w of waiting) deferred.push(w.rowId);
+      continue;
     }
     for (const w of waiting) {
       const outcome = outcomes.get(w.externalId);
@@ -620,8 +636,11 @@ async function processRows(
       } else if (outcome && !outcome.ok) {
         await markFailed(w.rowId, outcome.error ?? 'create failed', w.attempts);
         out.failed++;
+      } else {
+        // No entry yet: the batch has not settled. Hand the claim back so the
+        // next pass can look again shortly.
+        deferred.push(w.rowId);
       }
-      // No entry yet: the batch has not settled. Left as-is for the next pass.
     }
   }
 
@@ -651,6 +670,7 @@ async function processRows(
         // unsettled batch alone. Left in 'updating' for a later pass, bounded so
         // a price that never arrives is eventually reported.
         out.settling++;
+        deferred.push(v.rowId);
       } else {
         // Not confirmed: put it back as dirty so the next pass re-sends. Safe
         // because every write here is idempotent, and far better than assuming a
@@ -660,6 +680,8 @@ async function processRows(
       }
     }
   }
+
+  if (deferred.length > 0) await deferRows(deferred, DEFER_MS);
 
   // Circuit breaker. Evaluated before anything is sent, not as a handler after
   // something has gone wrong.
