@@ -28,6 +28,8 @@ const ALL_TEAMS_LOWER = [...MLB_TEAMS, ...NFL_TEAMS].map(t => t.toLowerCase());
 const BLOCKED_STATES = ['ri', 'me', 'rhode island', 'maine'];
 import dbConnect from '../lib/dbConnect';
 import { ConsecutiveGroup } from '../models/seatModel';
+import { SeatDrop } from '../models/seatDropModel';
+import { MATURE_CYCLES } from '@/lib/drops';
 import { Event } from '../models/eventModel';
 import { TcEvent } from '../models/tcEventModel';
 import { SchedulerSettings } from '../models/schedulerModel';
@@ -210,6 +212,87 @@ interface SectionRowExclusion {
   section?: string;
   excludeEntireSection?: boolean;
   excludedRows?: string[];
+}
+
+/**
+ * ── Holding new drops out of the CSV ─────────────────────────────────────────
+ *
+ * A seat drop is unproven inventory: Ticketmaster hands seats back and takes
+ * them away again, so a listing that appeared moments ago may be gone before a
+ * buyer ever reaches it. Exporting it risks selling a ticket we cannot fulfil.
+ *
+ * So a drop is quarantined until it has survived MATURE_CYCLES consecutive
+ * scrapes. Until then its listing is withheld from the CSV; once it matures the
+ * drop stops matching here and the listing exports like any other inventory.
+ *
+ * Granularity: a listing is withheld whole. Consecutive seats are sold as one
+ * line, so a row that grew from 4 seats to 6 cannot export "just the original
+ * 4" — the line that exists now is the six-seat one. Withholding the line is
+ * the conservative reading and the only one that maps onto how inventory sells.
+ */
+async function buildDropQuarantineFilter(mappingIds: string[]): Promise<ExclusionFilter> {
+  if (mappingIds.length === 0) return ALLOW_ALL;
+
+  try {
+    const drops = await SeatDrop.find(
+      { status: 'active', cyclesSeen: { $lt: MATURE_CYCLES } },
+      { mapping_id: 1, eventId: 1, section: 1, row: 1, newSeats: 1, _id: 0 }
+    ).lean() as unknown as Array<{
+      mapping_id?: string; eventId?: string; section?: string; row?: string; newSeats?: string[];
+    }>;
+    if (drops.length === 0) return ALLOW_ALL;
+
+    // Older drops predate the denormalised mapping_id, so resolve those by
+    // Event_ID rather than letting them slip into the export unnoticed.
+    const needsLookup = [...new Set(drops.filter((d) => !d.mapping_id && d.eventId).map((d) => d.eventId!))];
+    const eventIdToMappingId = new Map<string, string>();
+    if (needsLookup.length > 0) {
+      const evs = await Event.find(
+        { Event_ID: { $in: needsLookup } },
+        { Event_ID: 1, mapping_id: 1, _id: 0 }
+      ).lean() as unknown as Array<{ Event_ID: string; mapping_id: string }>;
+      for (const e of evs) eventIdToMappingId.set(e.Event_ID, e.mapping_id);
+    }
+
+    const wanted = new Set(mappingIds);
+    const key = (mid: string, section: string, row: string) =>
+      `${mid}|${String(section).trim().toUpperCase()}|${String(row).trim().toUpperCase()}`;
+
+    // section/row → the seat numbers still under quarantine
+    const quarantined = new Map<string, Set<string>>();
+    for (const d of drops) {
+      const mid = d.mapping_id || (d.eventId ? eventIdToMappingId.get(d.eventId) : undefined);
+      if (!mid || !wanted.has(mid)) continue;
+      const k = key(mid, d.section ?? '', d.row ?? '');
+      let set = quarantined.get(k);
+      if (!set) { set = new Set(); quarantined.set(k, set); }
+      for (const seat of d.newSeats ?? []) set.add(String(seat).trim());
+    }
+    if (quarantined.size === 0) return ALLOW_ALL;
+
+    console.log(
+      `[CSV] Drop quarantine active: ${quarantined.size} section/row group(s) under ${MATURE_CYCLES} cycles`
+    );
+
+    return (record) => {
+      const set = quarantined.get(key(record.event_id, record.section, record.row));
+      if (!set) return true;
+
+      // GA / lawn rows carry no seat numbers, so seat-level matching is
+      // impossible — withhold the whole section/row while it is quarantined.
+      const seats = String(record.seats ?? '')
+        .split(',')
+        .map((x) => x.trim())
+        .filter(Boolean);
+      if (seats.length === 0) return false;
+
+      return !seats.some((seat) => set.has(seat));
+    };
+  } catch (error) {
+    // Never let a quarantine failure block an export — log and export normally.
+    console.error('[CSV] Drop quarantine filter failed, exporting without it:', error);
+    return ALLOW_ALL;
+  }
 }
 
 async function buildExclusionFilter(mappingIds: string[]): Promise<ExclusionFilter> {
@@ -523,6 +606,8 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
       // is still computed in JS after the loop over post-exclusion records,
       // matching the original behaviour exactly.
       const exclusionFilter = await buildExclusionFilter(eventMappingIds);
+      const dropQuarantineFilter = await buildDropQuarantineFilter(eventMappingIds);
+      let quarantinedCount = 0;
 
       const schedulerSettings = await SchedulerSettings.findOne({}).lean() as any;
       const minSeatFilter: number = schedulerSettings?.minSeatFilter ?? 0;
@@ -598,6 +683,8 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
             for (const r of processedBatch) {
               if (isBlockedVenueState(r)) { excludedCount++; continue; }
               if (!exclusionFilter(r)) { excludedCount++; continue; }
+              // Unproven drops are withheld until they survive MATURE_CYCLES
+              if (!dropQuarantineFilter(r)) { excludedCount++; quarantinedCount++; continue; }
               if (rowModeMinSeat && !rowModeMinSeat(r)) { excludedCount++; continue; }
               filteredRecords.push(r);
             }
@@ -637,7 +724,7 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
         console.log(`[CSV] Min seat filter [section] (<= ${minSeatFilter}): removed ${removed} listings`);
       }
 
-      console.log(`[CSV] Done: ${filteredRecords.length} kept / ${producedCount} produced / ${excludedCount} excluded (processed ${processedCount} docs in ${Date.now() - startTime}ms)`);
+      console.log(`[CSV] Done: ${filteredRecords.length} kept / ${producedCount} produced / ${excludedCount} excluded (${quarantinedCount} withheld as unmatured drops) (processed ${processedCount} docs in ${Date.now() - startTime}ms)`);
 
       if (filteredRecords.length === 0) {
         return { success: false, message: 'No inventory data found after applying exclusion rules. All records were filtered out.' };
@@ -1070,6 +1157,8 @@ export async function* generateInventoryCsvStream(
     // (Event.find + ExclusionRules.find) inside every chunk iteration; for an
     // export with N chunks that was 2N redundant DB round-trips.
     const exclusionFilter = await buildExclusionFilter(eventMappingIds);
+    const dropQuarantineFilter = await buildDropQuarantineFilter(eventMappingIds);
+    let quarantinedCount = 0;
 
     const CHUNK_SIZE = 10000;
     const idPipeline: PipelineStage[] = [
@@ -1160,6 +1249,8 @@ export async function* generateInventoryCsvStream(
           for (const r of processedBatch) {
             if (isBlockedVenueState(r)) continue;
             if (!exclusionFilter(r)) continue;
+            // Unproven drops are withheld until they survive MATURE_CYCLES
+            if (!dropQuarantineFilter(r)) { quarantinedCount++; continue; }
             if (minSeatFilter > 0) {
               if (minSeatFilterMode === 'section') {
                 if ((sectionTotalsMap.get(`${r.event_id}|${r.section}`) ?? 0) <= minSeatFilter) continue;
@@ -1183,7 +1274,7 @@ export async function* generateInventoryCsvStream(
     }
 
     const duration = Date.now() - startTime;
-    console.log(`[CSV Stream] Completed in ${duration}ms: ${totalRecords} records, ${totalExcluded} excluded`);
+    console.log(`[CSV Stream] Completed in ${duration}ms: ${totalRecords} records, ${totalExcluded} excluded (${quarantinedCount} withheld as unmatured drops)`);
 
     if (totalRecords === 0) {
       yield { type: 'data', text: 'ERROR: No inventory data found after applying exclusion rules.\n' };

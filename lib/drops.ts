@@ -13,7 +13,22 @@ import { Event } from '@/models/eventModel';
  * so every day window is built with Date.UTC and rendered with timeZone:'UTC'.
  */
 
-export type DropDateRange = 'all' | 'today' | 'tomorrow' | 'week' | 'past';
+export type DropDateRange = 'all' | 'last2' | 'today' | 'tomorrow' | 'week' | 'past';
+
+/**
+ * Scrape cycles a drop must survive before it stops being treated as a drop.
+ *
+ * Until then it is quarantined: hidden from this page and withheld from CSV
+ * export (see buildDropQuarantineFilter in actions/csvActions.tsx). Once it
+ * matures it is ordinary inventory — it leaves this page and joins the CSV.
+ */
+export const MATURE_CYCLES = Number(process.env.DROP_MATURE_CYCLES ?? 10);
+
+/** A drop still under observation: on sale, but not yet proven. */
+export const IMMATURE_MATCH = {
+  status: 'active' as const,
+  cyclesSeen: { $lt: MATURE_CYCLES },
+};
 export type DropSort = 'newest' | 'oldest' | 'eventDate' | 'event' | 'seats' | 'price';
 
 export interface DropFilters {
@@ -23,7 +38,8 @@ export interface DropFilters {
   /** Operator's calendar day, YYYY-MM-DD. Defaults to the server's own day. */
   date?: string;
   sort?: DropSort;
-  limit?: number;
+  page?: number;
+  pageSize?: number;
 }
 
 export interface DropStats {
@@ -34,8 +50,10 @@ export interface DropStats {
   seatsActive: number;
   last15Min: number;
   eventsAffected: number;
-  todayDrops: number;
-  todayEvents: number;
+  windowDrops: number;
+  windowEvents: number;
+  /** Graduated to ordinary inventory — off this page, in the CSV. */
+  matured: number;
 }
 
 export interface DropRecord {
@@ -85,6 +103,9 @@ function utcDayBounds(date: string, addDays = 0) {
 function windowFor(range: DropDateRange, date: string) {
   const today = utcDayBounds(date, 0);
   switch (range) {
+    // Default view: yesterday and today, so an overnight drop is still on
+    // screen the next morning.
+    case 'last2': { const y = utcDayBounds(date, -1); return { $gte: y.start, $lte: today.end }; }
     case 'today': return { $gte: today.start, $lte: today.end };
     case 'tomorrow': { const t = utcDayBounds(date, 1); return { $gte: t.start, $lte: t.end }; }
     case 'week': { const e = utcDayBounds(date, 6); return { $gte: today.start, $lte: e.end }; }
@@ -93,11 +114,18 @@ function windowFor(range: DropDateRange, date: string) {
   }
 }
 
+/**
+ * Sorts run against the joined Event fields (joinedDate / joinedName), not the
+ * drop's denormalized copies. Display and the date filter already resolve
+ * through Event, so sorting on the stale copy would order the page by data the
+ * viewer cannot see — and orders arbitrarily when a drop was written without
+ * the denormalized fields at all.
+ */
 const SORTS: Record<DropSort, Record<string, 1 | -1>> = {
   newest: { detectedAt: -1 },
   oldest: { detectedAt: 1 },
-  eventDate: { event_date: 1, detectedAt: -1 },
-  event: { event_name: 1, event_date: 1, detectedAt: -1 },
+  eventDate: { joinedDate: 1, detectedAt: -1 },
+  event: { joinedName: 1, joinedDate: 1, detectedAt: -1 },
   seats: { newSeatCount: -1, detectedAt: -1 },
   price: { listPrice: -1, detectedAt: -1 },
 };
@@ -119,9 +147,17 @@ export async function fetchDrops(filters: DropFilters = {}) {
     sort = 'newest',
   } = filters;
   const date = /^\d{4}-\d{2}-\d{2}$/.test(filters.date ?? '') ? filters.date! : serverToday();
-  const limit = Math.min(Math.max(1, filters.limit ?? 150), 500);
+  const pageSize = Math.min(Math.max(1, filters.pageSize ?? 50), 200);
+  const page = Math.max(1, filters.page ?? 1);
 
   const query: Record<string, unknown> = {};
+
+  // Matured drops have graduated to ordinary inventory: off this page, and in
+  // the CSV. Gone drops stay as history — they are not inventory any more.
+  query.$and = [
+    { $or: [{ status: 'gone' }, IMMATURE_MATCH] },
+  ];
+
   if (status === 'active' || status === 'gone') query.status = status;
 
   if (search) {
@@ -132,14 +168,16 @@ export async function fetchDrops(filters: DropFilters = {}) {
     const matchedEventIds = await Event.distinct('Event_ID', {
       $or: [{ Event_Name: rx }, { Venue: rx }],
     });
-    query.$or = [
-      { eventId: { $in: matchedEventIds } },
-      { eventId: rx },
-      { section: rx },
-      { row: rx },
-      { event_name: rx },
-      { venue_name: rx },
-    ];
+    (query.$and as Record<string, unknown>[]).push({
+      $or: [
+        { eventId: { $in: matchedEventIds } },
+        { eventId: rx },
+        { section: rx },
+        { row: rx },
+        { event_name: rx },
+        { venue_name: rx },
+      ],
+    });
   }
 
   const dateWindow = windowFor(dateRange, date);
@@ -151,9 +189,37 @@ export async function fetchDrops(filters: DropFilters = {}) {
 
   const fifteenMinAgo = new Date(Date.now() - 15 * 60_000);
 
-  const [drops, counts, last15Min, eventsAffected, todayEventIds] = await Promise.all([
-    SeatDrop.find(query).sort(SORTS[sort] ?? SORTS.newest).limit(limit).lean(),
+  // One aggregation: join Event, sort on the joined fields, then page. Joining
+  // before the sort is what makes "event date" and "event name" order by what
+  // is actually on screen.
+  const eventsCollection = Event.collection.name;
+  const pipeline = [
+    { $match: query },
+    {
+      $lookup: {
+        from: eventsCollection,
+        localField: 'eventId',
+        foreignField: 'Event_ID',
+        as: '_event',
+      },
+    },
+    { $addFields: { _event: { $first: '$_event' } } },
+    {
+      $addFields: {
+        joinedDate: { $ifNull: ['$_event.Event_DateTime', '$event_date'] },
+        joinedName: { $ifNull: ['$_event.Event_Name', '$event_name'] },
+      },
+    },
+    { $sort: SORTS[sort] ?? SORTS.newest },
+    { $skip: (page - 1) * pageSize },
+    { $limit: pageSize },
+  ];
+
+  const [drops, total, counts, last15Min, eventsAffected, windowEventIds, matured] = await Promise.all([
+    SeatDrop.aggregate(pipeline).allowDiskUse(true),
+    SeatDrop.countDocuments(query),
     SeatDrop.aggregate([
+      { $match: { $or: [{ status: 'gone' }, IMMATURE_MATCH] } },
       {
         $group: {
           _id: null,
@@ -166,34 +232,34 @@ export async function fetchDrops(filters: DropFilters = {}) {
       },
     ]),
     SeatDrop.countDocuments({ detectedAt: { $gte: fifteenMinAgo } }),
-    SeatDrop.distinct('eventId', { status: 'active' }),
-    Event.distinct('Event_ID', { Event_DateTime: windowFor('today', date)! }),
+    SeatDrop.distinct('eventId', { ...IMMATURE_MATCH }),
+    Event.distinct('Event_ID', { Event_DateTime: windowFor(dateRange === 'all' ? 'last2' : dateRange, date) ?? {} }),
+    SeatDrop.countDocuments({ status: 'active', cyclesSeen: { $gte: MATURE_CYCLES } }),
   ]);
 
-  const todayDrops = todayEventIds.length
-    ? await SeatDrop.countDocuments({ eventId: { $in: todayEventIds } })
+  const windowDrops = windowEventIds.length
+    ? await SeatDrop.countDocuments({
+        eventId: { $in: windowEventIds },
+        $or: [{ status: 'gone' }, IMMATURE_MATCH],
+      })
     : 0;
 
-  const list = drops as unknown as DropRecord[];
-  const ids = [...new Set(list.map((d) => d.eventId))];
-  const events = ids.length
-    ? await Event.find(
-        { Event_ID: { $in: ids } },
-        { Event_ID: 1, URL: 1, Event_DateTime: 1, Event_Name: 1, Venue: 1, _id: 0 }
-      ).lean()
-    : [];
-  const byId = new Map(
-    (events as unknown as Array<Record<string, unknown>>).map((e) => [e.Event_ID as string, e])
-  );
+  const list = drops as unknown as Array<DropRecord & {
+    _event?: { URL?: string; Event_DateTime?: string; Event_Name?: string; Venue?: string };
+    joinedDate?: unknown;
+    joinedName?: unknown;
+  }>;
 
   const enriched = list.map((d) => {
-    const ev = byId.get(d.eventId);
+    const ev = d._event;
+    const { _event, joinedDate, joinedName, ...rest } = d;
+    void _event; void joinedDate; void joinedName; // join scaffolding, not payload
     return {
-      ...d,
-      event_url: (ev?.URL as string) ?? null,
-      event_date: (ev?.Event_DateTime as unknown as string) ?? d.event_date ?? null,
-      event_name: (ev?.Event_Name as string) ?? d.event_name,
-      venue_name: (ev?.Venue as string) ?? d.venue_name,
+      ...rest,
+      event_url: ev?.URL ?? null,
+      event_date: ev?.Event_DateTime ?? d.event_date ?? null,
+      event_name: ev?.Event_Name ?? d.event_name,
+      venue_name: ev?.Venue ?? d.venue_name,
       eventMissing: !ev,
     };
   });
@@ -208,13 +274,20 @@ export async function fetchDrops(filters: DropFilters = {}) {
     seatsActive: c.seatsActive ?? 0,
     last15Min,
     eventsAffected: eventsAffected.length,
-    todayDrops,
-    todayEvents: todayEventIds.length,
+    windowDrops,
+    windowEvents: windowEventIds.length,
+    matured,
   };
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   return {
     stats,
     resolvedDate: date,
+    page: Math.min(page, totalPages),
+    pageSize,
+    total,
+    totalPages,
     drops: JSON.parse(JSON.stringify(enriched)) as DropRecord[],
   };
 }

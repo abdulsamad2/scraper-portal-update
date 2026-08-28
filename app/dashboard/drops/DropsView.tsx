@@ -1,9 +1,10 @@
 import Link from 'next/link';
 import {
   Zap, CheckCheck, Search, Clock, Ticket, XCircle, ExternalLink, ArrowUpDown, CalendarDays,
+  ChevronLeft, ChevronRight,
 } from 'lucide-react';
 
-import { fetchDrops } from '@/lib/drops';
+import { fetchDrops, MATURE_CYCLES } from '@/lib/drops';
 import type { DropDateRange, DropSort, DropRecord } from '@/lib/drops';
 import { acknowledgeDrop, acknowledgeAllDrops } from '@/actions/dropActions';
 import DropsLive from './DropsLive';
@@ -20,9 +21,11 @@ export interface DropsSearchParams {
   sort?: string;
   q?: string;
   date?: string;
+  page?: string;
 }
 
 const DATE_RANGES: { value: DropDateRange; label: string }[] = [
+  { value: 'last2', label: 'Last 2 days' },
   { value: 'today', label: 'Today' },
   { value: 'tomorrow', label: 'Tomorrow' },
   { value: 'week', label: 'Next 7 days' },
@@ -81,25 +84,28 @@ export default async function DropsView({
 }) {
   const sp = await searchParams;
 
-  const range = (DATE_RANGES.find((r) => r.value === sp.range)?.value ?? 'today') as DropDateRange;
+  const range = (DATE_RANGES.find((r) => r.value === sp.range)?.value ?? 'last2') as DropDateRange;
   const sort = (SORT_OPTIONS.find((s) => s.value === sp.sort)?.value ?? 'eventDate') as DropSort;
   const status = (STATUSES.find((s) => s.value === sp.status)?.value ?? 'all');
   const search = sp.q ?? '';
   const date = sp.date;
+  const page = Math.max(1, parseInt(sp.page ?? '1', 10) || 1);
 
-  const { stats, drops, resolvedDate } = await fetchDrops({
-    status, search, dateRange: range, sort, date, limit: 150,
+  const { stats, drops, resolvedDate, total, totalPages, pageSize } = await fetchDrops({
+    status, search, dateRange: range, sort, date, page, pageSize: 50,
   });
 
   /** Build a link that changes one filter and preserves the rest. */
   const hrefWith = (patch: Partial<DropsSearchParams>) => {
     const next = new URLSearchParams();
-    const merged = { status, range, sort, q: search, date, ...patch };
+    // Changing any filter resets to page 1 unless the patch sets a page itself
+    const merged = { status, range, sort, q: search, date, page: undefined, ...patch };
     if (merged.status && merged.status !== 'all') next.set('status', merged.status);
-    if (merged.range && merged.range !== 'today') next.set('range', merged.range);
+    if (merged.range && merged.range !== 'last2') next.set('range', merged.range);
     if (merged.sort && merged.sort !== 'eventDate') next.set('sort', merged.sort);
     if (merged.q) next.set('q', merged.q);
     if (merged.date) next.set('date', merged.date);
+    if (merged.page && merged.page !== '1') next.set('page', String(merged.page));
     const qs = next.toString();
     return qs ? `/dashboard/drops?${qs}` : '/dashboard/drops';
   };
@@ -147,16 +153,23 @@ export default async function DropsView({
 
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
-        <StatTile label="Today's events" value={stats.todayEvents} tone="blue" sub={`${stats.todayDrops} drops`} />
+        <StatTile
+          label={DATE_RANGES.find((r) => r.value === range)?.label ?? 'In window'}
+          value={stats.windowEvents}
+          tone="blue"
+          sub={`${stats.windowDrops} drops`}
+        />
         <StatTile label="On sale now" value={stats.active} tone="green" sub={`${stats.seatsActive} seats`} />
         <StatTile label="New (15 min)" value={stats.last15Min} tone="amber" sub="drops detected" />
         <StatTile label="Unacknowledged" value={stats.unseen} tone={stats.unseen > 0 ? 'red' : 'slate'} sub="need review" />
         <StatTile label="Gone again" value={stats.gone} tone="slate" sub="seats withdrawn" />
-        <StatTile label="Events affected" value={stats.eventsAffected} tone="slate" sub="with live drops" />
+        <StatTile label="Matured" value={stats.matured} tone="slate" sub={`${MATURE_CYCLES}+ cycles · in CSV`} />
       </div>
       <p className="-mt-3 text-xs text-slate-400">
         Totals cover every tracked event. The list below follows the filters you pick.
         {' '}Today resolves to {formatEventDate(`${resolvedDate}T12:00:00.000Z`)}.
+        {' '}Drops are held out of the CSV until they survive {MATURE_CYCLES} scrape cycles,
+        then graduate to ordinary inventory and leave this page.
       </p>
 
       {/* Filters — links, resolved on the server */}
@@ -193,7 +206,7 @@ export default async function DropsView({
         {/* GET form — works without JavaScript */}
         <form method="GET" action="/dashboard/drops" className="relative flex-1 min-w-[220px] max-w-md">
           {status !== 'all' && <input type="hidden" name="status" value={status} />}
-          {range !== 'today' && <input type="hidden" name="range" value={range} />}
+          {range !== 'last2' && <input type="hidden" name="range" value={range} />}
           {sort !== 'eventDate' && <input type="hidden" name="sort" value={sort} />}
           {date && <input type="hidden" name="date" value={date} />}
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -297,9 +310,88 @@ export default async function DropsView({
               </div>
             </div>
           ))}
+
+          {/* Pagination — links, so the server renders each page */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between gap-4 pt-2">
+              <p className="text-sm text-slate-500">
+                Showing <span className="font-medium text-slate-700">{(page - 1) * pageSize + 1}</span>–
+                <span className="font-medium text-slate-700">{Math.min(page * pageSize, total)}</span>
+                {' '}of <span className="font-medium text-slate-700">{total}</span> drops
+              </p>
+
+              <div className="flex items-center gap-1">
+                <PageLink href={hrefWith({ page: String(page - 1) })} disabled={page <= 1} label="Previous">
+                  <ChevronLeft className="w-4 h-4" />
+                </PageLink>
+
+                {pageWindow(page, totalPages).map((p, i) =>
+                  p === null ? (
+                    <span key={`gap-${i}`} className="px-2 text-slate-400">…</span>
+                  ) : (
+                    <Link
+                      key={p}
+                      href={hrefWith({ page: String(p) })}
+                      className={`min-w-[2.25rem] text-center px-3 py-2 text-sm rounded-lg border ${
+                        p === page
+                          ? 'bg-slate-800 text-white border-slate-800'
+                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                      }`}
+                    >
+                      {p}
+                    </Link>
+                  )
+                )}
+
+                <PageLink href={hrefWith({ page: String(page + 1) })} disabled={page >= totalPages} label="Next">
+                  <ChevronRight className="w-4 h-4" />
+                </PageLink>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
+  );
+}
+
+/** First, last, and the pages either side of the current one. */
+function pageWindow(current: number, total: number): (number | null)[] {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const pages = new Set<number>([1, total, current, current - 1, current + 1]);
+  const sorted = [...pages].filter((p) => p >= 1 && p <= total).sort((a, b) => a - b);
+  const out: (number | null)[] = [];
+  let prev = 0;
+  for (const p of sorted) {
+    if (prev && p - prev > 1) out.push(null);
+    out.push(p);
+    prev = p;
+  }
+  return out;
+}
+
+function PageLink({ href, disabled, label, children }: {
+  href: string; disabled: boolean; label: string; children: React.ReactNode;
+}) {
+  if (disabled) {
+    return (
+      <span
+        aria-disabled="true"
+        title={`${label} (unavailable)`}
+        className="px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 text-slate-300 cursor-not-allowed"
+      >
+        {children}
+      </span>
+    );
+  }
+  return (
+    <Link
+      href={href}
+      aria-label={label}
+      className="px-3 py-2 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+    >
+      {children}
+    </Link>
   );
 }
 
@@ -429,7 +521,17 @@ function DropRow({ drop }: { drop: DropRecord }) {
         ) : (
           <>
             <p className="text-slate-500 mt-1">
-              Still on sale · seen {drop.cyclesSeen ?? 1} cycle{(drop.cyclesSeen ?? 1) === 1 ? '' : 's'}
+              Still on sale · seen {drop.cyclesSeen ?? 1} of {MATURE_CYCLES} cycles
+            </p>
+            <div className="mt-1 h-1.5 w-full bg-slate-100 rounded-full overflow-hidden" title={`Held out of the CSV until ${MATURE_CYCLES} cycles`}>
+              <div
+                className="h-full bg-green-500 rounded-full"
+                style={{ width: `${Math.min(100, ((drop.cyclesSeen ?? 1) / MATURE_CYCLES) * 100)}%` }}
+              />
+            </div>
+            <p className="mt-1 text-[11px] text-slate-400">
+              {Math.max(0, MATURE_CYCLES - (drop.cyclesSeen ?? 1))} more cycle
+              {MATURE_CYCLES - (drop.cyclesSeen ?? 1) === 1 ? '' : 's'} until it joins the CSV
             </p>
             {(drop.missCount ?? 0) > 0 && (
               <p className="mt-1 text-amber-700 font-medium">
