@@ -20,7 +20,7 @@ import {
   Users,
   Bell,
   ChevronsLeft,
-  ChevronsRight,
+  ChevronsRight, Zap
 } from 'lucide-react';
 
 interface FeatureFlags {
@@ -173,6 +173,11 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
       path: '/dashboard/inventory-watcher',
       label: 'Inventory Alerts',
       icon: <Bell className="w-5 h-5" />,
+    },
+    {
+      path: '/dashboard/drops',
+      label: 'Seat Drops',
+      icon: <Zap className="w-5 h-5" />,
     },
     {
       path: '/dashboard/proxies',
