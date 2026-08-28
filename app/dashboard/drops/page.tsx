@@ -425,20 +425,7 @@ export default function DropsPage() {
               <div className="px-5 py-3 border-b border-slate-100 flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0">
                   <h2 className="font-semibold text-slate-800 flex items-center gap-2 flex-wrap">
-                    {eventDrops[0].event_url ? (
-                      <a
-                        href={eventDrops[0].event_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="hover:text-purple-700 hover:underline inline-flex items-center gap-1"
-                        title="Open on Ticketmaster"
-                      >
-                        {eventDrops[0].event_name || eventId}
-                        <ExternalLink className="w-3.5 h-3.5 shrink-0 opacity-60" />
-                      </a>
-                    ) : (
-                      <span>{eventDrops[0].event_name || eventId}</span>
-                    )}
+                    <span>{eventDrops[0].event_name || eventId}</span>
                     {eventDrops[0].eventMissing && (
                       <span
                         className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 uppercase"
@@ -467,6 +454,26 @@ export default function DropsPage() {
                   <span className="text-xs px-2 py-1 rounded-full bg-slate-100 text-slate-600">
                     {eventDrops.length} drop{eventDrops.length === 1 ? '' : 's'}
                   </span>
+                  {eventDrops[0].event_url ? (
+                    <a
+                      href={eventDrops[0].event_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title="Open this event on Ticketmaster"
+                      className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-semibold rounded-lg bg-purple-600 text-white hover:bg-purple-700 shadow-sm transition-colors whitespace-nowrap"
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                      View event
+                    </a>
+                  ) : (
+                    <span
+                      title="No event URL — the event row is missing"
+                      className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-semibold rounded-lg bg-slate-100 text-slate-400 cursor-not-allowed whitespace-nowrap"
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                      No link
+                    </span>
+                  )}
                 </div>
               </div>
 
