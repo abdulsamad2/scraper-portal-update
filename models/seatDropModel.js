@@ -12,13 +12,10 @@ import mongoose from "mongoose";
  */
 const seatDropSchema = new mongoose.Schema(
   {
+    // The only link to the event. Name, venue, date and URL are deliberately
+    // NOT copied here: they live on the Event row, they change, and a stale
+    // copy silently disagrees with what this portal displays. Readers join.
     eventId: { type: String, required: true, index: true },
-    mapping_id: { type: String },
-
-    event_name: { type: String },
-    venue_name: { type: String },
-    event_date: { type: Date },
-    event_url: { type: String },
 
     section: { type: String, required: true },
     row: { type: String, required: true },

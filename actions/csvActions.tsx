@@ -236,19 +236,20 @@ async function buildDropQuarantineFilter(mappingIds: string[]): Promise<Exclusio
   try {
     const drops = await SeatDrop.find(
       { status: 'active', cyclesSeen: { $lt: MATURE_CYCLES } },
-      { mapping_id: 1, eventId: 1, section: 1, row: 1, newSeats: 1, _id: 0 }
+      { eventId: 1, section: 1, row: 1, newSeats: 1, _id: 0 }
     ).lean() as unknown as Array<{
-      mapping_id?: string; eventId?: string; section?: string; row?: string; newSeats?: string[];
+      eventId?: string; section?: string; row?: string; newSeats?: string[];
     }>;
     if (drops.length === 0) return ALLOW_ALL;
 
-    // Older drops predate the denormalised mapping_id, so resolve those by
-    // Event_ID rather than letting them slip into the export unnoticed.
-    const needsLookup = [...new Set(drops.filter((d) => !d.mapping_id && d.eventId).map((d) => d.eventId!))];
+    // A drop stores only its Event_ID, so mapping_id — which is what a CSV row
+    // is keyed by — is resolved from the Event row. One batched lookup, and it
+    // cannot go stale the way a copy stored on the drop would.
+    const dropEventIds = [...new Set(drops.map((d) => d.eventId).filter(Boolean) as string[])];
     const eventIdToMappingId = new Map<string, string>();
-    if (needsLookup.length > 0) {
+    if (dropEventIds.length > 0) {
       const evs = await Event.find(
-        { Event_ID: { $in: needsLookup } },
+        { Event_ID: { $in: dropEventIds } },
         { Event_ID: 1, mapping_id: 1, _id: 0 }
       ).lean() as unknown as Array<{ Event_ID: string; mapping_id: string }>;
       for (const e of evs) eventIdToMappingId.set(e.Event_ID, e.mapping_id);
@@ -261,7 +262,7 @@ async function buildDropQuarantineFilter(mappingIds: string[]): Promise<Exclusio
     // section/row → the seat numbers still under quarantine
     const quarantined = new Map<string, Set<string>>();
     for (const d of drops) {
-      const mid = d.mapping_id || (d.eventId ? eventIdToMappingId.get(d.eventId) : undefined);
+      const mid = d.eventId ? eventIdToMappingId.get(d.eventId) : undefined;
       if (!mid || !wanted.has(mid)) continue;
       const k = key(mid, d.section ?? '', d.row ?? '');
       let set = quarantined.get(k);

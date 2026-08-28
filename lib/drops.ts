@@ -59,8 +59,9 @@ export interface DropStats {
 export interface DropRecord {
   _id: string;
   eventId: string;
-  event_name?: string;
-  venue_name?: string;
+  /** All four come from the Event join, never from the drop itself. */
+  event_name?: string | null;
+  venue_name?: string | null;
   event_date?: string | null;
   event_url?: string | null;
   eventMissing?: boolean;
@@ -170,12 +171,12 @@ export async function fetchDrops(filters: DropFilters = {}) {
     });
     (query.$and as Record<string, unknown>[]).push({
       $or: [
+        // Names come from Event, so they are matched there — the drop itself
+        // only carries its own section, row and event id.
         { eventId: { $in: matchedEventIds } },
         { eventId: rx },
         { section: rx },
         { row: rx },
-        { event_name: rx },
-        { venue_name: rx },
       ],
     });
   }
@@ -204,12 +205,9 @@ export async function fetchDrops(filters: DropFilters = {}) {
       },
     },
     { $addFields: { _event: { $first: '$_event' } } },
-    {
-      $addFields: {
-        joinedDate: { $ifNull: ['$_event.Event_DateTime', '$event_date'] },
-        joinedName: { $ifNull: ['$_event.Event_Name', '$event_name'] },
-      },
-    },
+    // Sort keys come from the joined Event, which is also what is displayed —
+    // so the order can never disagree with what is on screen.
+    { $addFields: { joinedDate: '$_event.Event_DateTime', joinedName: '$_event.Event_Name' } },
     { $sort: SORTS[sort] ?? SORTS.newest },
     { $skip: (page - 1) * pageSize },
     { $limit: pageSize },
@@ -257,9 +255,9 @@ export async function fetchDrops(filters: DropFilters = {}) {
     return {
       ...rest,
       event_url: ev?.URL ?? null,
-      event_date: ev?.Event_DateTime ?? d.event_date ?? null,
-      event_name: ev?.Event_Name ?? d.event_name,
-      venue_name: ev?.Venue ?? d.venue_name,
+      event_date: ev?.Event_DateTime ?? null,
+      event_name: ev?.Event_Name ?? null,
+      venue_name: ev?.Venue ?? null,
       eventMissing: !ev,
     };
   });
