@@ -12,10 +12,15 @@ import mongoose from "mongoose";
  */
 const seatDropSchema = new mongoose.Schema(
   {
-    // The only link to the event. Name, venue, date and URL are deliberately
-    // NOT copied here: they live on the Event row, they change, and a stale
-    // copy silently disagrees with what this portal displays. Readers join.
+    // The only link to the event. Venue, date, URL and mapping_id are
+    // deliberately NOT copied here: they live on the Event row, they change,
+    // and a stale copy silently disagrees with what this portal displays.
     eventId: { type: String, required: true, index: true },
+
+    // The one exception, and only as an epitaph: if the event row is deleted
+    // this is all that is left to label the drop. Used ONLY as a display
+    // fallback when the join finds nothing — never for search or sorting.
+    event_name: { type: String },
 
     section: { type: String, required: true },
     row: { type: String, required: true },

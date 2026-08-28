@@ -59,7 +59,10 @@ export interface DropStats {
 export interface DropRecord {
   _id: string;
   eventId: string;
-  /** All four come from the Event join, never from the drop itself. */
+  /**
+   * From the Event join. event_name falls back to the drop's stored snapshot
+   * only when the event row is gone; the others are join-only.
+   */
   event_name?: string | null;
   venue_name?: string | null;
   event_date?: string | null;
@@ -256,7 +259,9 @@ export async function fetchDrops(filters: DropFilters = {}) {
       ...rest,
       event_url: ev?.URL ?? null,
       event_date: ev?.Event_DateTime ?? null,
-      event_name: ev?.Event_Name ?? null,
+      // The stored name is an epitaph for a deleted event, nothing more: the
+      // live row wins whenever there is one, so the two cannot disagree.
+      event_name: ev?.Event_Name ?? (ev ? null : d.event_name ?? null),
       venue_name: ev?.Venue ?? null,
       eventMissing: !ev,
     };
