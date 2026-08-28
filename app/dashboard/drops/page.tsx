@@ -3,11 +3,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Zap, Bell, BellOff, Loader2, AlertTriangle, CheckCheck, Search,
-  Clock, Ticket, Radio, RefreshCw, XCircle,
+  Clock, Ticket, Radio, RefreshCw, XCircle, ExternalLink, ArrowUpDown, CalendarDays,
 } from 'lucide-react';
 
 import { getDrops, acknowledgeDrops, acknowledgeAllDrops } from '@/actions/dropActions';
-import type { DropStats } from '@/actions/dropActions';
+import type { DropStats, DropDateRange, DropSort } from '@/actions/dropActions';
 
 type DropStatus = 'active' | 'gone';
 
@@ -16,7 +16,9 @@ interface Drop {
   eventId: string;
   event_name?: string;
   venue_name?: string;
-  event_date?: string;
+  event_date?: string | null;
+  event_url?: string | null;
+  eventMissing?: boolean;
   section: string;
   row: string;
   newSeats: string[];
@@ -34,6 +36,23 @@ interface Drop {
   secondsAlive?: number | null;
   seen?: boolean;
 }
+
+const DATE_RANGES: { value: DropDateRange; label: string }[] = [
+  { value: 'today', label: 'Today' },
+  { value: 'tomorrow', label: 'Tomorrow' },
+  { value: 'week', label: 'Next 7 days' },
+  { value: 'past', label: 'Past' },
+  { value: 'all', label: 'All dates' },
+];
+
+const SORT_OPTIONS: { value: DropSort; label: string }[] = [
+  { value: 'eventDate', label: 'Event date — soonest' },
+  { value: 'newest', label: 'Drop time — newest' },
+  { value: 'oldest', label: 'Drop time — oldest' },
+  { value: 'event', label: 'Event name — A→Z' },
+  { value: 'seats', label: 'Most seats' },
+  { value: 'price', label: 'Highest price' },
+];
 
 const POLL_MS = 5000;
 const FLASH_MS = 12_000; // how long a freshly-arrived drop stays highlighted
@@ -53,6 +72,39 @@ function duration(seconds?: number | null): string {
   if (seconds < 60) return `${seconds}s`;
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
   return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+}
+
+/**
+ * Event date/time formatting is copied verbatim from
+ * app/dashboard/events/EventsTableServerSide.tsx so a show reads identically on
+ * both screens. Event_DateTime holds the venue's local wall-clock encoded as
+ * UTC, so timeZone:'UTC' is what makes it correct — dropping it renders the
+ * event in the viewer's timezone and shifts evening shows to the wrong day.
+ */
+function formatEventDate(dateString?: string | null) {
+  if (!dateString) return '—';
+  return new Date(dateString).toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC',
+  });
+}
+
+function formatEventTime(dateString?: string | null) {
+  if (!dateString) return '—';
+  return new Date(dateString).toLocaleTimeString('en-US', {
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: 'UTC',
+  });
+}
+
+/** The operator's local calendar day, which is what "today" means on screen. */
+function localCalendarDate(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
 function clockTime(iso?: string | null): string {
@@ -108,6 +160,8 @@ export default function DropsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'gone'>('all');
+  const [dateRange, setDateRange] = useState<DropDateRange>('today');
+  const [sortBy, setSortBy] = useState<DropSort>('eventDate');
   const [search, setSearch] = useState('');
   const [muted, setMuted] = useState(false);
   const [live, setLive] = useState(true);
@@ -138,6 +192,9 @@ export default function DropsPage() {
       const data = await getDrops({
         status: statusFilter,
         search: search.trim() || undefined,
+        dateRange,
+        localDate: localCalendarDate(),
+        sort: sortBy,
         limit: 150,
       });
       if (!data.success) throw new Error(data.error || 'Request failed');
@@ -168,7 +225,7 @@ export default function DropsPage() {
     } finally {
       setLoading(false);
     }
-  }, [statusFilter, search, alarm]);
+  }, [statusFilter, dateRange, sortBy, search, alarm]);
 
   useEffect(() => { void fetchDrops(); }, [fetchDrops]);
 
@@ -277,16 +334,42 @@ export default function DropsPage() {
       )}
 
       {/* Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
+        <StatTile
+          label="Today's events"
+          value={stats?.todayEvents ?? 0}
+          tone="blue"
+          sub={`${stats?.todayDrops ?? 0} drops`}
+        />
         <StatTile label="On sale now" value={stats?.active ?? 0} tone="green" sub={`${stats?.seatsActive ?? 0} seats`} />
         <StatTile label="New (15 min)" value={stats?.last15Min ?? 0} tone="amber" sub="drops detected" />
         <StatTile label="Unacknowledged" value={stats?.unseen ?? 0} tone={(stats?.unseen ?? 0) > 0 ? 'red' : 'slate'} sub="need review" />
         <StatTile label="Gone again" value={stats?.gone ?? 0} tone="slate" sub="seats withdrawn" />
         <StatTile label="Events affected" value={stats?.eventsAffected ?? 0} tone="slate" sub="with live drops" />
       </div>
+      <p className="-mt-3 text-xs text-slate-400">
+        Totals cover every tracked event. The list below follows the filters you pick.
+      </p>
 
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-3">
+        {/* Event date window — "today" is the operator's calendar day, matched
+            against Event_DateTime in UTC (venue local wall-clock). */}
+        <div className="flex rounded-lg overflow-hidden border border-slate-200">
+          {DATE_RANGES.map(({ value, label }) => (
+            <button
+              key={value}
+              onClick={() => setDateRange(value)}
+              className={`px-3 py-2 text-sm flex items-center gap-1.5 ${
+                dateRange === value ? 'bg-purple-600 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              {value === 'today' && <CalendarDays className="w-3.5 h-3.5" />}
+              {label}
+            </button>
+          ))}
+        </div>
+
         <div className="flex rounded-lg overflow-hidden border border-slate-200">
           {(['all', 'active', 'gone'] as const).map((s) => (
             <button
@@ -309,13 +392,28 @@ export default function DropsPage() {
             className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-purple-200"
           />
         </div>
+
+        <div className="flex items-center gap-2">
+          <ArrowUpDown className="w-4 h-4 text-slate-400" />
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as DropSort)}
+            className="py-2 pl-2 pr-8 text-sm rounded-lg border border-slate-200 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-purple-200"
+          >
+            {SORT_OPTIONS.map(({ value, label }) => (
+              <option key={value} value={value}>{label}</option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {/* Drops */}
       {drops.length === 0 ? (
         <div className="text-center py-16 text-slate-500 bg-white rounded-xl border border-slate-200">
           <Ticket className="w-8 h-8 mx-auto mb-3 text-slate-300" />
-          <p className="font-medium">No drops recorded yet</p>
+          <p className="font-medium">
+            No drops {dateRange === 'all' ? 'recorded yet' : `for ${DATE_RANGES.find((r) => r.value === dateRange)?.label.toLowerCase()}`}
+          </p>
           <p className="text-sm mt-1">
             A drop is written the moment new seat numbers appear on a tracked event.
           </p>
@@ -324,20 +422,52 @@ export default function DropsPage() {
         <div className="space-y-6">
           {grouped.map(([eventId, eventDrops]) => (
             <div key={eventId} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-              <div className="px-5 py-3 border-b border-slate-100 flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <h2 className="font-semibold text-slate-800">
-                    {eventDrops[0].event_name || eventId}
+              <div className="px-5 py-3 border-b border-slate-100 flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h2 className="font-semibold text-slate-800 flex items-center gap-2 flex-wrap">
+                    {eventDrops[0].event_url ? (
+                      <a
+                        href={eventDrops[0].event_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="hover:text-purple-700 hover:underline inline-flex items-center gap-1"
+                        title="Open on Ticketmaster"
+                      >
+                        {eventDrops[0].event_name || eventId}
+                        <ExternalLink className="w-3.5 h-3.5 shrink-0 opacity-60" />
+                      </a>
+                    ) : (
+                      <span>{eventDrops[0].event_name || eventId}</span>
+                    )}
+                    {eventDrops[0].eventMissing && (
+                      <span
+                        className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 uppercase"
+                        title="No matching row in the events collection — the event may have been deleted"
+                      >
+                        Event deleted
+                      </span>
+                    )}
                   </h2>
-                  <p className="text-xs text-slate-500">
+                  <p className="text-xs text-slate-500 mt-0.5">
                     {eventDrops[0].venue_name || 'Unknown venue'}
-                    {eventDrops[0].event_date && ` · ${new Date(eventDrops[0].event_date).toLocaleDateString()}`}
                     {` · ${eventId}`}
                   </p>
                 </div>
-                <span className="text-xs px-2 py-1 rounded-full bg-slate-100 text-slate-600">
-                  {eventDrops.length} drop{eventDrops.length === 1 ? '' : 's'}
-                </span>
+
+                <div className="flex items-center gap-4 shrink-0">
+                  {/* Same format as the Events table: en-US, UTC (venue local) */}
+                  <div className="text-right">
+                    <p className="text-sm font-medium text-slate-800">
+                      {formatEventDate(eventDrops[0].event_date)}
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      {formatEventTime(eventDrops[0].event_date)}
+                    </p>
+                  </div>
+                  <span className="text-xs px-2 py-1 rounded-full bg-slate-100 text-slate-600">
+                    {eventDrops.length} drop{eventDrops.length === 1 ? '' : 's'}
+                  </span>
+                </div>
               </div>
 
               <div className="divide-y divide-slate-100">
@@ -360,9 +490,10 @@ export default function DropsPage() {
 
 function StatTile({ label, value, sub, tone }: {
   label: string; value: number; sub: string;
-  tone: 'green' | 'amber' | 'red' | 'slate';
+  tone: 'green' | 'amber' | 'red' | 'slate' | 'blue';
 }) {
   const tones = {
+    blue: 'bg-blue-50 border-blue-200 text-blue-900',
     green: 'bg-green-50 border-green-200 text-green-900',
     amber: 'bg-amber-50 border-amber-200 text-amber-900',
     red: 'bg-red-50 border-red-200 text-red-900',
@@ -374,6 +505,26 @@ function StatTile({ label, value, sub, tone }: {
       <p className="text-2xl font-bold mt-1">{value}</p>
       <p className="text-xs opacity-60 mt-0.5">{sub}</p>
     </div>
+  );
+}
+
+/**
+ * One added seat. Green = still on sale, struck grey = withdrawn again, so a
+ * partially-pulled drop reads at a glance instead of needing the seat lists
+ * compared by eye.
+ */
+function SeatChip({ seat, withdrawn }: { seat: string; withdrawn: boolean }) {
+  return (
+    <span
+      title={withdrawn ? `Seat ${seat} — withdrawn` : `Seat ${seat} — on sale`}
+      className={`inline-flex items-center justify-center min-w-[2rem] px-2 py-1 rounded-md border text-sm font-bold tabular-nums ${
+        withdrawn
+          ? 'bg-slate-100 border-slate-200 text-slate-400 line-through'
+          : 'bg-green-50 border-green-300 text-green-800'
+      }`}
+    >
+      {seat}
+    </span>
   );
 }
 
@@ -406,9 +557,10 @@ function DropRow({ drop, flashing, onAck }: { drop: Drop; flashing: boolean; onA
         )}
       </div>
 
-      {/* Seats */}
-      <div className="flex-1 min-w-[240px]">
-        <div className="flex flex-wrap items-baseline gap-x-2">
+      {/* Seats — which exact seat numbers appeared is the point of this page,
+          so each one is its own chip and carries its own current state. */}
+      <div className="flex-1 min-w-[280px]">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <span className={`font-semibold ${gone ? 'text-slate-500' : 'text-slate-800'}`}>
             Section {drop.section} · Row {drop.row}
           </span>
@@ -418,14 +570,33 @@ function DropRow({ drop, flashing, onAck }: { drop: Drop; flashing: boolean; onA
             </span>
           )}
         </div>
-        <p className={`text-sm mt-1 ${gone ? 'text-slate-400 line-through' : 'text-slate-600'}`}>
-          <span className="font-medium">{drop.newSeatCount} seat{drop.newSeatCount === 1 ? '' : 's'}</span>
-          {' · '}#{drop.newSeats.join(', ')}
-          {drop.totalSeatsInRow ? ` · row now ${drop.totalSeatsInRow}` : ''}
+
+        <div className="flex flex-wrap items-center gap-2 mt-2">
+          <span
+            className={`text-xs font-bold px-2 py-1 rounded-md shrink-0 ${
+              gone ? 'bg-slate-200 text-slate-600' : 'bg-green-600 text-white'
+            }`}
+          >
+            +{drop.newSeatCount} seat{drop.newSeatCount === 1 ? '' : 's'}
+          </span>
+          <div className="flex flex-wrap gap-1.5">
+            {drop.newSeats.map((seat) => {
+              const withdrawn = gone || (drop.seatsRemaining ? !drop.seatsRemaining.includes(seat) : false);
+              return <SeatChip key={seat} seat={seat} withdrawn={withdrawn} />;
+            })}
+          </div>
+        </div>
+
+        <p className="text-xs text-slate-500 mt-1.5">
+          {drop.totalSeatsInRow != null
+            ? `Row went ${Math.max(0, drop.totalSeatsInRow - drop.newSeatCount)} → ${drop.totalSeatsInRow} seats`
+            : 'Row size unknown'}
+          {drop.listPrice != null && ` · $${drop.listPrice.toFixed(2)} per seat`}
         </p>
+
         {partiallyGone && (
-          <p className="text-xs text-amber-700 mt-1">
-            {drop.seatsRemaining!.length} of {drop.newSeatCount} still on sale (#{drop.seatsRemaining!.join(', ')})
+          <p className="text-xs text-amber-700 mt-1 font-medium">
+            {drop.newSeatCount - drop.seatsRemaining!.length} of {drop.newSeatCount} already withdrawn — struck seats are gone
           </p>
         )}
       </div>
@@ -435,7 +606,7 @@ function DropRow({ drop, flashing, onAck }: { drop: Drop; flashing: boolean; onA
         <p className={`font-semibold ${gone ? 'text-slate-400' : 'text-slate-800'}`}>
           {drop.listPrice != null ? `$${drop.listPrice.toFixed(2)}` : '—'}
         </p>
-        <p className="text-xs text-slate-400">list price</p>
+        <p className="text-xs text-slate-400">per seat</p>
       </div>
 
       {/* Lifecycle — the "appeared, then gone" story */}
