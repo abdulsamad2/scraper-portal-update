@@ -56,6 +56,18 @@ const seatDropSchema = new mongoose.Schema(
   }
 );
 
+// Mirrors the scraper: a gone drop expires DROP_GONE_RETENTION_MIN after its
+// seats vanished. Mongo's TTL monitor skips null fields, so active drops are
+// untouched. The scraper owns this index; it is declared here only to keep the
+// two schemas readable side by side.
+seatDropSchema.index(
+  { goneAt: 1 },
+  {
+    expireAfterSeconds: (parseInt(process.env.DROP_GONE_RETENTION_MIN, 10) || 15) * 60,
+    name: "gone_drop_ttl",
+  }
+);
+
 seatDropSchema.index({ eventId: 1, detectedAt: -1 });
 seatDropSchema.index({ eventId: 1, status: 1 });
 seatDropSchema.index({ seen: 1, detectedAt: -1 });
