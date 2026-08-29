@@ -517,7 +517,14 @@ export interface PostEventDeleteStats {
 export async function deleteDropsForPassedEvents(): Promise<{ deleted: number; events: number }> {
   await dbConnect();
   try {
-    const passed = await Event.distinct('Event_ID', { Event_DateTime: { $lt: new Date() } });
+    // Event_DateTime holds the venue's LOCAL wall-clock encoded as UTC, while
+    // Date.now() is real UTC. Comparing them directly calls a show "passed" by
+    // the venue's UTC offset — up to 7 hours early for a west-coast event,
+    // deleting its drops while it is still on sale. The margin covers every US
+    // zone; this is housekeeping, so erring late costs nothing.
+    const marginHours = Number(process.env.DROP_PASSED_MARGIN_HOURS ?? 12);
+    const cutoff = new Date(Date.now() - marginHours * 3600 * 1000);
+    const passed = await Event.distinct('Event_ID', { Event_DateTime: { $lt: cutoff } });
     if (passed.length === 0) return { deleted: 0, events: 0 };
 
     const res = await SeatDrop.deleteMany({ eventId: { $in: passed } });

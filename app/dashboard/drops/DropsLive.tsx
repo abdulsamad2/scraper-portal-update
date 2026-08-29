@@ -15,8 +15,20 @@ import { Bell, BellOff, Radio, RefreshCw, ArrowDown, X } from 'lucide-react';
  * Refreshing calls router.refresh(), which re-runs the Server Component and
  * streams new HTML in. No data fetching lives here.
  */
+/**
+ * Held outside the component on purpose.
+ *
+ * Browsers only allow audio after a user gesture, and that unlocked context
+ * cannot be recreated silently. This component remounts whenever the filters
+ * change (so a navigation is not mistaken for an arrival), and a context kept
+ * in a ref would be thrown away with it — leaving the alarm permanently mute
+ * for anyone who had touched a filter.
+ */
+let sharedAudioCtx: AudioContext | null = null;
+
 export default function DropsLive({
   newestDropId,
+  newestIsFresh,
   freshCount,
   unseenCount,
   resolvedDate,
@@ -24,6 +36,8 @@ export default function DropsLive({
 }: {
   /** Top row's id — changes when something new arrives. */
   newestDropId: string | null;
+  /** Whether that top row is itself just-landed, per the server. */
+  newestIsFresh: boolean;
   /** How many rows the server marked as just-landed. */
   freshCount: number;
   unseenCount: number;
@@ -38,7 +52,6 @@ export default function DropsLive({
   const [muted, setMuted] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
-  const ctxRef = useRef<AudioContext | null>(null);
   const lastNewest = useRef<string | null | undefined>(undefined);
   const [dismissed, setDismissed] = useState<string | null>(null);
 
@@ -49,13 +62,13 @@ export default function DropsLive({
   // Browsers block audio until the viewer has interacted with the page
   useEffect(() => {
     const unlock = () => {
-      if (!ctxRef.current) {
+      if (!sharedAudioCtx) {
         const Ctor =
           window.AudioContext ??
           (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-        if (Ctor) ctxRef.current = new Ctor();
+        if (Ctor) sharedAudioCtx = new Ctor();
       }
-      void ctxRef.current?.resume();
+      void sharedAudioCtx?.resume();
     };
     window.addEventListener('pointerdown', unlock, { once: true });
     window.addEventListener('keydown', unlock, { once: true });
@@ -66,7 +79,7 @@ export default function DropsLive({
   }, []);
 
   const alarm = useCallback(() => {
-    const ctx = ctxRef.current;
+    const ctx = sharedAudioCtx;
     if (!ctx) return;
     const beep = (freq: number, at: number) => {
       const osc = ctx.createOscillator();
@@ -119,10 +132,14 @@ export default function DropsLive({
     }
     if (newestDropId && newestDropId !== lastNewest.current) {
       lastNewest.current = newestDropId;
+      // Only an actually-fresh top row is an arrival. A row can reach the top
+      // for other reasons — one above it was acknowledged away, or its status
+      // changed — and none of those deserve an alarm.
+      if (!newestIsFresh) return;
       setDismissed(null);
       if (!muted) alarm();
     }
-  }, [newestDropId, muted, alarm]);
+  }, [newestDropId, newestIsFresh, muted, alarm]);
 
   const showBanner = freshCount > 0 && dismissed !== newestDropId;
 

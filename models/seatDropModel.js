@@ -48,6 +48,9 @@ const seatDropSchema = new mongoose.Schema(
 
     instanceId: { type: String },
     dropBase: { type: String, required: true },
+    // Which repeat of the same drop this is; the scraper derives the next from
+    // the highest still on record, not by counting.
+    generation: { type: Number, default: 0 },
     dropKey: { type: String, required: true },
   },
   {

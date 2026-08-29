@@ -135,8 +135,13 @@ export default async function DropsView({
         </div>
 
         <div className="flex flex-wrap gap-2">
+          {/* Keyed on the filters: changing one is a navigation, not an
+              arrival, and without a remount the top row simply changing would
+              ring the alarm. */}
           <DropsLive
+            key={`${range}|${status}|${sort}|${search}|${page}`}
             newestDropId={drops[0]?._id ?? null}
+            newestIsFresh={drops[0]?.isFresh ?? false}
             freshCount={freshCount}
             unseenCount={stats.unseen}
             resolvedDate={resolvedDate}
@@ -250,12 +255,28 @@ export default async function DropsView({
       {drops.length === 0 ? (
         <div className="text-center py-16 text-slate-500 bg-white rounded-xl border border-slate-200">
           <Ticket className="w-8 h-8 mx-auto mb-3 text-slate-300" />
-          <p className="font-medium">
-            No drops {range === 'all' ? 'recorded yet' : `for ${DATE_RANGES.find((r) => r.value === range)?.label.toLowerCase()}`}
-          </p>
-          <p className="text-sm mt-1">
-            A drop is written the moment new seat numbers appear on a tracked event.
-          </p>
+          {page > totalPages && total > 0 ? (
+            // An out-of-range page lands here too, and "no drops recorded" would
+            // be a lie — there are drops, just not this far in.
+            <>
+              <p className="font-medium">Page {page} is past the end</p>
+              <p className="text-sm mt-1">
+                There {total === 1 ? 'is' : 'are'} {total} drop{total === 1 ? '' : 's'} in this view.{' '}
+                <Link href={hrefWith({ page: '1' })} className="text-purple-700 underline">
+                  Back to page 1
+                </Link>
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="font-medium">
+                No drops {range === 'all' ? 'recorded yet' : `for ${DATE_RANGES.find((r) => r.value === range)?.label.toLowerCase()}`}
+              </p>
+              <p className="text-sm mt-1">
+                A drop is written the moment new seat numbers appear on a tracked event.
+              </p>
+            </>
+          )}
         </div>
       ) : (
         <div className="space-y-6">
