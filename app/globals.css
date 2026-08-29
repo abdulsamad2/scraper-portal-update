@@ -318,3 +318,28 @@ textarea:focus-visible,
   background: rgba(148, 163, 184, 0.5);
 }
 
+
+/* ── Seat Drops: marking a drop that just landed ──────────────────────────
+   Applied from DropsLive by id after a refresh brings in a drop that was not
+   on screen before. Written as plain CSS, not Tailwind utilities, because the
+   class is only ever added from JavaScript — Tailwind scans source text and
+   would purge utilities it never sees used. */
+@keyframes drop-arrived-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.55); }
+  70%  { box-shadow: 0 0 0 12px rgba(245, 158, 11, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0); }
+}
+
+.drop-arrived {
+  background-color: #fffbeb !important;      /* amber-50 */
+  box-shadow: inset 3px 0 0 #f59e0b;          /* amber-500 spine on the left */
+  animation: drop-arrived-pulse 1.6s ease-out 3;
+}
+
+.drop-arrived .drop-arrived-tag {
+  display: inline-flex !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .drop-arrived { animation: none; }
+}

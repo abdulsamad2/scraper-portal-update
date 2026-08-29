@@ -34,6 +34,7 @@ const DATE_RANGES: { value: DropDateRange; label: string }[] = [
 ];
 
 const SORT_OPTIONS: { value: DropSort; label: string }[] = [
+  { value: 'onSale', label: 'On sale first — newest' },
   { value: 'eventDate', label: 'Event date — soonest' },
   { value: 'newest', label: 'Drop time — newest' },
   { value: 'oldest', label: 'Drop time — oldest' },
@@ -85,7 +86,7 @@ export default async function DropsView({
   const sp = await searchParams;
 
   const range = (DATE_RANGES.find((r) => r.value === sp.range)?.value ?? 'last2') as DropDateRange;
-  const sort = (SORT_OPTIONS.find((s) => s.value === sp.sort)?.value ?? 'eventDate') as DropSort;
+  const sort = (SORT_OPTIONS.find((s) => s.value === sp.sort)?.value ?? 'onSale') as DropSort;
   const status = (STATUSES.find((s) => s.value === sp.status)?.value ?? 'all');
   const search = sp.q ?? '';
   const date = sp.date;
@@ -102,7 +103,7 @@ export default async function DropsView({
     const merged = { status, range, sort, q: search, date, page: undefined, ...patch };
     if (merged.status && merged.status !== 'all') next.set('status', merged.status);
     if (merged.range && merged.range !== 'last2') next.set('range', merged.range);
-    if (merged.sort && merged.sort !== 'eventDate') next.set('sort', merged.sort);
+    if (merged.sort && merged.sort !== 'onSale') next.set('sort', merged.sort);
     if (merged.q) next.set('q', merged.q);
     if (merged.date) next.set('date', merged.date);
     if (merged.page && merged.page !== '1') next.set('page', String(merged.page));
@@ -135,7 +136,7 @@ export default async function DropsView({
 
         <div className="flex flex-wrap gap-2">
           <DropsLive
-            latestDropId={drops[0]?._id ?? null}
+            dropIds={drops.map((d) => d._id)}
             unseenCount={stats.unseen}
             resolvedDate={resolvedDate}
           />
@@ -208,7 +209,7 @@ export default async function DropsView({
         <form method="GET" action="/dashboard/drops" className="relative flex-1 min-w-[220px] max-w-md">
           {status !== 'all' && <input type="hidden" name="status" value={status} />}
           {range !== 'last2' && <input type="hidden" name="range" value={range} />}
-          {sort !== 'eventDate' && <input type="hidden" name="sort" value={sort} />}
+          {sort !== 'onSale' && <input type="hidden" name="sort" value={sort} />}
           {date && <input type="hidden" name="date" value={date} />}
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
           <input
@@ -441,7 +442,11 @@ function DropRow({ drop }: { drop: DropRecord }) {
     !gone && (drop.seatsRemaining?.length ?? 0) > 0 && drop.seatsRemaining!.length < drop.newSeatCount;
 
   return (
-    <div className={`px-5 py-4 flex flex-wrap items-start gap-4 ${gone ? 'bg-slate-50/60' : 'bg-white'}`}>
+    <div
+      id={`drop-${drop._id}`}
+      data-drop-id={drop._id}
+      className={`px-5 py-4 flex flex-wrap items-start gap-4 transition-colors ${gone ? 'bg-slate-50/60' : 'bg-white'}`}
+    >
       <div className="w-28 shrink-0">
         {gone ? (
           <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded-full bg-slate-200 text-slate-700">
@@ -452,6 +457,15 @@ function DropRow({ drop }: { drop: DropRecord }) {
             <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" /> ON SALE
           </span>
         )}
+        {/* Revealed by .drop-arrived when this row lands during a refresh —
+            "new" as in "appeared while you were looking", which is the thing
+            the unacknowledged flag cannot tell you. */}
+        <span
+          className="drop-arrived-tag mt-1.5 items-center gap-1 text-[10px] font-bold text-amber-700 uppercase tracking-wide"
+          style={{ display: 'none' }}
+        >
+          Just in
+        </span>
         {!drop.seen && (
           <span className="block mt-1.5 text-[10px] font-semibold text-red-600 uppercase tracking-wide">New</span>
         )}

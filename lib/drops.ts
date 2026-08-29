@@ -29,7 +29,7 @@ export const IMMATURE_MATCH = {
   status: 'active' as const,
   cyclesSeen: { $lt: MATURE_CYCLES },
 };
-export type DropSort = 'newest' | 'oldest' | 'eventDate' | 'event' | 'seats' | 'price';
+export type DropSort = 'onSale' | 'newest' | 'oldest' | 'eventDate' | 'event' | 'seats' | 'price';
 
 export interface DropFilters {
   status?: 'all' | 'active' | 'gone';
@@ -124,6 +124,10 @@ function windowFor(range: DropDateRange, date: string) {
  * the denormalized fields at all.
  */
 const SORTS: Record<DropSort, Record<string, 1 | -1>> = {
+  // Default. 'active' sorts before 'gone' alphabetically, so seats you can
+  // still act on come first and the newest of those is at the very top —
+  // which is where a drop that just landed appears.
+  onSale: { status: 1, detectedAt: -1 },
   newest: { detectedAt: -1 },
   oldest: { detectedAt: 1 },
   eventDate: { joinedDate: 1, detectedAt: -1 },
