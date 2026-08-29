@@ -15,16 +15,17 @@ import { Bell, BellOff, Radio, RefreshCw, ArrowDown, X } from 'lucide-react';
  * Refreshing calls router.refresh(), which re-runs the Server Component and
  * streams new HTML in. No data fetching lives here.
  */
-const ARRIVAL_HIGHLIGHT_MS = 30_000;
-
 export default function DropsLive({
-  dropIds,
+  newestDropId,
+  freshCount,
   unseenCount,
   resolvedDate,
   pollMs = 5000,
 }: {
-  /** Drop ids currently rendered, in display order. */
-  dropIds: string[];
+  /** Top row's id — changes when something new arrives. */
+  newestDropId: string | null;
+  /** How many rows the server marked as just-landed. */
+  freshCount: number;
   unseenCount: number;
   resolvedDate: string;
   pollMs?: number;
@@ -38,8 +39,8 @@ export default function DropsLive({
   const [refreshing, setRefreshing] = useState(false);
 
   const ctxRef = useRef<AudioContext | null>(null);
-  const known = useRef<Set<string> | null>(null);
-  const [arrived, setArrived] = useState<string[]>([]);
+  const lastNewest = useRef<string | null | undefined>(undefined);
+  const [dismissed, setDismissed] = useState<string | null>(null);
 
   useEffect(() => {
     setMuted(localStorage.getItem('drops:muted') === '1');
@@ -100,66 +101,74 @@ export default function DropsLive({
   }, [resolvedDate, searchParams, pathname, router]);
 
   /**
-   * Point at what actually arrived.
+   * Ring when the top of the list changes.
    *
-   * A chime alone tells you something happened but not what or where, and the
-   * red "new" flag marks everything unacknowledged, so it cannot distinguish a
-   * drop that landed seconds ago from one sitting there for an hour. So each
-   * refresh is diffed against the ids already on screen: whatever is genuinely
-   * new gets marked in place and counted in a banner that scrolls you to it.
+   * Which rows are highlighted is the server's call — it marks anything
+   * detected inside the fresh window, and re-renders that marking on every
+   * refresh. A class the browser pokes onto a row does not survive: React
+   * rewrites className on the next render and the highlight vanishes seconds
+   * after it appears, which is exactly how the first version misbehaved.
    *
-   * The first render only establishes the baseline — opening the page never
-   * fires the alarm or lights up the whole list.
+   * All this needs to know is whether the newest row changed — one string
+   * rather than every id on the page.
    */
   useEffect(() => {
-    if (known.current === null) {
-      known.current = new Set(dropIds);
+    if (lastNewest.current === undefined) {
+      lastNewest.current = newestDropId; // baseline: opening the page is silent
       return;
     }
-    const fresh = dropIds.filter((id) => !known.current!.has(id));
-    if (fresh.length === 0) return;
+    if (newestDropId && newestDropId !== lastNewest.current) {
+      lastNewest.current = newestDropId;
+      setDismissed(null);
+      if (!muted) alarm();
+    }
+  }, [newestDropId, muted, alarm]);
 
-    fresh.forEach((id) => known.current!.add(id));
-    setArrived((prev) => [...fresh, ...prev.filter((id) => !fresh.includes(id))]);
-    if (!muted) alarm();
-  }, [dropIds, muted, alarm]);
-
-  // Mark the rows themselves. The server renders the markup; this only adds a
-  // class to rows that were not there a moment ago, and takes it off again.
-  useEffect(() => {
-    if (arrived.length === 0) return;
-    const marked = arrived
-      .map((id) => document.getElementById(`drop-${id}`))
-      .filter((el): el is HTMLElement => el !== null);
-    marked.forEach((el) => el.classList.add('drop-arrived'));
-
-    const timer = setTimeout(() => {
-      marked.forEach((el) => el.classList.remove('drop-arrived'));
-      setArrived((prev) => prev.filter((id) => !arrived.includes(id)));
-    }, ARRIVAL_HIGHLIGHT_MS);
-
-    return () => {
-      clearTimeout(timer);
-      marked.forEach((el) => el.classList.remove('drop-arrived'));
-    };
-  }, [arrived]);
+  const showBanner = freshCount > 0 && dismissed !== newestDropId;
 
   const jumpToNewest = () => {
-    const el = document.getElementById(`drop-${arrived[0]}`);
-    if (!el) return;
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const el = document.querySelector('[data-fresh="1"]');
+    el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   };
-
-  const dismissArrivals = () => setArrived([]);
 
   useEffect(() => {
     document.title = unseenCount > 0 ? `(${unseenCount}) Drops — Scraper Portal` : 'Drops — Scraper Portal';
   }, [unseenCount]);
 
+  /**
+   * Poll only while someone is actually looking.
+   *
+   * Each refresh re-renders the page on the server and streams it back, so a
+   * forgotten background tab was costing a full render every few seconds
+   * indefinitely. Hidden tabs stop; showing one refreshes immediately, so it is
+   * never stale when you return to it.
+   */
   useEffect(() => {
     if (!live) return;
-    const id = setInterval(() => router.refresh(), pollMs);
-    return () => clearInterval(id);
+
+    let id: ReturnType<typeof setInterval> | null = null;
+    const start = () => {
+      if (id === null) id = setInterval(() => router.refresh(), pollMs);
+    };
+    const stop = () => {
+      if (id !== null) { clearInterval(id); id = null; }
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        router.refresh(); // catch up on whatever landed while hidden
+        start();
+      } else {
+        stop();
+      }
+    };
+
+    if (document.visibilityState === 'visible') start();
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      stop();
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, [live, pollMs, router]);
 
   const manualRefresh = () => {
@@ -179,14 +188,14 @@ export default function DropsLive({
     <>
       {/* Sits above everything so it is found whether you are at the top of the
           page or scrolled deep into a long list. */}
-      {arrived.length > 0 && (
+      {showBanner && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 pl-4 pr-2 py-2.5 rounded-full bg-amber-500 text-white shadow-lg shadow-amber-500/30">
           <span className="relative flex h-2.5 w-2.5">
             <span className="absolute inline-flex h-full w-full rounded-full bg-white opacity-75 animate-ping" />
             <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-white" />
           </span>
           <span className="text-sm font-semibold">
-            {arrived.length} new drop{arrived.length === 1 ? '' : 's'} just landed
+            {freshCount} new drop{freshCount === 1 ? '' : 's'} just landed
           </span>
           <button
             onClick={jumpToNewest}
@@ -195,7 +204,7 @@ export default function DropsLive({
             <ArrowDown className="w-3.5 h-3.5" /> Show me
           </button>
           <button
-            onClick={dismissArrivals}
+            onClick={() => setDismissed(newestDropId)}
             aria-label="Dismiss"
             className="p-1 rounded-full hover:bg-amber-600"
           >

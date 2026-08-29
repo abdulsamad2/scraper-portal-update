@@ -1,3 +1,5 @@
+import type { PipelineStage } from 'mongoose';
+
 import dbConnect from '@/lib/dbConnect';
 import { SeatDrop } from '@/models/seatDropModel';
 import { Event } from '@/models/eventModel';
@@ -23,6 +25,15 @@ export type DropDateRange = 'all' | 'last2' | 'today' | 'tomorrow' | 'week' | 'p
  * matures it is ordinary inventory — it leaves this page and joins the CSV.
  */
 export const MATURE_CYCLES = Number(process.env.DROP_MATURE_CYCLES ?? 10);
+
+/**
+ * How long a drop counts as "just landed".
+ *
+ * Freshness is decided on the server from detectedAt, not tracked in the
+ * browser: the page re-renders every few seconds, and any class the client
+ * pokes onto a row is wiped the moment React re-renders it.
+ */
+export const FRESH_WINDOW_MS = Number(process.env.DROP_FRESH_WINDOW_SEC ?? 60) * 1000;
 
 /** A drop still under observation: on sale, but not yet proven. */
 export const IMMATURE_MATCH = {
@@ -77,6 +88,8 @@ export interface DropRecord {
   status: 'active' | 'gone';
   seatsRemaining?: string[];
   cyclesSeen?: number;
+  /** Detected within FRESH_WINDOW_MS — "just landed", decided server-side. */
+  isFresh?: boolean;
   missCount?: number;
   goneAt?: string | null;
   secondsAlive?: number | null;
@@ -156,29 +169,27 @@ export async function fetchDrops(filters: DropFilters = {}) {
   const pageSize = Math.min(Math.max(1, filters.pageSize ?? 50), 200);
   const page = Math.max(1, filters.page ?? 1);
 
-  const query: Record<string, unknown> = {};
+  // Base set: matured drops are gone from the collection entirely, gone ones
+  // expire on their own TTL. This is only the status filter the viewer picked.
+  const baseMatch: Record<string, unknown> = {
+    $or: [{ status: 'gone' }, IMMATURE_MATCH],
+  };
+  if (status === 'active' || status === 'gone') baseMatch.status = status;
 
-  // Matured drops have graduated to ordinary inventory: off this page, and in
-  // the CSV. Gone drops stay as history — they are not inventory any more.
-  query.$and = [
-    { $or: [{ status: 'gone' }, IMMATURE_MATCH] },
-  ];
+  const eventsCollection = Event.collection.name;
 
-  if (status === 'active' || status === 'gone') query.status = status;
-
+  // Date window and search both run against the JOINED event, so neither needs
+  // a preliminary Event.distinct feeding a huge $in — those were two extra
+  // round trips per refresh, and the $in grew with the roster.
+  const postJoin: Record<string, unknown>[] = [];
+  const dateWindow = windowFor(dateRange, date);
+  if (dateWindow) postJoin.push({ joinedDate: dateWindow });
   if (search) {
     const rx = { $regex: escapeRegex(search), $options: 'i' };
-    // Names are displayed from the Event join, so search has to resolve through
-    // Event too — matching only the drop's denormalized copy misses anything
-    // renamed since, or never denormalized at all.
-    const matchedEventIds = await Event.distinct('Event_ID', {
-      $or: [{ Event_Name: rx }, { Venue: rx }],
-    });
-    (query.$and as Record<string, unknown>[]).push({
+    postJoin.push({
       $or: [
-        // Names come from Event, so they are matched there — the drop itself
-        // only carries its own section, row and event id.
-        { eventId: { $in: matchedEventIds } },
+        { joinedName: rx },
+        { joinedVenue: rx },
         { eventId: rx },
         { section: rx },
         { row: rx },
@@ -186,21 +197,16 @@ export async function fetchDrops(filters: DropFilters = {}) {
     });
   }
 
-  const dateWindow = windowFor(dateRange, date);
-  if (dateWindow) {
-    const ids = await Event.distinct('Event_ID', { Event_DateTime: dateWindow });
-    // ANDed with any search $or above, so both constraints apply
-    query.eventId = { $in: ids };
-  }
-
+  const freshCutoff = new Date(Date.now() - FRESH_WINDOW_MS);
   const fifteenMinAgo = new Date(Date.now() - 15 * 60_000);
 
-  // One aggregation: join Event, sort on the joined fields, then page. Joining
-  // before the sort is what makes "event date" and "event name" order by what
-  // is actually on screen.
-  const eventsCollection = Event.collection.name;
-  const pipeline = [
-    { $match: query },
+  /**
+   * One aggregation for the page: join, filter, then $facet out the rows, the
+   * total, the events represented and how many just landed. Previously that was
+   * five separate round trips, repeated every poll by every open tab.
+   */
+  const pipeline: PipelineStage[] = [
+    { $match: baseMatch },
     {
       $lookup: {
         from: eventsCollection,
@@ -210,52 +216,86 @@ export async function fetchDrops(filters: DropFilters = {}) {
       },
     },
     { $addFields: { _event: { $first: '$_event' } } },
-    // Sort keys come from the joined Event, which is also what is displayed —
-    // so the order can never disagree with what is on screen.
-    { $addFields: { joinedDate: '$_event.Event_DateTime', joinedName: '$_event.Event_Name' } },
-    { $sort: SORTS[sort] ?? SORTS.newest },
-    { $skip: (page - 1) * pageSize },
-    { $limit: pageSize },
+    {
+      $addFields: {
+        joinedDate: '$_event.Event_DateTime',
+        joinedName: '$_event.Event_Name',
+        joinedVenue: '$_event.Venue',
+      },
+    },
+    ...(postJoin.length ? [{ $match: { $and: postJoin } } as PipelineStage] : []),
+    {
+      $facet: {
+        rows: [
+          { $sort: SORTS[sort] ?? SORTS.onSale },
+          { $skip: (page - 1) * pageSize },
+          { $limit: pageSize },
+        ],
+        total: [{ $count: 'n' }],
+        events: [{ $group: { _id: '$eventId' } }, { $count: 'n' }],
+        fresh: [{ $match: { detectedAt: { $gte: freshCutoff } } }, { $count: 'n' }],
+      },
+    },
   ];
 
-  const [drops, total, counts, last15Min, eventsAffected, windowEventIds] = await Promise.all([
+  const [faceted, counts] = await Promise.all([
     SeatDrop.aggregate(pipeline).allowDiskUse(true),
-    SeatDrop.countDocuments(query),
+    // Portfolio-wide counters for the tiles — deliberately unfiltered, which is
+    // what the caption under them says.
     SeatDrop.aggregate([
       { $match: { $or: [{ status: 'gone' }, IMMATURE_MATCH] } },
       {
-        $group: {
-          _id: null,
-          total: { $sum: 1 },
-          active: { $sum: { $cond: [{ $eq: ['$status', 'active'] }, 1, 0] } },
-          gone: { $sum: { $cond: [{ $eq: ['$status', 'gone'] }, 1, 0] } },
-          unseen: { $sum: { $cond: [{ $eq: ['$seen', false] }, 1, 0] } },
-          seatsActive: { $sum: { $cond: [{ $eq: ['$status', 'active'] }, '$newSeatCount', 0] } },
+        $facet: {
+          totals: [
+            {
+              $group: {
+                _id: null,
+                total: { $sum: 1 },
+                active: { $sum: { $cond: [{ $eq: ['$status', 'active'] }, 1, 0] } },
+                gone: { $sum: { $cond: [{ $eq: ['$status', 'gone'] }, 1, 0] } },
+                unseen: { $sum: { $cond: [{ $eq: ['$seen', false] }, 1, 0] } },
+                seatsActive: {
+                  $sum: { $cond: [{ $eq: ['$status', 'active'] }, '$newSeatCount', 0] },
+                },
+              },
+            },
+          ],
+          last15: [{ $match: { detectedAt: { $gte: fifteenMinAgo } } }, { $count: 'n' }],
+          affected: [
+            { $match: { status: 'active' } },
+            { $group: { _id: '$eventId' } },
+            { $count: 'n' },
+          ],
         },
       },
     ]),
-    SeatDrop.countDocuments({ detectedAt: { $gte: fifteenMinAgo } }),
-    SeatDrop.distinct('eventId', { ...IMMATURE_MATCH }),
-    Event.distinct('Event_ID', { Event_DateTime: windowFor(dateRange === 'all' ? 'last2' : dateRange, date) ?? {} }),
   ]);
 
-  const windowDrops = windowEventIds.length
-    ? await SeatDrop.countDocuments({
-        eventId: { $in: windowEventIds },
-        $or: [{ status: 'gone' }, IMMATURE_MATCH],
-      })
-    : 0;
+  const facet = faceted[0] ?? {};
+  const drops = (facet.rows ?? []) as unknown[];
+  const total = facet.total?.[0]?.n ?? 0;
+  const windowEvents = facet.events?.[0]?.n ?? 0;
+  const freshCount = facet.fresh?.[0]?.n ?? 0;
+
+  const statFacet = counts[0] ?? {};
+  const c = statFacet.totals?.[0] ?? { total: 0, active: 0, gone: 0, unseen: 0, seatsActive: 0 };
+  const last15Min = statFacet.last15?.[0]?.n ?? 0;
+  const eventsAffected = statFacet.affected?.[0]?.n ?? 0;
+  const windowDrops = total;
 
   const list = drops as unknown as Array<DropRecord & {
     _event?: { URL?: string; Event_DateTime?: string; Event_Name?: string; Venue?: string };
     joinedDate?: unknown;
     joinedName?: unknown;
+    joinedVenue?: unknown;
   }>;
+
+  const freshFrom = Date.now() - FRESH_WINDOW_MS;
 
   const enriched = list.map((d) => {
     const ev = d._event;
-    const { _event, joinedDate, joinedName, ...rest } = d;
-    void _event; void joinedDate; void joinedName; // join scaffolding, not payload
+    const { _event, joinedDate, joinedName, joinedVenue, ...rest } = d;
+    void _event; void joinedDate; void joinedName; void joinedVenue; // join scaffolding
     return {
       ...rest,
       event_url: ev?.URL ?? null,
@@ -265,10 +305,11 @@ export async function fetchDrops(filters: DropFilters = {}) {
       event_name: ev?.Event_Name ?? (ev ? null : d.event_name ?? null),
       venue_name: ev?.Venue ?? null,
       eventMissing: !ev,
+      // Decided here, so it survives every re-render — the client cannot hold
+      // a highlight of its own across a refresh.
+      isFresh: new Date(d.detectedAt).getTime() >= freshFrom,
     };
   });
-
-  const c = counts[0] ?? { total: 0, active: 0, gone: 0, unseen: 0, seatsActive: 0 };
 
   const stats: DropStats = {
     total: c.total ?? 0,
@@ -277,9 +318,9 @@ export async function fetchDrops(filters: DropFilters = {}) {
     unseen: c.unseen ?? 0,
     seatsActive: c.seatsActive ?? 0,
     last15Min,
-    eventsAffected: eventsAffected.length,
+    eventsAffected,
     windowDrops,
-    windowEvents: windowEventIds.length,
+    windowEvents,
   };
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -291,6 +332,8 @@ export async function fetchDrops(filters: DropFilters = {}) {
     pageSize,
     total,
     totalPages,
+    /** How many of the matched drops landed inside the fresh window. */
+    freshCount,
     drops: JSON.parse(JSON.stringify(enriched)) as DropRecord[],
   };
 }

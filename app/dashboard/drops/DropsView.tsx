@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import {
-  Zap, CheckCheck, Search, Clock, Ticket, XCircle, ExternalLink, ArrowUpDown, CalendarDays,
+  Zap, CheckCheck, Search, Ticket, ExternalLink, ArrowUpDown, CalendarDays,
   ChevronLeft, ChevronRight,
 } from 'lucide-react';
 
@@ -92,8 +92,8 @@ export default async function DropsView({
   const date = sp.date;
   const page = Math.max(1, parseInt(sp.page ?? '1', 10) || 1);
 
-  const { stats, drops, resolvedDate, total, totalPages, pageSize } = await fetchDrops({
-    status, search, dateRange: range, sort, date, page, pageSize: 50,
+  const { stats, drops, resolvedDate, total, totalPages, pageSize, freshCount } = await fetchDrops({
+    status, search, dateRange: range, sort, date, page, pageSize: 25,
   });
 
   /** Build a link that changes one filter and preserves the rest. */
@@ -136,7 +136,8 @@ export default async function DropsView({
 
         <div className="flex flex-wrap gap-2">
           <DropsLive
-            dropIds={drops.map((d) => d._id)}
+            newestDropId={drops[0]?._id ?? null}
+            freshCount={freshCount}
             unseenCount={stats.unseen}
             resolvedDate={resolvedDate}
           />
@@ -445,27 +446,32 @@ function DropRow({ drop }: { drop: DropRecord }) {
     <div
       id={`drop-${drop._id}`}
       data-drop-id={drop._id}
-      className={`px-5 py-4 flex flex-wrap items-start gap-4 transition-colors ${gone ? 'bg-slate-50/60' : 'bg-white'}`}
+      data-fresh={drop.isFresh ? '1' : undefined}
+      className={`px-5 py-4 flex flex-wrap items-start gap-4 transition-colors ${
+        drop.isFresh
+          ? 'bg-amber-50 shadow-[inset_3px_0_0_#f59e0b] drop-arrived'
+          : gone
+            ? 'bg-slate-50/60'
+            : 'bg-white'
+      }`}
     >
       <div className="w-28 shrink-0">
         {gone ? (
           <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded-full bg-slate-200 text-slate-700">
-            <XCircle className="w-3 h-3" /> GONE
+            GONE
           </span>
         ) : (
           <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded-full bg-green-100 text-green-800">
             <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" /> ON SALE
           </span>
         )}
-        {/* Revealed by .drop-arrived when this row lands during a refresh —
-            "new" as in "appeared while you were looking", which is the thing
-            the unacknowledged flag cannot tell you. */}
-        <span
-          className="drop-arrived-tag mt-1.5 items-center gap-1 text-[10px] font-bold text-amber-700 uppercase tracking-wide"
-          style={{ display: 'none' }}
-        >
-          Just in
-        </span>
+        {/* "New" as in "landed moments ago", which is what the unacknowledged
+            flag cannot tell you — that one marks anything not yet clicked. */}
+        {drop.isFresh && (
+          <span className="block mt-1.5 text-[10px] font-bold text-amber-700 uppercase tracking-wide">
+            Just in
+          </span>
+        )}
         {!drop.seen && (
           <span className="block mt-1.5 text-[10px] font-semibold text-red-600 uppercase tracking-wide">New</span>
         )}
@@ -522,10 +528,9 @@ function DropRow({ drop }: { drop: DropRecord }) {
       </div>
 
       <div className="w-64 shrink-0 text-xs">
-        <p className="text-slate-600 flex items-center gap-1">
-          <Clock className="w-3 h-3 text-slate-400" />
-          Appeared {clockTime(drop.detectedAt)}
-        </p>
+        {/* No icon here on purpose: one decorative SVG per row is ~50 inline
+            <svg> trees in every refresh payload, for no information. */}
+        <p className="text-slate-600">Appeared {clockTime(drop.detectedAt)}</p>
         {gone ? (
           <>
             <p className="text-slate-500 mt-1">Gone {clockTime(drop.goneAt)}</p>
@@ -563,9 +568,9 @@ function DropRow({ drop }: { drop: DropRecord }) {
             <input type="hidden" name="id" value={drop._id} />
             <button
               type="submit"
-              className="px-2.5 py-1.5 text-xs rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-200 flex items-center gap-1"
+              className="px-2.5 py-1.5 text-xs rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-200"
             >
-              <CheckCheck className="w-3 h-3" /> Seen
+              Seen
             </button>
           </form>
         )}
