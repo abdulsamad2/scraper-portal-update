@@ -23,6 +23,7 @@
 import dbConnect from '@/lib/dbConnect';
 import { Event } from '@/models/eventModel';
 import { ConsecutiveGroup } from '@/models/seatModel';
+import { SeatDrop } from '@/models/seatDropModel';
 import { deleteConsecutiveGroupsByEventIds } from './seatActions';
 import { createErrorLog } from './errorLogActions';
 import { shouldStopEvent, shouldStopEventAsync, detectTimezoneFromVenue, detectTimezoneFromVenueAsync, getTimezoneAbbr, getCurrentTimeInTimezone } from '@/lib/timezone';
@@ -502,6 +503,34 @@ export interface PostEventDeleteStats {
   errors: string[];
 }
 
+/**
+ * Delete seat drops for events that have already happened.
+ *
+ * Separate from deletePassedEvents because that one is gated behind the
+ * post-event hard-delete toggle, and a drop for a show that already started is
+ * dead weight whether or not the event row itself is being removed: nobody can
+ * act on it, and the scraper has stopped touching it so it will never mature.
+ *
+ * Event_DateTime is the venue's local wall-clock encoded as UTC, so "already
+ * started" is measured against the same clock the rest of the app uses.
+ */
+export async function deleteDropsForPassedEvents(): Promise<{ deleted: number; events: number }> {
+  await dbConnect();
+  try {
+    const passed = await Event.distinct('Event_ID', { Event_DateTime: { $lt: new Date() } });
+    if (passed.length === 0) return { deleted: 0, events: 0 };
+
+    const res = await SeatDrop.deleteMany({ eventId: { $in: passed } });
+    if (res.deletedCount > 0) {
+      console.log(`[Drops] Deleted ${res.deletedCount} drop(s) for ${passed.length} passed event(s)`);
+    }
+    return { deleted: res.deletedCount ?? 0, events: passed.length };
+  } catch (error) {
+    console.error('[Drops] Failed to clean up drops for passed events:', error);
+    return { deleted: 0, events: 0 };
+  }
+}
+
 export async function deletePassedEvents(hoursAfter: number = 12): Promise<PostEventDeleteStats> {
   await dbConnect();
 
@@ -535,6 +564,19 @@ export async function deletePassedEvents(hoursAfter: number = 12): Promise<PostE
       console.log(`Post-event cleanup: Deleted ${cgResult.deletedCount} consecutive groups`);
     } catch (err) {
       const msg = `Failed to delete consecutive groups: ${(err as Error).message}`;
+      stats.errors.push(msg);
+      console.error('Post-event cleanup:', msg);
+    }
+
+    // 1b. Delete seat drops for those events. A drop only describes inventory
+    // that is about to be sold; once the event is gone it describes nothing.
+    try {
+      const dropResult = await SeatDrop.deleteMany({ eventId: { $in: eventIds } });
+      if (dropResult.deletedCount > 0) {
+        console.log(`Post-event cleanup: Deleted ${dropResult.deletedCount} seat drops`);
+      }
+    } catch (err) {
+      const msg = `Failed to delete seat drops: ${(err as Error).message}`;
       stats.errors.push(msg);
       console.error('Post-event cleanup:', msg);
     }

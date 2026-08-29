@@ -52,8 +52,6 @@ export interface DropStats {
   eventsAffected: number;
   windowDrops: number;
   windowEvents: number;
-  /** Graduated to ordinary inventory — off this page, in the CSV. */
-  matured: number;
 }
 
 export interface DropRecord {
@@ -216,7 +214,7 @@ export async function fetchDrops(filters: DropFilters = {}) {
     { $limit: pageSize },
   ];
 
-  const [drops, total, counts, last15Min, eventsAffected, windowEventIds, matured] = await Promise.all([
+  const [drops, total, counts, last15Min, eventsAffected, windowEventIds] = await Promise.all([
     SeatDrop.aggregate(pipeline).allowDiskUse(true),
     SeatDrop.countDocuments(query),
     SeatDrop.aggregate([
@@ -235,7 +233,6 @@ export async function fetchDrops(filters: DropFilters = {}) {
     SeatDrop.countDocuments({ detectedAt: { $gte: fifteenMinAgo } }),
     SeatDrop.distinct('eventId', { ...IMMATURE_MATCH }),
     Event.distinct('Event_ID', { Event_DateTime: windowFor(dateRange === 'all' ? 'last2' : dateRange, date) ?? {} }),
-    SeatDrop.countDocuments({ status: 'active', cyclesSeen: { $gte: MATURE_CYCLES } }),
   ]);
 
   const windowDrops = windowEventIds.length
@@ -279,7 +276,6 @@ export async function fetchDrops(filters: DropFilters = {}) {
     eventsAffected: eventsAffected.length,
     windowDrops,
     windowEvents: windowEventIds.length,
-    matured,
   };
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));

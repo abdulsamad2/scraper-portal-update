@@ -163,13 +163,14 @@ export default async function DropsView({
         <StatTile label="New (15 min)" value={stats.last15Min} tone="amber" sub="drops detected" />
         <StatTile label="Unacknowledged" value={stats.unseen} tone={stats.unseen > 0 ? 'red' : 'slate'} sub="need review" />
         <StatTile label="Gone again" value={stats.gone} tone="slate" sub="seats withdrawn" />
-        <StatTile label="Matured" value={stats.matured} tone="slate" sub={`${MATURE_CYCLES}+ cycles · in CSV`} />
+        <StatTile label="Events affected" value={stats.eventsAffected} tone="slate" sub="with live drops" />
       </div>
       <p className="-mt-3 text-xs text-slate-400">
         Totals cover every tracked event. The list below follows the filters you pick.
         {' '}Today resolves to {formatEventDate(`${resolvedDate}T12:00:00.000Z`)}.
-        {' '}Drops are held out of the CSV until they survive {MATURE_CYCLES} scrape cycles,
-        then graduate to ordinary inventory and leave this page.
+        {' '}Drops are held out of the CSV until they survive {MATURE_CYCLES} scrape cycles;
+        they are then ordinary inventory and the record is deleted. Drops for events
+        that have already started are removed too.
       </p>
 
       {/* Filters — links, resolved on the server */}

@@ -37,7 +37,7 @@ import { AutoDeleteSettings } from '../models/autoDeleteModel';
 import { ExclusionRules } from '../models/exclusionRulesModel';
 import SyncService from '../lib/syncService';
 import { createErrorLog } from './errorLogActions';
-import { deleteExpiredEvents, getExpiredEventsStats, deletePassedEvents } from './autoDeleteActions';
+import { deleteExpiredEvents, getExpiredEventsStats, deletePassedEvents, deleteDropsForPassedEvents } from './autoDeleteActions';
 import { deleteConsecutiveGroupsByEventIds } from './seatActions';
 import { detectTimezoneFromVenueAsync, resolveVenueTimezonesBulk, getCurrentTimeInTimezone } from '../lib/timezone';
 import { EvenueEvent } from '../models/evenueEventModel';
@@ -230,12 +230,25 @@ interface SectionRowExclusion {
  * 4" — the line that exists now is the six-seat one. Withholding the line is
  * the conservative reading and the only one that maps onto how inventory sells.
  */
+const QUARANTINE_MAX_AGE_MIN = Number(process.env.DROP_QUARANTINE_MAX_AGE_MIN ?? 120);
+
 async function buildDropQuarantineFilter(mappingIds: string[]): Promise<ExclusionFilter> {
   if (mappingIds.length === 0) return ALLOW_ALL;
 
   try {
+    // A drop only quarantines while the scraper is still confirming it. If an
+    // event stops being scraped its drops freeze mid-count and would withhold
+    // that listing from every future export — so anything not seen recently is
+    // ignored here. Failing open costs one early export; failing closed would
+    // hide inventory indefinitely with nothing on screen to explain it.
+    const staleCutoff = new Date(Date.now() - QUARANTINE_MAX_AGE_MIN * 60_000);
+
     const drops = await SeatDrop.find(
-      { status: 'active', cyclesSeen: { $lt: MATURE_CYCLES } },
+      {
+        status: 'active',
+        cyclesSeen: { $lt: MATURE_CYCLES },
+        $or: [{ lastSeenAt: { $gte: staleCutoff } }, { detectedAt: { $gte: staleCutoff } }],
+      },
       { eventId: 1, section: 1, row: 1, newSeats: 1, _id: 0 }
     ).lean() as unknown as Array<{
       eventId?: string; section?: string; row?: string; newSeats?: string[];
@@ -1560,6 +1573,14 @@ export async function runAutoDelete() {
 
     const stats = await deleteExpiredEvents(settings.stopBeforeMinutes ?? 120, settings.lowSeatThreshold ?? 20);
 
+    // Drops for events that have already started are dead weight regardless of
+    // whether the event row itself is being removed, so this is not gated on
+    // the hard-delete toggle below.
+    const passedDrops = await deleteDropsForPassedEvents();
+    const dropMsg = passedDrops.deleted > 0
+      ? ` Removed ${passedDrops.deleted} seat drop${passedDrops.deleted > 1 ? 's' : ''} for passed events.`
+      : '';
+
     // Post-event hard-delete: permanently remove events N hours after they pass
     let postDeleteMsg = '';
     if (settings.postEventDeleteEnabled) {
@@ -1590,7 +1611,7 @@ export async function runAutoDelete() {
     const lowMsg = stats.lowSeatStopped > 0 ? ` Low-seat stopped: ${stats.lowSeatStopped}.` : '';
     return {
       success: true,
-      message: `Auto-delete completed. Stopped ${stats.eventsStopped} events and cleared inventory for ${stats.eventsDeleted} events.${lowMsg}${postDeleteMsg}`,
+      message: `Auto-delete completed. Stopped ${stats.eventsStopped} events and cleared inventory for ${stats.eventsDeleted} events.${lowMsg}${dropMsg}${postDeleteMsg}`,
       stats
     };
   } catch (error) {
