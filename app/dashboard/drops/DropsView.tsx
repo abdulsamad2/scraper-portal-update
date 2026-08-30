@@ -1,12 +1,12 @@
 import Link from 'next/link';
 import {
   Zap, CheckCheck, Search, Ticket, ExternalLink, ArrowUpDown, CalendarDays,
-  ChevronLeft, ChevronRight,
+  ChevronLeft, ChevronRight, Timer,
 } from 'lucide-react';
 
-import { fetchDrops, MATURE_MIN_AGE_MS } from '@/lib/drops';
+import { fetchDrops } from '@/lib/drops';
 import type { DropDateRange, DropSort, DropRecord } from '@/lib/drops';
-import { acknowledgeDrop, acknowledgeAllDrops } from '@/actions/dropActions';
+import { acknowledgeDrop, acknowledgeAllDrops, setDropHoldMinutes } from '@/actions/dropActions';
 import DropsLive from './DropsLive';
 
 /**
@@ -42,6 +42,8 @@ const SORT_OPTIONS: { value: DropSort; label: string }[] = [
   { value: 'seats', label: 'Most seats' },
   { value: 'price', label: 'Highest price' },
 ];
+
+const HOLD_PRESETS: number[] = [15, 30, 45, 60, 120, 240];
 
 const STATUSES = [
   { value: 'all', label: 'All' },
@@ -92,7 +94,7 @@ export default async function DropsView({
   const date = sp.date;
   const page = Math.max(1, parseInt(sp.page ?? '1', 10) || 1);
 
-  const { stats, drops, resolvedDate, total, totalPages, pageSize, freshCount } = await fetchDrops({
+  const { stats, drops, resolvedDate, total, totalPages, pageSize, freshCount, holdMinutes } = await fetchDrops({
     status, search, dateRange: range, sort, date, page, pageSize: 25,
   });
 
@@ -175,10 +177,63 @@ export default async function DropsView({
       <p className="-mt-3 text-xs text-slate-400">
         Totals cover every tracked event. The list below follows the filters you pick.
         {' '}Today resolves to {formatEventDate(`${resolvedDate}T12:00:00.000Z`)}.
-        {' '}Drops are held out of the CSV for {MATURE_MIN_AGE_MS / 60000} minutes; after
-        that they are ordinary inventory and the record is deleted. Drops for events that
-        have already started are removed too.
+        {' '}Drops for events that have already started are removed automatically.
       </p>
+
+      {/* The one tunable: how long a drop is withheld from the CSV. Stored in
+          the database and read by the scraper too, so this moves both halves of
+          the rule — when the record is deleted, and when the listing exports. */}
+      <div className="bg-white rounded-xl border border-slate-200 p-4 flex flex-wrap items-center gap-x-6 gap-y-3">
+        <div className="flex items-center gap-2">
+          <Timer className="w-5 h-5 text-purple-600" />
+          <div>
+            <p className="text-sm font-semibold text-slate-800">CSV hold</p>
+            <p className="text-xs text-slate-500">
+              A drop joins the CSV once it has been on sale this long
+            </p>
+          </div>
+        </div>
+
+        <form action={setDropHoldMinutes} className="flex items-center gap-2">
+          <input
+            type="number"
+            name="holdMinutes"
+            defaultValue={holdMinutes}
+            min={1}
+            max={1440}
+            className="w-24 px-3 py-2 text-sm rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-purple-200"
+          />
+          <span className="text-sm text-slate-500">minutes</span>
+          <button
+            type="submit"
+            className="px-3 py-2 text-sm font-semibold rounded-lg bg-purple-600 text-white hover:bg-purple-700"
+          >
+            Save
+          </button>
+        </form>
+
+        <div className="flex items-center gap-1.5">
+          {HOLD_PRESETS.map((m) => (
+            <form key={m} action={setDropHoldMinutes}>
+              <input type="hidden" name="holdMinutes" value={m} />
+              <button
+                type="submit"
+                className={`px-2.5 py-1.5 text-xs rounded-lg border ${
+                  holdMinutes === m
+                    ? 'bg-purple-50 border-purple-300 text-purple-800 font-semibold'
+                    : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                {m < 60 ? `${m}m` : `${m / 60}h`}
+              </button>
+            </form>
+          ))}
+        </div>
+
+        <p className="text-xs text-slate-400 ml-auto">
+          Applies to the scraper too — it deletes a drop at the same moment.
+        </p>
+      </div>
 
       {/* Filters — links, resolved on the server */}
       <div className="flex flex-wrap items-center gap-3">
@@ -330,7 +385,7 @@ export default async function DropsView({
               </div>
 
               <div className="divide-y divide-slate-100">
-                {eventDrops.map((d) => <DropRow key={d._id} drop={d} />)}
+                {eventDrops.map((d) => <DropRow key={d._id} drop={d} holdMinutes={holdMinutes} />)}
               </div>
             </div>
           ))}
@@ -459,10 +514,10 @@ function SeatChip({ seat, withdrawn }: { seat: string; withdrawn: boolean }) {
 }
 
 /** How far a drop is through its hold, in time. */
-function maturityProgress(drop: DropRecord) {
+function maturityProgress(drop: DropRecord, holdMs: number) {
   const ageMs = Date.now() - new Date(drop.detectedAt).getTime();
-  const minutesLeft = Math.max(0, Math.ceil((MATURE_MIN_AGE_MS - ageMs) / 60_000));
-  const percent = Math.min(100, Math.round((ageMs / MATURE_MIN_AGE_MS) * 100));
+  const minutesLeft = Math.max(0, Math.ceil((holdMs - ageMs) / 60_000));
+  const percent = Math.min(100, Math.round((ageMs / holdMs) * 100));
 
   if (minutesLeft === 0) {
     return { percent: 100, label: 'Held long enough — joins the CSV on the next scrape' };
@@ -472,9 +527,9 @@ function maturityProgress(drop: DropRecord) {
   return { percent, label: `${seen}~${minutesLeft} min until it joins the CSV` };
 }
 
-function DropRow({ drop }: { drop: DropRecord }) {
+function DropRow({ drop, holdMinutes }: { drop: DropRecord; holdMinutes: number }) {
   const gone = drop.status === 'gone';
-  const maturity = maturityProgress(drop);
+  const maturity = maturityProgress(drop, holdMinutes * 60_000);
   const partiallyGone =
     !gone && (drop.seatsRemaining?.length ?? 0) > 0 && drop.seatsRemaining!.length < drop.newSeatCount;
 
@@ -581,7 +636,7 @@ function DropRow({ drop }: { drop: DropRecord }) {
                 off — a drop seen plenty of times can still be too young. */}
             <div
               className="mt-1 h-1.5 w-full bg-slate-100 rounded-full overflow-hidden"
-              title={`Held out of the CSV for ${MATURE_MIN_AGE_MS / 60000} minutes`}
+              title={`Held out of the CSV for ${holdMinutes} minutes`}
             >
               <div
                 className="h-full bg-green-500 rounded-full"

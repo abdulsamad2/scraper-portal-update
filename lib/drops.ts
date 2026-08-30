@@ -3,6 +3,7 @@ import type { PipelineStage } from 'mongoose';
 import dbConnect from '@/lib/dbConnect';
 import { SeatDrop } from '@/models/seatDropModel';
 import { Event } from '@/models/eventModel';
+import { DropSettings } from '@/models/dropSettingsModel';
 
 /**
  * Seat-drop queries. Plain server-side functions, not server actions — the
@@ -27,10 +28,41 @@ export type DropDateRange = 'all' | 'last2' | 'today' | 'tomorrow' | 'week' | 'p
 /**
  * How long a drop is held out of the CSV. Elapsed time, not a cycle count —
  * cycle cadence varies with load, so a count means a different amount of time
- * on every roster. Mirrors the scraper, which is what deletes a matured drop.
+ * on every roster.
+ *
+ * Set from the drops page and stored in drop_settings, so it can be changed
+ * without a deploy; the environment value is only the fallback before anyone
+ * has set one. The scraper reads the same document.
  */
-export const MATURE_MIN_AGE_MS =
-  Number(process.env.DROP_MATURE_MIN_AGE_MIN ?? 45) * 60 * 1000;
+export const DEFAULT_HOLD_MINUTES = Number(process.env.DROP_MATURE_MIN_AGE_MIN ?? 45);
+
+// Consulted on every render and every CSV export. Cached briefly so a page
+// polling every few seconds does not add a query per tick; cleared outright
+// when the value is saved, so an edit shows up at once.
+const HOLD_CACHE_MS = 10_000;
+let holdCache: { minutes: number; readAt: number } = { minutes: DEFAULT_HOLD_MINUTES, readAt: 0 };
+
+export function invalidateHoldCache() {
+  holdCache.readAt = 0;
+}
+
+export async function getHoldMinutes(): Promise<number> {
+  if (Date.now() - holdCache.readAt < HOLD_CACHE_MS) return holdCache.minutes;
+  try {
+    await dbConnect();
+    const doc = await DropSettings.findOne({ key: 'singleton' }, { holdMinutes: 1 }).lean();
+    const minutes =
+      (doc as { holdMinutes?: number } | null)?.holdMinutes ?? DEFAULT_HOLD_MINUTES;
+    holdCache = { minutes, readAt: Date.now() };
+  } catch {
+    holdCache.readAt = Date.now(); // keep the last good value rather than lurch
+  }
+  return holdCache.minutes;
+}
+
+export async function getHoldMs(): Promise<number> {
+  return (await getHoldMinutes()) * 60 * 1000;
+}
 
 /**
  * How long a drop counts as "just landed".
@@ -45,10 +77,10 @@ export const FRESH_WINDOW_MS = Number(process.env.DROP_FRESH_WINDOW_SEC ?? 60) *
  * A drop still under observation: on sale and younger than MATURE_MIN_AGE_MS.
  * Built fresh each call because the cutoff moves with the clock.
  */
-export function immatureMatch() {
+export function immatureMatch(holdMs: number) {
   return {
     status: 'active' as const,
-    detectedAt: { $gt: new Date(Date.now() - MATURE_MIN_AGE_MS) },
+    detectedAt: { $gt: new Date(Date.now() - holdMs) },
   };
 }
 export type DropSort = 'onSale' | 'newest' | 'oldest' | 'eventDate' | 'event' | 'seats' | 'price';
@@ -182,8 +214,9 @@ export async function fetchDrops(filters: DropFilters = {}) {
 
   // Base set: matured drops are gone from the collection entirely, gone ones
   // expire on their own TTL. This is only the status filter the viewer picked.
+  const holdMs = await getHoldMs();
   const baseMatch: Record<string, unknown> = {
-    $or: [{ status: 'gone' }, immatureMatch()],
+    $or: [{ status: 'gone' }, immatureMatch(holdMs)],
   };
   if (status === 'active' || status === 'gone') baseMatch.status = status;
 
@@ -254,7 +287,7 @@ export async function fetchDrops(filters: DropFilters = {}) {
     // Portfolio-wide counters for the tiles — deliberately unfiltered, which is
     // what the caption under them says.
     SeatDrop.aggregate([
-      { $match: { $or: [{ status: 'gone' }, immatureMatch()] } },
+      { $match: { $or: [{ status: 'gone' }, immatureMatch(holdMs)] } },
       {
         $facet: {
           totals: [
@@ -345,6 +378,8 @@ export async function fetchDrops(filters: DropFilters = {}) {
     totalPages,
     /** How many of the matched drops landed inside the fresh window. */
     freshCount,
+    /** Minutes a drop is held out of the CSV — the operator-set value. */
+    holdMinutes: holdMs / 60_000,
     drops: JSON.parse(JSON.stringify(enriched)) as DropRecord[],
   };
 }

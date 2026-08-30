@@ -29,7 +29,7 @@ const BLOCKED_STATES = ['ri', 'me', 'rhode island', 'maine'];
 import dbConnect from '../lib/dbConnect';
 import { ConsecutiveGroup } from '../models/seatModel';
 import { SeatDrop } from '../models/seatDropModel';
-import { MATURE_MIN_AGE_MS } from '@/lib/drops';
+import { getHoldMs } from '@/lib/drops';
 import { Event } from '../models/eventModel';
 import { TcEvent } from '../models/tcEventModel';
 import { SchedulerSettings } from '../models/schedulerModel';
@@ -221,7 +221,7 @@ interface SectionRowExclusion {
  * them away again, so a listing that appeared moments ago may be gone before a
  * buyer ever reaches it. Exporting it risks selling a ticket we cannot fulfil.
  *
- * So a drop is quarantined until it has been on sale for MATURE_MIN_AGE_MS.
+ * So a drop is quarantined until it has been on sale for the configured hold.
  * Until then its listing is withheld from the CSV; once it matures the scraper
  * deletes the drop, it stops matching here, and the listing exports like any
  * other inventory.
@@ -243,12 +243,13 @@ async function buildDropQuarantineFilter(mappingIds: string[]): Promise<Exclusio
     // ignored here. Failing open costs one early export; failing closed would
     // hide inventory indefinitely with nothing on screen to explain it.
     const staleCutoff = new Date(Date.now() - QUARANTINE_MAX_AGE_MIN * 60_000);
+    const holdMs = await getHoldMs(); // operator-set, shared with the scraper
 
     const drops = await SeatDrop.find(
       {
         status: 'active',
         // Younger than the hold: still unproven, so its listing stays out.
-        detectedAt: { $gt: new Date(Date.now() - MATURE_MIN_AGE_MS) },
+        detectedAt: { $gt: new Date(Date.now() - holdMs) },
         $or: [{ lastSeenAt: { $gte: staleCutoff } }, { detectedAt: { $gte: staleCutoff } }],
       },
       { eventId: 1, section: 1, row: 1, newSeats: 1, _id: 0 }
@@ -287,7 +288,7 @@ async function buildDropQuarantineFilter(mappingIds: string[]): Promise<Exclusio
     if (quarantined.size === 0) return ALLOW_ALL;
 
     console.log(
-      `[CSV] Drop quarantine active: ${quarantined.size} section/row group(s) under ${MATURE_MIN_AGE_MS / 60000} min old`
+      `[CSV] Drop quarantine active: ${quarantined.size} section/row group(s) under ${holdMs / 60000} min old`
     );
 
     return (record) => {
