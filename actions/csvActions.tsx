@@ -29,7 +29,7 @@ const BLOCKED_STATES = ['ri', 'me', 'rhode island', 'maine'];
 import dbConnect from '../lib/dbConnect';
 import { ConsecutiveGroup } from '../models/seatModel';
 import { SeatDrop } from '../models/seatDropModel';
-import { MATURE_CYCLES, MATURE_MIN_AGE_MS } from '@/lib/drops';
+import { MATURE_MIN_AGE_MS } from '@/lib/drops';
 import { Event } from '../models/eventModel';
 import { TcEvent } from '../models/tcEventModel';
 import { SchedulerSettings } from '../models/schedulerModel';
@@ -221,9 +221,10 @@ interface SectionRowExclusion {
  * them away again, so a listing that appeared moments ago may be gone before a
  * buyer ever reaches it. Exporting it risks selling a ticket we cannot fulfil.
  *
- * So a drop is quarantined until it has survived MATURE_CYCLES consecutive
- * scrapes. Until then its listing is withheld from the CSV; once it matures the
- * drop stops matching here and the listing exports like any other inventory.
+ * So a drop is quarantined until it has been on sale for MATURE_MIN_AGE_MS.
+ * Until then its listing is withheld from the CSV; once it matures the scraper
+ * deletes the drop, it stops matching here, and the listing exports like any
+ * other inventory.
  *
  * Granularity: a listing is withheld whole. Consecutive seats are sold as one
  * line, so a row that grew from 4 seats to 6 cannot export "just the original
@@ -246,19 +247,9 @@ async function buildDropQuarantineFilter(mappingIds: string[]): Promise<Exclusio
     const drops = await SeatDrop.find(
       {
         status: 'active',
-        // Immature on either count — a drop is only proven once it has been
-        // seen MATURE_CYCLES times AND is MATURE_MIN_AGE_MS old. Releasing on
-        // the cycle count alone would export inventory minutes after it
-        // appeared, on a roster where cycles come fast.
-        $and: [
-          {
-            $or: [
-              { cyclesSeen: { $lt: MATURE_CYCLES } },
-              { detectedAt: { $gt: new Date(Date.now() - MATURE_MIN_AGE_MS) } },
-            ],
-          },
-          { $or: [{ lastSeenAt: { $gte: staleCutoff } }, { detectedAt: { $gte: staleCutoff } }] },
-        ],
+        // Younger than the hold: still unproven, so its listing stays out.
+        detectedAt: { $gt: new Date(Date.now() - MATURE_MIN_AGE_MS) },
+        $or: [{ lastSeenAt: { $gte: staleCutoff } }, { detectedAt: { $gte: staleCutoff } }],
       },
       { eventId: 1, section: 1, row: 1, newSeats: 1, _id: 0 }
     ).lean() as unknown as Array<{
@@ -296,7 +287,7 @@ async function buildDropQuarantineFilter(mappingIds: string[]): Promise<Exclusio
     if (quarantined.size === 0) return ALLOW_ALL;
 
     console.log(
-      `[CSV] Drop quarantine active: ${quarantined.size} section/row group(s) under ${MATURE_CYCLES} cycles`
+      `[CSV] Drop quarantine active: ${quarantined.size} section/row group(s) under ${MATURE_MIN_AGE_MS / 60000} min old`
     );
 
     return (record) => {
@@ -708,7 +699,7 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
             for (const r of processedBatch) {
               if (isBlockedVenueState(r)) { excludedCount++; continue; }
               if (!exclusionFilter(r)) { excludedCount++; continue; }
-              // Unproven drops are withheld until they survive MATURE_CYCLES
+              // Unproven drops are withheld until they have been on sale long enough
               if (!dropQuarantineFilter(r)) { excludedCount++; quarantinedCount++; continue; }
               if (rowModeMinSeat && !rowModeMinSeat(r)) { excludedCount++; continue; }
               filteredRecords.push(r);
@@ -1274,7 +1265,7 @@ export async function* generateInventoryCsvStream(
           for (const r of processedBatch) {
             if (isBlockedVenueState(r)) continue;
             if (!exclusionFilter(r)) continue;
-            // Unproven drops are withheld until they survive MATURE_CYCLES
+            // Unproven drops are withheld until they have been on sale long enough
             if (!dropQuarantineFilter(r)) { quarantinedCount++; continue; }
             if (minSeatFilter > 0) {
               if (minSeatFilterMode === 'section') {

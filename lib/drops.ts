@@ -24,7 +24,11 @@ export type DropDateRange = 'all' | 'last2' | 'today' | 'tomorrow' | 'week' | 'p
  * export (see buildDropQuarantineFilter in actions/csvActions.tsx). Once it
  * matures it is ordinary inventory — it leaves this page and joins the CSV.
  */
-export const MATURE_CYCLES = Number(process.env.DROP_MATURE_CYCLES ?? 18);
+/**
+ * How long a drop is held out of the CSV. Elapsed time, not a cycle count —
+ * cycle cadence varies with load, so a count means a different amount of time
+ * on every roster. Mirrors the scraper, which is what deletes a matured drop.
+ */
 export const MATURE_MIN_AGE_MS =
   Number(process.env.DROP_MATURE_MIN_AGE_MIN ?? 45) * 60 * 1000;
 
@@ -38,21 +42,13 @@ export const MATURE_MIN_AGE_MS =
 export const FRESH_WINDOW_MS = Number(process.env.DROP_FRESH_WINDOW_SEC ?? 60) * 1000;
 
 /**
- * A drop still under observation: on sale, and not yet proven.
- *
- * Proven means BOTH — seen alive MATURE_CYCLES times AND at least
- * MATURE_MIN_AGE_MS old. Cycle cadence is not fixed (the SLA is two minutes,
- * the floor is half a second), so a cycle count alone can pass in seconds. This
- * mirrors the scraper, which is what actually deletes a drop once it matures;
- * built fresh each call because the age half moves with the clock.
+ * A drop still under observation: on sale and younger than MATURE_MIN_AGE_MS.
+ * Built fresh each call because the cutoff moves with the clock.
  */
 export function immatureMatch() {
   return {
     status: 'active' as const,
-    $or: [
-      { cyclesSeen: { $lt: MATURE_CYCLES } },
-      { detectedAt: { $gt: new Date(Date.now() - MATURE_MIN_AGE_MS) } },
-    ],
+    detectedAt: { $gt: new Date(Date.now() - MATURE_MIN_AGE_MS) },
   };
 }
 export type DropSort = 'onSale' | 'newest' | 'oldest' | 'eventDate' | 'event' | 'seats' | 'price';

@@ -4,7 +4,7 @@ import {
   ChevronLeft, ChevronRight,
 } from 'lucide-react';
 
-import { fetchDrops, MATURE_CYCLES, MATURE_MIN_AGE_MS } from '@/lib/drops';
+import { fetchDrops, MATURE_MIN_AGE_MS } from '@/lib/drops';
 import type { DropDateRange, DropSort, DropRecord } from '@/lib/drops';
 import { acknowledgeDrop, acknowledgeAllDrops } from '@/actions/dropActions';
 import DropsLive from './DropsLive';
@@ -175,9 +175,9 @@ export default async function DropsView({
       <p className="-mt-3 text-xs text-slate-400">
         Totals cover every tracked event. The list below follows the filters you pick.
         {' '}Today resolves to {formatEventDate(`${resolvedDate}T12:00:00.000Z`)}.
-        {' '}Drops are held out of the CSV until they survive {MATURE_CYCLES} scrape cycles
-        and {MATURE_MIN_AGE_MS / 60000} minutes; they are then ordinary inventory and the
-        record is deleted. Drops for events that have already started are removed too.
+        {' '}Drops are held out of the CSV for {MATURE_MIN_AGE_MS / 60000} minutes; after
+        that they are ordinary inventory and the record is deleted. Drops for events that
+        have already started are removed too.
       </p>
 
       {/* Filters — links, resolved on the server */}
@@ -458,41 +458,18 @@ function SeatChip({ seat, withdrawn }: { seat: string; withdrawn: boolean }) {
   );
 }
 
-/**
- * How far a drop is from being ordinary inventory.
- *
- * It must clear both gates — enough confirmations and enough elapsed time — so
- * the bar shows the lesser of the two and the caption names whichever is
- * actually holding it back.
- */
+/** How far a drop is through its hold, in time. */
 function maturityProgress(drop: DropRecord) {
-  const cycles = drop.cyclesSeen ?? 1;
   const ageMs = Date.now() - new Date(drop.detectedAt).getTime();
-
-  const cyclesLeft = Math.max(0, MATURE_CYCLES - cycles);
   const minutesLeft = Math.max(0, Math.ceil((MATURE_MIN_AGE_MS - ageMs) / 60_000));
+  const percent = Math.min(100, Math.round((ageMs / MATURE_MIN_AGE_MS) * 100));
 
-  const percent = Math.min(
-    100,
-    Math.round(Math.min(cycles / MATURE_CYCLES, ageMs / MATURE_MIN_AGE_MS) * 100)
-  );
-
-  if (cyclesLeft === 0 && minutesLeft === 0) {
-    return { percent: 100, label: 'Proven — joins the CSV on the next scrape' };
+  if (minutesLeft === 0) {
+    return { percent: 100, label: 'Held long enough — joins the CSV on the next scrape' };
   }
-
-  // Name only what is still holding it back. "30/18 cycles" reads as broken
-  // once the cycle gate is behind it.
-  const waiting: string[] = [];
-  if (cyclesLeft > 0) waiting.push(`${cycles}/${MATURE_CYCLES} cycles`);
-  if (minutesLeft > 0) waiting.push(`~${minutesLeft} min`);
-
-  const seen = cyclesLeft === 0 ? `Confirmed ${cycles}× · ` : '';
-
-  return {
-    percent,
-    label: `${seen}${waiting.join(' and ')} until it joins the CSV`,
-  };
+  // Cycles are shown as evidence it is still being confirmed, not as a gate.
+  const seen = drop.cyclesSeen ? `Confirmed ${drop.cyclesSeen}× · ` : '';
+  return { percent, label: `${seen}~${minutesLeft} min until it joins the CSV` };
 }
 
 function DropRow({ drop }: { drop: DropRecord }) {
@@ -604,7 +581,7 @@ function DropRow({ drop }: { drop: DropRecord }) {
                 off — a drop seen plenty of times can still be too young. */}
             <div
               className="mt-1 h-1.5 w-full bg-slate-100 rounded-full overflow-hidden"
-              title={`Held out of the CSV until ${MATURE_CYCLES} cycles and ${MATURE_MIN_AGE_MS / 60000} minutes`}
+              title={`Held out of the CSV for ${MATURE_MIN_AGE_MS / 60000} minutes`}
             >
               <div
                 className="h-full bg-green-500 rounded-full"
