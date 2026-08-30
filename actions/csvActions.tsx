@@ -29,7 +29,7 @@ const BLOCKED_STATES = ['ri', 'me', 'rhode island', 'maine'];
 import dbConnect from '../lib/dbConnect';
 import { ConsecutiveGroup } from '../models/seatModel';
 import { SeatDrop } from '../models/seatDropModel';
-import { MATURE_CYCLES } from '@/lib/drops';
+import { MATURE_CYCLES, MATURE_MIN_AGE_MS } from '@/lib/drops';
 import { Event } from '../models/eventModel';
 import { TcEvent } from '../models/tcEventModel';
 import { SchedulerSettings } from '../models/schedulerModel';
@@ -246,8 +246,19 @@ async function buildDropQuarantineFilter(mappingIds: string[]): Promise<Exclusio
     const drops = await SeatDrop.find(
       {
         status: 'active',
-        cyclesSeen: { $lt: MATURE_CYCLES },
-        $or: [{ lastSeenAt: { $gte: staleCutoff } }, { detectedAt: { $gte: staleCutoff } }],
+        // Immature on either count — a drop is only proven once it has been
+        // seen MATURE_CYCLES times AND is MATURE_MIN_AGE_MS old. Releasing on
+        // the cycle count alone would export inventory minutes after it
+        // appeared, on a roster where cycles come fast.
+        $and: [
+          {
+            $or: [
+              { cyclesSeen: { $lt: MATURE_CYCLES } },
+              { detectedAt: { $gt: new Date(Date.now() - MATURE_MIN_AGE_MS) } },
+            ],
+          },
+          { $or: [{ lastSeenAt: { $gte: staleCutoff } }, { detectedAt: { $gte: staleCutoff } }] },
+        ],
       },
       { eventId: 1, section: 1, row: 1, newSeats: 1, _id: 0 }
     ).lean() as unknown as Array<{

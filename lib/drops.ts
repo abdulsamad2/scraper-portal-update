@@ -24,7 +24,9 @@ export type DropDateRange = 'all' | 'last2' | 'today' | 'tomorrow' | 'week' | 'p
  * export (see buildDropQuarantineFilter in actions/csvActions.tsx). Once it
  * matures it is ordinary inventory — it leaves this page and joins the CSV.
  */
-export const MATURE_CYCLES = Number(process.env.DROP_MATURE_CYCLES ?? 10);
+export const MATURE_CYCLES = Number(process.env.DROP_MATURE_CYCLES ?? 18);
+export const MATURE_MIN_AGE_MS =
+  Number(process.env.DROP_MATURE_MIN_AGE_MIN ?? 45) * 60 * 1000;
 
 /**
  * How long a drop counts as "just landed".
@@ -35,11 +37,24 @@ export const MATURE_CYCLES = Number(process.env.DROP_MATURE_CYCLES ?? 10);
  */
 export const FRESH_WINDOW_MS = Number(process.env.DROP_FRESH_WINDOW_SEC ?? 60) * 1000;
 
-/** A drop still under observation: on sale, but not yet proven. */
-export const IMMATURE_MATCH = {
-  status: 'active' as const,
-  cyclesSeen: { $lt: MATURE_CYCLES },
-};
+/**
+ * A drop still under observation: on sale, and not yet proven.
+ *
+ * Proven means BOTH — seen alive MATURE_CYCLES times AND at least
+ * MATURE_MIN_AGE_MS old. Cycle cadence is not fixed (the SLA is two minutes,
+ * the floor is half a second), so a cycle count alone can pass in seconds. This
+ * mirrors the scraper, which is what actually deletes a drop once it matures;
+ * built fresh each call because the age half moves with the clock.
+ */
+export function immatureMatch() {
+  return {
+    status: 'active' as const,
+    $or: [
+      { cyclesSeen: { $lt: MATURE_CYCLES } },
+      { detectedAt: { $gt: new Date(Date.now() - MATURE_MIN_AGE_MS) } },
+    ],
+  };
+}
 export type DropSort = 'onSale' | 'newest' | 'oldest' | 'eventDate' | 'event' | 'seats' | 'price';
 
 export interface DropFilters {
@@ -172,7 +187,7 @@ export async function fetchDrops(filters: DropFilters = {}) {
   // Base set: matured drops are gone from the collection entirely, gone ones
   // expire on their own TTL. This is only the status filter the viewer picked.
   const baseMatch: Record<string, unknown> = {
-    $or: [{ status: 'gone' }, IMMATURE_MATCH],
+    $or: [{ status: 'gone' }, immatureMatch()],
   };
   if (status === 'active' || status === 'gone') baseMatch.status = status;
 
@@ -243,7 +258,7 @@ export async function fetchDrops(filters: DropFilters = {}) {
     // Portfolio-wide counters for the tiles — deliberately unfiltered, which is
     // what the caption under them says.
     SeatDrop.aggregate([
-      { $match: { $or: [{ status: 'gone' }, IMMATURE_MATCH] } },
+      { $match: { $or: [{ status: 'gone' }, immatureMatch()] } },
       {
         $facet: {
           totals: [
