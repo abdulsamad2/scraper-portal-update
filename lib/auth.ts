@@ -122,7 +122,7 @@ export async function verifySession(request: NextRequest): Promise<boolean> {
  * session token then travels in clear text and anyone on the network path can
  * lift it. Put TLS in front of the portal and remove the flag.
  */
-function useSecureCookie(): boolean {
+function sessionCookieIsSecure(): boolean {
   const flag = process.env.AUTH_COOKIE_SECURE;
   if (flag === 'false' || flag === '0') return false;
   if (flag === 'true' || flag === '1') return true;
@@ -137,7 +137,7 @@ export function getSessionCookieConfig(token: string) {
     name: COOKIE_NAME,
     value: token,
     httpOnly: true,       // Not accessible from JavaScript
-    secure: useSecureCookie(),
+    secure: sessionCookieIsSecure(),
     sameSite: 'lax' as const,
     path: '/',
     maxAge: 60 * 60 * 24, // 24 hours
@@ -153,7 +153,7 @@ export function getExpiredCookieConfig() {
     value: '',
     httpOnly: true,
     // Must match the cookie being cleared or the browser keeps the original.
-    secure: useSecureCookie(),
+    secure: sessionCookieIsSecure(),
     sameSite: 'lax' as const,
     path: '/',
     maxAge: 0,
