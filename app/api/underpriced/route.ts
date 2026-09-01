@@ -74,7 +74,16 @@ export async function GET() {
       seatRange: string; eventId: string; eventName: string; venue: string; eventDate: string | null;
     }>();
 
-    for (const r of rows as unknown as Array<Record<string, any>>) {
+    interface GroupDoc {
+      eventId: string;
+      event_name?: string;
+      venue_name?: string;
+      event_date?: Date | string;
+      seatRange?: string;
+      inventory?: { section?: string; row?: string; rowRank?: number | null; listPrice?: number };
+    }
+
+    for (const r of rows as unknown as GroupDoc[]) {
       const price = r.inventory?.listPrice;
       if (typeof price !== 'number') continue;
       const section = norm(r.inventory?.section);
@@ -114,7 +123,13 @@ export async function GET() {
       }
     }
 
-    const underpriced: Bargain[] = found.slice(0, MAX_UNDERPRICED).map((f: Record<string, any>) => ({
+    interface FoundRow {
+      key: string; eventId: string; eventName?: string; venue?: string; eventDate?: string | null;
+      section: string; row: string; seatRange?: string;
+      price: number; comparableAvg: number; comparableCount: number; pctBelow: number;
+    }
+
+    const underpriced: Bargain[] = (found as FoundRow[]).slice(0, MAX_UNDERPRICED).map(f => ({
       key: f.key,
       eventId: f.eventId,
       eventName: f.eventName || '',
