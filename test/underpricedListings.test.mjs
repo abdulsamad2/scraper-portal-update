@@ -192,10 +192,10 @@ test('a listing that arrives underpriced is flagged on the cycle it lands', () =
 });
 
 test('a drop can turn an existing listing into a bargain', () => {
-  // Row 2 at $400 is unremarkable against rows averaging $450.
+  // Row 2 at $320 is unremarkable against rows averaging $450.
   const before = [
     { section: '107', row: '1', rowRank: 0, price: 900 },
-    { section: '107', row: '2', rowRank: 1, price: 400 },
+    { section: '107', row: '2', rowRank: 1, price: 320 },
     { section: '107', row: '3', rowRank: 2, price: 450 },
     { section: '107', row: '4', rowRank: 3, price: 450 },
     { section: '107', row: '5', rowRank: 4, price: 450 },
@@ -207,8 +207,8 @@ test('a drop can turn an existing listing into a bargain', () => {
   // is why a diff of changed rows alone would miss this.
   const after = [
     ...before,
-    { section: '107', row: '6', rowRank: 5, price: 1500 },
-    { section: '107', row: '7', rowRank: 6, price: 1500 },
+    { section: '107', row: '6', rowRank: 5, price: 900 },
+    { section: '107', row: '7', rowRank: 6, price: 900 },
   ];
   const found = findUnderpricedRows(stateWith(after), dirty('107'));
 
@@ -216,7 +216,45 @@ test('a drop can turn an existing listing into a bargain', () => {
   assert.ok(row2, 'the untouched listing became a bargain once rows landed behind it');
   // Averaged over every row behind it, the two new ones included.
   assert.equal(row2.comparableCount, 5);
-  assert.equal(row2.comparableAvg, (450 + 450 + 450 + 1500 + 1500) / 5);
+  assert.equal(row2.comparableAvg, (450 + 450 + 450 + 900 + 900) / 5);
+});
+
+// ── Outliers ────────────────────────────────────────────────────────────────
+// One listing priced into orbit must not become everyone else's baseline.
+
+test('an absurdly priced listing is left out of the averages', () => {
+  const rows = [
+    { section: '107', row: '1', rowRank: 0, price: 500 },
+    { section: '107', row: '2', rowRank: 1, price: 450 },
+    { section: '107', row: '3', rowRank: 2, price: 450 },
+    { section: '107', row: '4', rowRank: 3, price: 450 },
+    { section: '107', row: '5', rowRank: 4, price: 450 },
+    { section: '107', row: '6', rowRank: 5, price: 9000 }, // far above the median
+  ];
+
+  // Counted in, the average behind row 1 would be $2,160 and every ordinary
+  // listing in this section would read as a bargain. Trimmed, nothing fires.
+  assert.deepEqual(findUnderpricedRows(stateWith(rows), dirty('107')), []);
+});
+
+test('a real bargain is still found, and priced against the trimmed average', () => {
+  const found = findUnderpricedRows(
+    stateWith([
+      { section: '107', row: '1', rowRank: 0, price: 150 },  // the genuine bargain
+      { section: '107', row: '2', rowRank: 1, price: 450 },
+      { section: '107', row: '3', rowRank: 2, price: 450 },
+      { section: '107', row: '4', rowRank: 3, price: 450 },
+      { section: '107', row: '5', rowRank: 4, price: 450 },
+      { section: '107', row: '6', rowRank: 5, price: 9000 },
+    ]),
+    dirty('107'),
+  );
+
+  assert.equal(found.length, 1);
+  assert.equal(found[0].row, '1');
+  // $450, not $2,160 — the outlier is excluded from the comparison entirely.
+  assert.equal(found[0].comparableAvg, 450);
+  assert.equal(found[0].comparableCount, 4);
 });
 
 test('an empty dirty set does no work', () => {
