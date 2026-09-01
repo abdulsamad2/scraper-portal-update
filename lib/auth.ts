@@ -110,6 +110,26 @@ export async function verifySession(request: NextRequest): Promise<boolean> {
 }
 
 /**
+ * Whether the session cookie is marked Secure.
+ *
+ * A browser will not store a Secure cookie delivered over plain HTTP. The login
+ * request succeeds, the cookie is silently dropped, and the next request bounces
+ * straight back to /login — which reads as "login is broken" with nothing in the
+ * logs to show for it.
+ *
+ * Set AUTH_COOKIE_SECURE=false when the portal really is served over HTTP, such
+ * as an internal host with no certificate. That is a stopgap, not a fix: the
+ * session token then travels in clear text and anyone on the network path can
+ * lift it. Put TLS in front of the portal and remove the flag.
+ */
+function useSecureCookie(): boolean {
+  const flag = process.env.AUTH_COOKIE_SECURE;
+  if (flag === 'false' || flag === '0') return false;
+  if (flag === 'true' || flag === '1') return true;
+  return process.env.NODE_ENV === 'production';
+}
+
+/**
  * Get session cookie configuration.
  */
 export function getSessionCookieConfig(token: string) {
@@ -117,7 +137,7 @@ export function getSessionCookieConfig(token: string) {
     name: COOKIE_NAME,
     value: token,
     httpOnly: true,       // Not accessible from JavaScript
-    secure: process.env.NODE_ENV === 'production', // HTTPS only in production
+    secure: useSecureCookie(),
     sameSite: 'lax' as const,
     path: '/',
     maxAge: 60 * 60 * 24, // 24 hours
@@ -132,7 +152,8 @@ export function getExpiredCookieConfig() {
     name: COOKIE_NAME,
     value: '',
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
+    // Must match the cookie being cleared or the browser keeps the original.
+    secure: useSecureCookie(),
     sameSite: 'lax' as const,
     path: '/',
     maxAge: 0,
