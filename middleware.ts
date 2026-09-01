@@ -2,6 +2,17 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { verifySession } from '@/lib/auth';
 
+/**
+ * Auth and security headers for every dashboard and API request.
+ *
+ * The file MUST be named `middleware.ts` on Next 15. Next 16 renames the
+ * convention to `proxy.ts` and this file was named that way, which meant Next
+ * never loaded it: /dashboard answered 200 to anyone, and /api/* was wide open.
+ * On upgrading to 16, rename it back with
+ * `npx @next/codemod@canary middleware-to-proxy .` -- and check that an
+ * unauthenticated request still redirects afterwards.
+ */
+
 export default async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
