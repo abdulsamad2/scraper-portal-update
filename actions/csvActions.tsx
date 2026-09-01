@@ -43,6 +43,14 @@ import { detectTimezoneFromVenueAsync, resolveVenueTimezonesBulk, getCurrentTime
 import { EvenueEvent } from '../models/evenueEventModel';
 import { EVENUE_GROUPS_COLLECTION } from '../lib/evenue';
 import { PipelineStage } from 'mongoose';
+import {
+  partitionDominated,
+  dominatedBucketKey,
+  resolveDominatedEnabled,
+  EventRowBuffer,
+  type DominatedEventOverride,
+} from '@/lib/dominatedListings';
+import { calculateSplitConfiguration } from '@/lib/csvSplits';
 
 /**
  * ── Combining the three scrapers in one export ────────────────────────────────
@@ -138,6 +146,14 @@ interface CsvRow {
   zone: 'Y' | 'N';
   shown_quantity?: number;
   passthrough?: string;
+  /**
+   * Internal only — never exported. The row's index within its section as
+   * Ticketmaster orders them (0 = closest to the field), carried on the record
+   * so the dominated-listings rule can compare a listing against better seats.
+   * CSV output is driven by COLUMN_ENCODERS, not by this interface's keys, so
+   * this field cannot leak into the file. Null for GA and for older inventory.
+   */
+  rowRank?: number | null;
 }
 
 const csvColumns = [
@@ -363,6 +379,105 @@ async function buildExclusionFilter(mappingIds: string[]): Promise<ExclusionFilt
   }
 }
 
+/**
+ * ── Dominated listings ────────────────────────────────────────────────────────
+ *
+ * Controlled by a global switch (SchedulerSettings) plus a per-event override
+ * (ExclusionRules), both off by default. The rule itself — what counts as
+ * dominated, and how the two switches combine — lives in lib/dominatedListings
+ * so the portal's preview and this exporter can never drift apart.
+ */
+
+/** The global switch, defaulting to off when no settings doc has been saved. */
+export async function getDominatedListingsGlobalEnabled(): Promise<boolean> {
+  const settings = await SchedulerSettings.findOne(
+    {},
+    { dominatedListingsEnabled: 1 }
+  ).lean() as { dominatedListingsEnabled?: boolean } | null;
+  return settings?.dominatedListingsEnabled === true;
+}
+
+/**
+ * The events the rule applies to, keyed by mapping_id so the per-record lookup
+ * matches the value already on CsvRow.event_id.
+ *
+ * Events the rule is off for are absent from the set, and an empty set
+ * short-circuits the whole filter — so with the global switch off and no event
+ * forcing it on, this costs one settings read and nothing else.
+ */
+async function loadDominatedListingsEvents(mappingIds: string[]): Promise<Set<string>> {
+  const enabled = new Set<string>();
+  if (mappingIds.length === 0) return enabled;
+
+  try {
+    const globalEnabled = await getDominatedListingsGlobalEnabled();
+
+    const overrides = new Map<string, DominatedEventOverride>();
+    const events = await Event.find(
+      { mapping_id: { $in: mappingIds } },
+      { _id: 1, mapping_id: 1 }
+    ).lean();
+    if (events.length === 0) return enabled;
+
+    const objectIdToMappingId = new Map<string, string>();
+    const eventIds: string[] = [];
+    for (const e of events) {
+      const oid = String(e._id);
+      objectIdToMappingId.set(oid, e.mapping_id);
+      eventIds.push(oid);
+    }
+
+    const rules = await ExclusionRules.find(
+      { eventId: { $in: eventIds }, isActive: true },
+      { eventId: 1, dominatedListings: 1 }
+    ).lean();
+
+    for (const rule of rules) {
+      const mid = objectIdToMappingId.get(String((rule as { eventId?: string }).eventId));
+      if (!mid) continue;
+      const override = (rule as { dominatedListings?: DominatedEventOverride }).dominatedListings;
+      if (override) overrides.set(mid, override);
+    }
+
+    // Every active event is resolved, not just the ones carrying a rule: with
+    // the global switch on, an event with no exclusion rules at all still
+    // inherits it.
+    for (const mappingId of mappingIds) {
+      if (resolveDominatedEnabled(globalEnabled, overrides.get(mappingId))) enabled.add(mappingId);
+    }
+    return enabled;
+  } catch (error) {
+    console.error('Error loading dominated-listings rules:', error);
+    // A settings read that failed must not silently strip inventory, so every
+    // event falls back to exporting everything.
+    return new Set();
+  }
+}
+
+/**
+ * Drop dominated listings for the events opted in. Records for events that have
+ * not opted in, and records with no rowRank (GA, parking, inventory scraped
+ * before rowRank existed), pass through untouched.
+ */
+function applyDominatedListingsFilter(
+  records: CsvRow[],
+  enabledMappingIds: Set<string>,
+): { kept: CsvRow[]; dropped: number } {
+  if (enabledMappingIds.size === 0) return { kept: records, dropped: 0 };
+
+  const { kept, dropped } = partitionDominated(records, (r) =>
+    enabledMappingIds.has(r.event_id)
+      ? {
+          bucketKey: dominatedBucketKey(r.event_id, r.section, r.quantity, r.custom_split),
+          rowRank: r.rowRank,
+          perSeatPrice: r.list_price ?? 0,
+        }
+      : null,
+  );
+
+  return { kept, dropped: dropped.length };
+}
+
 const isBlockedVenueState = (record: CsvRow): boolean => {
   const v = (record.venue_name || '').trim().toLowerCase();
   return BLOCKED_STATES.some(s => v === s || v.endsWith(', ' + s) || v.endsWith(',' + s));
@@ -432,6 +547,7 @@ const CSV_PROJECTION = {
   'inventory.quantity': 1,
   'inventory.section': 1,
   'inventory.row': 1,
+  'inventory.rowRank': 1,
   'seats.number': 1,
   'inventory.barcodes': 1,
   'inventory.tags': 1,
@@ -624,6 +740,7 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
       // matching the original behaviour exactly.
       const exclusionFilter = await buildExclusionFilter(eventMappingIds);
       const dropQuarantineFilter = await buildDropQuarantineFilter(eventMappingIds);
+      const dominatedEvents = await loadDominatedListingsEvents(eventMappingIds);
       let quarantinedCount = 0;
 
       const schedulerSettings = await SchedulerSettings.findOne({}).lean() as any;
@@ -722,6 +839,18 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
         });
       }
 
+      // Dominated listings need the whole event in hand to judge a listing
+      // against every better seat in its section, so this runs once the chunk
+      // loop has produced them all. It runs before the section min-seat totals
+      // so those count only the listings that actually reach the file.
+      if (dominatedEvents.size > 0) {
+        const beforeDominated = filteredRecords.length;
+        const result = applyDominatedListingsFilter(filteredRecords, dominatedEvents);
+        filteredRecords = result.kept;
+        excludedCount += result.dropped;
+        console.log(`[CSV] Dominated listings (${dominatedEvents.size} event(s)): removed ${result.dropped} of ${beforeDominated} listings`);
+      }
+
       // Section-mode min-seat: totals are summed across the post-exclusion
       // records (matches the original behaviour exactly — sections whose
       // surviving rows total <= threshold are dropped).
@@ -789,6 +918,7 @@ interface ConsecutiveGroupDocument {
     quantity?: number;
     section?: string;
     row?: string;
+    rowRank?: number | null;
     barcodes?: string;
     tags?: string;
     notes?: string;
@@ -820,58 +950,6 @@ interface ConsecutiveGroupDocument {
   event_broker_adj?: number;
   event_default_pct?: number;
   seats?: Array<{ number: string | number }>;
-}
-
-// Function to determine split configuration based on ticket type and quantity.
-// For resale, prefers the DB `customSplit` value (written by the scraper from TM's
-// sellableQuantities, clipped to the actual seat-group size). Falls back to the
-// legacy hardcoded table only when the DB value is missing. Standard tickets use
-// the DB `customSplit` when present, otherwise NEVERLEAVEONE — no legacy fallback.
-function calculateSplitConfiguration(
-  quantity: number,
-  splitType?: string,
-  dbCustomSplit?: string,
-): {
-  finalSplitType: CsvRow['split_type'];
-  customSplit: string;
-} {
-  const isResale = splitType !== 'NEVERLEAVEONE';
-
-  if (isResale) {
-    if (dbCustomSplit && dbCustomSplit.trim().length > 0) {
-      return { finalSplitType: 'CUSTOM', customSplit: dbCustomSplit.trim() };
-    }
-
-    // Legacy resale fallback — used only when the scraper didn't provide a split.
-    if ((quantity % 2 === 0 && quantity >= 10) || (quantity % 2 === 1 && quantity >= 11)) {
-      return { finalSplitType: 'NEVERLEAVEONE', customSplit: '' };
-    }
-    if (quantity === 2) return { finalSplitType: 'CUSTOM', customSplit: '2' };
-    if (quantity === 3) return { finalSplitType: 'CUSTOM', customSplit: '3' };
-    if (quantity === 4) return { finalSplitType: 'CUSTOM', customSplit: '4' };
-    if (quantity === 5) return { finalSplitType: 'CUSTOM', customSplit: '3,5' };
-    if (quantity === 6) return { finalSplitType: 'CUSTOM', customSplit: '2,4,6' };
-    if (quantity === 7) return { finalSplitType: 'CUSTOM', customSplit: '2,3,4,5,7' };
-    if (quantity === 8) return { finalSplitType: 'CUSTOM', customSplit: '2,4,6,8' };
-    if (quantity === 9) return { finalSplitType: 'CUSTOM', customSplit: '2,3,4,5,6,7,9' };
-    if (quantity === 10) return { finalSplitType: 'CUSTOM', customSplit: '2,4,6,8,10' };
-    if (quantity === 11) return { finalSplitType: 'CUSTOM', customSplit: '2,3,4,5,6,7,8,9,11' };
-    return { finalSplitType: 'NEVERLEAVEONE', customSplit: '' };
-  }
-
-  // Standard (primary) — only apply TM's customSplit when the minimum sellable
-  // quantity is >= 4 (i.e. TM is forcing 4-packs or larger). Anything smaller
-  // falls through to NEVERLEAVEONE. No synthetic splits are generated.
-  if (dbCustomSplit && dbCustomSplit.trim().length > 0) {
-    const parsed = dbCustomSplit
-      .split(',')
-      .map(s => parseInt(s.trim(), 10))
-      .filter(n => Number.isFinite(n) && n > 0);
-    if (parsed.length > 0 && Math.min(...parsed) >= 4) {
-      return { finalSplitType: 'CUSTOM', customSplit: dbCustomSplit.trim() };
-    }
-  }
-  return { finalSplitType: 'NEVERLEAVEONE', customSplit: '' };
 }
 
 // Helper function to process batches
@@ -998,6 +1076,7 @@ async function processBatch(batch: ConsecutiveGroupDocument[]): Promise<CsvRow[]
       zone: isGALawn ? "Y" : "N",
       shown_quantity: inventory?.shown_quantity || undefined,
       passthrough: inventory?.passthrough || "",
+      rowRank: typeof inventory?.rowRank === 'number' ? inventory.rowRank : null,
     } as CsvRow;
   });
 }
@@ -1175,16 +1254,39 @@ export async function* generateInventoryCsvStream(
     // export with N chunks that was 2N redundant DB round-trips.
     const exclusionFilter = await buildExclusionFilter(eventMappingIds);
     const dropQuarantineFilter = await buildDropQuarantineFilter(eventMappingIds);
+    const dominatedEvents = await loadDominatedListingsEvents(eventMappingIds);
     let quarantinedCount = 0;
+
+    // The dominated-listings rule compares a listing against every better seat
+    // in its section, which can sit in a later chunk, so rows for an affected
+    // event are held back until that event has been read in full. Held per
+    // event, not in one pile: the walk below goes event by event, so each one
+    // is released as soon as the walk moves past it and the stream keeps
+    // producing bytes instead of going silent until the last chunk.
+    const dominatedDeferred = new EventRowBuffer<CsvRow>();
+    let dominatedDropped = 0;
+
+    const flushDeferred = (rows: CsvRow[]): string | null => {
+      const result = applyDominatedListingsFilter(rows, dominatedEvents);
+      totalExcluded += result.dropped;
+      dominatedDropped += result.dropped;
+      if (result.kept.length === 0) return null;
+      totalRecords += result.kept.length;
+      return recordsToCsvChunk(result.kept) + '\n';
+    };
 
     const CHUNK_SIZE = 10000;
     const idPipeline: PipelineStage[] = [
       { $match: eventFilter },
       ...unionAllInventorySources(eventFilter),
-      { $sort: { _id: 1 as const } },
-      { $project: { _id: 1 } },
+      // Ordering by event only matters when something is being held back; the
+      // plain _id order is left alone otherwise.
+      dominatedEvents.size > 0
+        ? { $sort: { mapping_id: 1 as const, _id: 1 as const } }
+        : { $sort: { _id: 1 as const } },
+      { $project: { _id: 1, mapping_id: 1 } },
     ];
-    const allIds = await ConsecutiveGroup.aggregate(idPipeline, {
+    const allIds: Array<{ _id: string; mapping_id?: string }> = await ConsecutiveGroup.aggregate(idPipeline, {
       allowDiskUse: true, maxTimeMS: 60000,
     });
     const totalDocs = allIds.length;
@@ -1230,7 +1332,8 @@ export async function* generateInventoryCsvStream(
     let totalExcluded = 0;
 
     for (let i = 0; i < totalDocs; i += CHUNK_SIZE) {
-      const chunkIds = allIds.slice(i, i + CHUNK_SIZE).map((d: { _id: string }) => d._id);
+      const chunkSlice = allIds.slice(i, i + CHUNK_SIZE);
+      const chunkIds = chunkSlice.map(d => d._id);
 
       const chunkDocs: ConsecutiveGroupDocument[] = await ConsecutiveGroup.aggregate(
         [
@@ -1263,6 +1366,7 @@ export async function* generateInventoryCsvStream(
           // Avoids walking the batch three times and the per-chunk DB query
           // that the old applyExclusionRules() was doing.
           const filtered: CsvRow[] = [];
+          let deferredInBatch = 0;
           for (const r of processedBatch) {
             if (isBlockedVenueState(r)) continue;
             if (!exclusionFilter(r)) continue;
@@ -1275,9 +1379,15 @@ export async function* generateInventoryCsvStream(
                 continue;
               }
             }
+            if (dominatedEvents.has(r.event_id)) {
+              dominatedDeferred.hold(r.event_id, r);
+              deferredInBatch++;
+              continue;
+            }
             filtered.push(r);
           }
-          totalExcluded += beforeBatchFilters - filtered.length;
+          // Deferred rows are not excluded — they are still being judged.
+          totalExcluded += beforeBatchFilters - filtered.length - deferredInBatch;
 
           if (filtered.length > 0) {
             totalRecords += filtered.length;
@@ -1286,8 +1396,29 @@ export async function* generateInventoryCsvStream(
         }
       }
 
+      // The ids are walked event by event, so every held event except the one
+      // straddling this chunk's tail has now been read in full and can be
+      // judged and released. Reading mapping_id off the id slice rather than
+      // the fetched docs keeps this correct however Mongo orders the chunk.
+      if (dominatedDeferred.size > 0) {
+        const boundaryEvent = chunkSlice[chunkSlice.length - 1]?.mapping_id;
+        for (const rows of dominatedDeferred.releaseCompleted(boundaryEvent)) {
+          const text = flushDeferred(rows);
+          if (text) yield { type: 'data', text };
+        }
+      }
+
       // Yield control between chunks
       await new Promise(resolve => (typeof setImmediate !== 'undefined' ? setImmediate : setTimeout)(resolve, 0));
+    }
+
+    // Whatever the last chunk was still holding.
+    for (const rows of dominatedDeferred.releaseAll()) {
+      const text = flushDeferred(rows);
+      if (text) yield { type: 'data', text };
+    }
+    if (dominatedEvents.size > 0) {
+      console.log(`[CSV Stream] Dominated listings active on ${dominatedEvents.size} event(s): removed ${dominatedDropped} listings`);
     }
 
     const duration = Date.now() - startTime;
@@ -1501,6 +1632,9 @@ export async function updateSchedulerSettings(updates: {
   totalRuns?: number;
   lowSeatAutoStop?: boolean;
   lowSeatThreshold?: number;
+  minSeatFilter?: number;
+  minSeatFilterMode?: 'row' | 'section';
+  dominatedListingsEnabled?: boolean;
 }) {
   await dbConnect();
   try {

@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import moment from 'moment';
-import { Download, Upload, Settings, BarChart3, Clock, Trash2, AlertTriangle, Play, Square, RefreshCw, Eye, Zap, Shield, ChevronDown, CheckCircle2, XCircle, Timer } from 'lucide-react';
+import { Download, Upload, Settings, BarChart3, Clock, Trash2, AlertTriangle, Play, Square, RefreshCw, Eye, Zap, Shield, ChevronDown, CheckCircle2, XCircle, Timer, Layers } from 'lucide-react';
 import { deleteStaleInventory } from '../../../actions/seatActions';
 
 // Simple toast notification function
@@ -28,6 +28,7 @@ interface ExportSettings {
   lowSeatThreshold: number;
   minSeatFilter: number;
   minSeatFilterMode: 'row' | 'section';
+  dominatedListingsEnabled: boolean;
 }
 
 interface CsvStatus {
@@ -107,6 +108,7 @@ const ExportCsvPage: React.FC = () => {
     lowSeatThreshold: 10,
     minSeatFilter: 0,
     minSeatFilterMode: 'section',
+    dominatedListingsEnabled: false,
   });
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [schedulerStatus, setSchedulerStatus] = useState<string>('Stopped');
@@ -251,6 +253,7 @@ const ExportCsvPage: React.FC = () => {
             lowSeatThreshold: dbSettings.lowSeatThreshold ?? 10,
             minSeatFilter: dbSettings.minSeatFilter ?? 0,
             minSeatFilterMode: dbSettings.minSeatFilterMode ?? 'section',
+            dominatedListingsEnabled: dbSettings.dominatedListingsEnabled ?? false,
           });
           setSchedulerStatus(dbSettings.isRunning ? 'Running' : 'Stopped');
           setPerformanceMetrics({
@@ -655,6 +658,7 @@ const ExportCsvPage: React.FC = () => {
           lowSeatThreshold: settings.lowSeatThreshold,
           minSeatFilter: settings.minSeatFilter,
           minSeatFilterMode: settings.minSeatFilterMode,
+          dominatedListingsEnabled: settings.dominatedListingsEnabled,
         })
       });
       
@@ -940,6 +944,29 @@ const ExportCsvPage: React.FC = () => {
                   </p>
                 </div>
               )}
+
+              {/* Dominated Listings */}
+              <div className="p-3 bg-amber-50/40 border border-amber-100 rounded-lg space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <Layers className="w-3.5 h-3.5 text-amber-500" />
+                    <span className="text-xs font-semibold text-slate-700">Dominated Listings</span>
+                  </div>
+                  <button type="button" onClick={() => setSettings(prev => ({ ...prev, dominatedListingsEnabled: !prev.dominatedListingsEnabled }))}
+                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-amber-400 ${
+                      settings.dominatedListingsEnabled ? 'bg-amber-500' : 'bg-slate-300'
+                    }`}>
+                    <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform shadow-sm ${
+                      settings.dominatedListingsEnabled ? 'translate-x-6' : 'translate-x-1'
+                    }`} />
+                  </button>
+                </div>
+                <p className="text-[11px] text-amber-600/70">
+                  Skip a listing when a row closer to the field is already on sale at or below its
+                  per-seat price &mdash; anything a better seat matches or beats is dropped.
+                  Applies to every event unless its exclusion rules say otherwise.
+                </p>
+              </div>
 
               {/* Low Seat Auto-Stop */}
               {featureFlags.lowSeatAutoStop && (

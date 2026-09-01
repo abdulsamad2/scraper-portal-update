@@ -80,6 +80,13 @@ const schedulerSettingsSchema = new mongoose.Schema({
     enum: ['row', 'section'],
     default: 'section'
   },
+  // Global switch for the dominated-listings rule: drop a listing when a seat
+  // closer to the field is already on sale at or below its per-seat price.
+  // Every event follows this unless its exclusion rules override it.
+  dominatedListingsEnabled: {
+    type: Boolean,
+    default: false
+  },
   createdAt: {
     type: Date,
     default: Date.now

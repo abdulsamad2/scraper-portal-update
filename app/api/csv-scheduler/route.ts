@@ -288,6 +288,7 @@ interface SchedulerResponse {
     lowSeatThreshold: number;
     minSeatFilter: number;
     minSeatFilterMode: 'row' | 'section';
+    dominatedListingsEnabled: boolean;
   };
   metrics?: {
     totalRuns: number;
@@ -330,6 +331,7 @@ export async function GET(request: Request) {
         lowSeatThreshold: settings.lowSeatThreshold ?? 10,
         minSeatFilter: settings.minSeatFilter ?? 0,
         minSeatFilterMode: settings.minSeatFilterMode ?? 'section',
+        dominatedListingsEnabled: settings.dominatedListingsEnabled ?? false,
       }
     };
 
@@ -457,6 +459,7 @@ export async function POST(req: NextRequest) {
         lowSeatThreshold?: number;
         minSeatFilter?: number;
         minSeatFilterMode?: 'row' | 'section';
+        dominatedListingsEnabled?: boolean;
       } = {};
       if (intervalMinutes !== undefined) updates.scheduleRateMinutes = intervalMinutes;
       if (uploadToSync !== undefined) updates.uploadToSync = uploadToSync;
@@ -465,6 +468,7 @@ export async function POST(req: NextRequest) {
       if (typeof body.lowSeatThreshold === 'number') updates.lowSeatThreshold = Math.min(Math.max(body.lowSeatThreshold, 1), 1000);
       if (typeof body.minSeatFilter === 'number') updates.minSeatFilter = Math.min(Math.max(body.minSeatFilter, 0), 100);
       if (body.minSeatFilterMode === 'row' || body.minSeatFilterMode === 'section') updates.minSeatFilterMode = body.minSeatFilterMode;
+      if (typeof body.dominatedListingsEnabled === 'boolean') updates.dominatedListingsEnabled = body.dominatedListingsEnabled;
 
       await updateSchedulerSettings(updates);
 

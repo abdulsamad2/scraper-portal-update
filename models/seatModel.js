@@ -90,6 +90,14 @@ const consecutiveGroupSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
+    // Written by the scrapers: the row's index inside Ticketmaster's
+    // SECTION.segments array, so 0 is the row closest to the field. Positional,
+    // never parsed from the label, so numeric, A/B/C and AA/A/B schemes all
+    // rank correctly. Null for GA and for inventory scraped before this landed.
+    rowRank: {
+      type: Number,
+      default: null,
+    },
     seatCount: {
       type: Number,
       required: true,
@@ -115,6 +123,10 @@ const consecutiveGroupSchema = new mongoose.Schema(
       row: {
         type: String,
         required: true,
+      },
+      rowRank: {
+        type: Number,
+        default: null,
       },
       cost: {
         type: Number,

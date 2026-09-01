@@ -4,15 +4,18 @@ import Link from 'next/link';
 import {
   ChevronLeft, Save, Trash2, Plus, Filter,
   Ticket, ExternalLink, MapPin, Calendar,
-  TrendingDown, ChevronDown, ChevronUp
+  TrendingDown, ChevronDown, ChevronUp, Layers
 } from 'lucide-react';
 import {
   getExclusionRules,
   saveExclusionRules,
   getEventSectionsAndRows,
   getOutlierAnalysis,
+  getDominatedListingsPreview,
   SectionRowExclusion,
   ExclusionRulesData,
+  DominatedListingsRule,
+  DominatedPreview,
   OutlierAnalysis,
 } from '@/actions/exclusionActions';
 import { useNotifications } from '@/components/providers/NotificationProvider';
@@ -50,15 +53,18 @@ export default function ExclusionManagementPage({
   const [sections, setSections] = useState<SectionData[]>([]);
   const [sectionRowExclusions, setSectionRowExclusions] = useState<SectionRowExclusion[]>([]);
   const [outliers, setOutliers] = useState<OutlierAnalysis | null>(null);
+  const [dominated, setDominated] = useState<DominatedListingsRule>({ mode: 'inherit' });
+  const [dominatedPreview, setDominatedPreview] = useState<DominatedPreview | null>(null);
   const { actions: notificationActions } = useNotifications();
 
   const loadData = useCallback(async () => {
     setPageState('loading');
     try {
-      const [rulesResult, sectionsResult, outlierResult] = await Promise.all([
+      const [rulesResult, sectionsResult, outlierResult, dominatedResult] = await Promise.all([
         getExclusionRules(eventId),
         getEventSectionsAndRows(eventId),
         getOutlierAnalysis(eventId),
+        getDominatedListingsPreview(eventId),
       ]);
 
       if (sectionsResult.success && sectionsResult.data) {
@@ -68,6 +74,17 @@ export default function ExclusionManagementPage({
       if (rulesResult.success && rulesResult.data) {
         const data = Array.isArray(rulesResult.data) ? rulesResult.data[0] : rulesResult.data;
         setSectionRowExclusions(data?.sectionRowExclusions || []);
+        const savedMode = data?.dominatedListings?.mode;
+        setDominated({
+          mode: savedMode === 'on' || savedMode === 'off' || savedMode === 'inherit'
+            ? savedMode
+            // Rules saved before the global switch existed carried a plain boolean.
+            : data?.dominatedListings?.enabled === true ? 'on' : 'inherit',
+        });
+      }
+
+      if (dominatedResult.success && dominatedResult.data) {
+        setDominatedPreview(dominatedResult.data);
       }
 
       if (outlierResult.success && outlierResult.data) {
@@ -93,11 +110,16 @@ export default function ExclusionManagementPage({
         eventId,
         eventName,
         sectionRowExclusions,
+        dominatedListings: dominated,
         isActive: true
       };
       const result = await saveExclusionRules(rulesData);
       if (result.success) {
         notificationActions.showNotification('success', 'Exclusion rules saved successfully');
+        // The preview reports what the rule would do under the saved setting,
+        // so it has to be re-read once the new one is stored.
+        const refreshed = await getDominatedListingsPreview(eventId);
+        if (refreshed.success && refreshed.data) setDominatedPreview(refreshed.data);
       } else {
         notificationActions.showNotification('error', result.error || 'Failed to save exclusion rules');
       }
@@ -225,6 +247,149 @@ export default function ExclusionManagementPage({
               {sectionRowExclusions.filter(e => e.excludeEntireSection).length}
             </p>
           </div>
+        </div>
+      </div>
+
+      {/* ── Dominated Listings ── */}
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+        <div className="px-5 py-3.5 border-b border-slate-100 flex items-center gap-2">
+          <span className="w-6 h-6 rounded-md bg-amber-50 flex items-center justify-center">
+            <Layers size={12} className="text-amber-500" />
+          </span>
+          <h2 className="text-sm font-bold text-slate-700">Dominated Listings</h2>
+          <span className="ml-auto text-[11px] text-slate-400 font-medium">
+            Drops listings a better seat already beats on price
+          </span>
+        </div>
+
+        <div className="p-5 space-y-5">
+          <p className="text-xs text-slate-500 leading-relaxed">
+            Inside one product &mdash; same section, quantity and split &mdash; a listing is
+            <span className="font-semibold text-slate-600"> dominated</span> when a row closer to the
+            field is already on sale at or below its per-seat price. Nobody pays more for a worse
+            seat, so it is held out of the CSV. Rows are ordered by Ticketmaster&rsquo;s own row
+            ordering, never by parsing the label, so 1/2/3, A/B/C and AA/A/B all rank correctly.
+            When the front rows are the expensive ones &mdash; the normal case &mdash; nothing is dropped.
+          </p>
+
+          {/* Global vs per-event */}
+          <div>
+            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">
+              For this event
+            </label>
+            <div className="flex items-center gap-2 flex-wrap">
+              {([
+                { mode: 'inherit' as const, label: 'Follow global' },
+                { mode: 'on' as const, label: 'Always on' },
+                { mode: 'off' as const, label: 'Always off' },
+              ]).map(opt => (
+                <button
+                  key={opt.mode}
+                  type="button"
+                  onClick={() => setDominated({ ...dominated, mode: opt.mode })}
+                  className={`px-3 py-1.5 rounded-lg text-sm font-semibold border transition-colors ${
+                    dominated.mode === opt.mode
+                      ? 'bg-amber-500 border-amber-500 text-white shadow-sm'
+                      : 'bg-white border-slate-200 text-slate-600 hover:border-amber-300'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+              {dominatedPreview && (
+                <span className="text-xs text-slate-500">
+                  Global is currently{' '}
+                  <span className={dominatedPreview.globalEnabled ? 'font-semibold text-emerald-600' : 'font-semibold text-slate-500'}>
+                    {dominatedPreview.globalEnabled ? 'on' : 'off'}
+                  </span>
+                  {' '}&middot; set on the Export CSV page
+                </span>
+              )}
+            </div>
+            <p className="mt-2 text-xs text-slate-500 leading-relaxed">
+              <span className="font-semibold text-slate-600">Follow global</span> tracks the switch
+              on the Export CSV page, so one toggle moves every event.
+              <span className="font-semibold text-slate-600"> Always on</span> applies the rule to
+              this event even while global is off &mdash; the way to pilot it on one event.
+              <span className="font-semibold text-slate-600"> Always off</span> exempts this event
+              even while global is on.
+            </p>
+          </div>
+
+          {/* Impact preview */}
+          {dominatedPreview && (
+            <div className="border border-slate-200 rounded-xl overflow-hidden">
+              <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 flex items-center gap-2">
+                <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">
+                  Impact on current inventory
+                </span>
+                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide ${
+                  dominatedPreview.effectivelyEnabled
+                    ? 'bg-emerald-50 text-emerald-600 border border-emerald-200'
+                    : 'bg-slate-100 text-slate-500 border border-slate-200'
+                }`}>
+                  {dominatedPreview.effectivelyEnabled ? 'Active on this event' : 'Not active'}
+                </span>
+                <span className="ml-auto text-[11px] text-slate-400">
+                  {dominatedPreview.rankedListings} ranked
+                  {dominatedPreview.unrankedListings > 0 && (
+                    <> &middot; {dominatedPreview.unrankedListings} unranked (always kept)</>
+                  )}
+                </span>
+              </div>
+
+              {dominatedPreview.rankedListings === 0 ? (
+                <p className="px-4 py-4 text-sm text-slate-400">
+                  No listing on this event carries a row rank yet, so the rule has nothing to
+                  compare. Inventory scraped before row ranks shipped is always kept.
+                </p>
+              ) : (
+                <>
+                  <div className="grid grid-cols-3 divide-x divide-slate-100 border-b border-slate-100">
+                    <div className="px-4 py-3">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Kept</p>
+                      <p className="text-xl font-bold tabular-nums text-slate-700">{dominatedPreview.kept}</p>
+                    </div>
+                    <div className="px-4 py-3">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Dropped</p>
+                      <p className="text-xl font-bold tabular-nums text-red-600">{dominatedPreview.dropped}</p>
+                    </div>
+                    <div className="px-4 py-3">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Drop rate</p>
+                      <p className="text-xl font-bold tabular-nums text-slate-500">{dominatedPreview.dropPct}%</p>
+                    </div>
+                  </div>
+
+                  {dominatedPreview.samples.length > 0 && (
+                    <div className="px-4 py-3">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">
+                        Examples that would be dropped
+                      </p>
+                      <ul className="space-y-1 text-xs text-slate-600">
+                        {dominatedPreview.samples.map((sample, i) => (
+                          <li key={i} className="flex flex-wrap items-baseline gap-x-1.5">
+                            <span className="font-semibold text-slate-700">
+                              {sample.section} Row {sample.row}
+                            </span>
+                            <span className="text-slate-400">&times;{sample.quantity}</span>
+                            <span className="text-red-600 font-semibold tabular-nums">
+                              ${sample.listPrice.toFixed(2)}/seat
+                            </span>
+                            {sample.beatenByRow && (
+                              <span className="text-slate-400">
+                                &mdash; beaten by Row {sample.beatenByRow} at{' '}
+                                <span className="tabular-nums">${sample.beatenByPrice.toFixed(2)}</span>
+                              </span>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
