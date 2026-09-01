@@ -28,6 +28,10 @@ interface Bargain {
  * go and buy right now — and because a drop is one of the things that creates a
  * bargain: seats landing behind a listing lift the average it is measured
  * against.
+ *
+ * Reads from /api/underpriced, which derives the list from the database rather
+ * than from the watcher's in-memory state, so the answer does not depend on
+ * which instance served the request or on whether a watch cycle has run.
  */
 export default function UnderpricedView() {
   const [rows, setRows] = useState<Bargain[] | null>(null);
@@ -37,7 +41,7 @@ export default function UnderpricedView() {
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch('/api/inventory-watcher', { cache: 'no-store' });
+      const res = await fetch('/api/underpriced', { cache: 'no-store' });
       const data = await res.json();
       const list: Bargain[] = Array.isArray(data.underpriced) ? data.underpriced : [];
 

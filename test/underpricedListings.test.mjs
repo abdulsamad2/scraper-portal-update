@@ -9,7 +9,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { findUnderpricedRows } from '../lib/inventoryWatcher.js';
+import { findUnderpricedRows } from '../lib/underpriced.js';
 
 /** Build the snapshot shape the watcher keeps: one entry per (event, section, row). */
 function stateWith(rows) {

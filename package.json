@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "next lint",
     "update-pricing": "node scripts/updateEventsPricing.js",
-    "test": "MONGODB_URI=mongodb://127.0.0.1:27017/unused node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
     "@lottiefiles/dotlottie-react": "^0.18.3",
