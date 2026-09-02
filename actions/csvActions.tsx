@@ -456,8 +456,9 @@ async function loadDominatedListingsEvents(mappingIds: string[]): Promise<Set<st
 
 /**
  * Drop dominated listings for the events opted in. Records for events that have
- * not opted in, and records with no rowRank (GA, parking, inventory scraped
- * before rowRank existed), pass through untouched.
+ * not opted in, records with no rowRank (GA, parking, inventory scraped before
+ * rowRank existed), and records whose row label is on neither rank scale pass
+ * through untouched. Numbered and lettered rows are judged separately.
  */
 function applyDominatedListingsFilter(
   records: CsvRow[],
@@ -470,6 +471,7 @@ function applyDominatedListingsFilter(
       ? {
           bucketKey: dominatedBucketKey(r.event_id, r.section, r.quantity, r.custom_split),
           rowRank: r.rowRank,
+          rowLabel: r.row,
           perSeatPrice: r.list_price ?? 0,
         }
       : null,

@@ -7,19 +7,39 @@
  * for a worse seat while the better one sits right there. It is dead weight in
  * the export, so it is dropped.
  *
- * Rows are ordered by `rowRank`, the position the scraper reads out of
- * Ticketmaster's own row ordering, so the rule never parses a row label and
- * behaves the same for 1/2/3, A/B/C and AA/A/B seating alike.
+ * Rows are ordered by `rowRank`, the position the scraper reads off the row
+ * label: the number for a numbered row, the alphabet position for a lettered
+ * one.
+ *
+ * Those are two labelling systems, not one, and a section can carry both. The
+ * two scales overlap — row 2 and row B are each rank 2 — so judged together a
+ * letter row would dominate a number row that sits nowhere near it. Section 423
+ * of Arizona Cardinals v Philadelphia Eagles is the case that surfaced it: row
+ * B at $212.03 was deleting row 2 at $242.32, which is the front of the
+ * numbered rows and beaten by nothing.
+ *
+ * So each bucket is judged as two independent universes, numbers and letters,
+ * and the front-most of each survives. Letters never dominate numbers and
+ * numbers never dominate letters.
  *
  * Worked example — section 107, qty 2, split "2":
  *
- *     Row 1 (rank 0) · $700   keep — nothing above it
- *     Row 3 (rank 2) · $650   keep — the only seat above it costs $700, more
- *     Row 3 (rank 2) · $780   drop — Row 1 is better AND $80/seat cheaper
+ *     Row 1 (rank 1) · $700   keep — nothing above it
+ *     Row 3 (rank 3) · $650   keep — the only seat above it costs $700, more
+ *     Row 3 (rank 3) · $780   drop — Row 1 is better AND $80/seat cheaper
  *
  * The rule stays quiet whenever price follows the physical order, which is the
  * normal case: Row 1 $900 / Row 3 $650 / Row 15 $500 keeps all three. It fires
  * only where a worse row is asking more than a better one.
+ *
+ * Worked example — section 423, qty 2, split "2", a section with both kinds:
+ *
+ *     Row 2 (numeric) · $242.32   keep — the front of the numbered rows
+ *     Row 4 (numeric) · $248.38   drop — row 2 is better and cheaper
+ *     Row B (letter)  · $212.03   keep — the front of the lettered rows
+ *
+ * Row B is cheaper than everything and still cannot touch row 2: they are not
+ * in the same universe.
  *
  * Kept in lib/ rather than in the CSV action because both the exporter and the
  * portal's preview must apply the identical rule, and because a 'use server'
@@ -73,10 +93,58 @@ export function resolveDominatedEnabled(
 export interface DominatedCandidate {
   /** Listings only ever compete inside one bucket: same event, section, quantity and split. */
   bucketKey: string;
-  /** 0 is the row closest to the field. Null (no row ordering — GA, parking) passes through. */
+  /** Rank 1 is the row closest to the field. Null (no row ordering — GA, parking) passes through. */
   rowRank: number | null | undefined;
+  /**
+   * The row label the rank was read off. It says which of the two rank scales
+   * the rank is on, and a listing is only ever judged against its own scale.
+   * A label on neither scale passes through.
+   */
+  rowLabel: string | null | undefined;
   /** Per-seat price, the only price a buyer compares across two listings of the same size. */
   perSeatPrice: number;
+}
+
+/**
+ * The two row-labelling systems that carry a position, matching what the
+ * scraper ranks: "1".."10000" and a single letter "A".."Z", either case.
+ */
+export type RowRankKind = 'numeric' | 'letter';
+
+/**
+ * Which scale a row label is on, or null when it is on neither.
+ *
+ * Null covers AA and AAA (ahead of A in some venues, behind Z in others), 12A,
+ * BOX, blank labels, and GA, lawn and parking. Those are never ranked by the
+ * scraper either, and a listing carrying one is kept without being judged
+ * rather than placed by guesswork.
+ */
+export function rowRankKind(label: string | null | undefined): RowRankKind | null {
+  if (typeof label !== 'string') return null;
+  const name = label.trim();
+  if (/^\d+$/.test(name)) {
+    const value = Number(name);
+    return value >= 1 && value <= 10000 ? 'numeric' : null;
+  }
+  if (/^[A-Za-z]$/.test(name)) return 'letter';
+  return null;
+}
+
+/**
+ * The universe a listing is judged in: its bucket and its rank scale together.
+ * Null when the label is on neither scale, which is the caller's signal to keep
+ * the listing untouched.
+ *
+ * The two scales overlap — row 2 and row B are both rank 2 — so a bucket alone
+ * is not a fair comparison. Splitting the key here keeps the exporter's filter
+ * and the portal's "beaten by" preview reading the same universes.
+ */
+export function dominatedUniverseKey(
+  bucketKey: string,
+  rowLabel: string | null | undefined,
+): string | null {
+  const kind = rowRankKind(rowLabel);
+  return kind === null ? null : `${bucketKey}\u0000${kind}`;
 }
 
 interface Entry<T> {
@@ -93,13 +161,16 @@ interface Bucket<T> {
  * Split listings into the ones worth exporting and the ones a better seat has
  * already beaten on price.
  *
- * Each bucket is sorted by rowRank ascending, then per-seat price ascending,
- * and walked front to back. A listing survives only when nothing already kept
- * matches or beats its price — so a bucket's survivors are exactly its strictly
- * falling prices as the seats get worse.
+ * Each universe — one bucket, one rank scale — is sorted by rowRank ascending,
+ * then per-seat price ascending, and walked front to back. A listing survives
+ * only when nothing already kept in its own universe matches or beats its price
+ * — so a universe's survivors are exactly its strictly falling prices as the
+ * seats get worse. A section holding both numbered and lettered rows therefore
+ * keeps the front of each.
  *
- * Anything `describe` returns null for, and anything with no rowRank, is kept
- * without being judged: there is no row ordering to judge it against.
+ * Anything `describe` returns null for, anything with no rowRank, and anything
+ * whose label is on neither rank scale is kept without being judged: there is
+ * no row ordering to judge it against.
  */
 export function partitionDominated<T>(
   items: T[],
@@ -111,7 +182,8 @@ export function partitionDominated<T>(
 
   for (const item of items) {
     const candidate = describe(item);
-    if (!candidate || candidate.rowRank == null) {
+    const universeKey = candidate ? dominatedUniverseKey(candidate.bucketKey, candidate.rowLabel) : null;
+    if (!candidate || candidate.rowRank == null || universeKey === null) {
       kept.push(item);
       continue;
     }
@@ -120,9 +192,9 @@ export function partitionDominated<T>(
       rank: candidate.rowRank,
       price: candidate.perSeatPrice,
     };
-    const bucket = buckets.get(candidate.bucketKey);
+    const bucket = buckets.get(universeKey);
     if (bucket) bucket.entries.push(entry);
-    else buckets.set(candidate.bucketKey, { entries: [entry] });
+    else buckets.set(universeKey, { entries: [entry] });
   }
 
   for (const bucket of buckets.values()) {

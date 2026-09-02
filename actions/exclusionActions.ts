@@ -6,6 +6,7 @@ import { createErrorLog } from './errorLogActions';
 import {
   partitionDominated,
   dominatedBucketKey,
+  dominatedUniverseKey,
   resolveDominatedEnabled,
   resolveDominatedMode,
   type DominatedMode,
@@ -397,31 +398,42 @@ export async function getDominatedListingsPreview(
       };
     });
 
-    const rankedListings = listings.filter(l => l.rowRank != null).length;
+    // Ranked means judged: a rank the filter will not act on — no rowRank, or a
+    // label on neither rank scale — belongs on the untouched side of the count,
+    // or the preview promises a drop the export will not make.
+    const rankedListings = listings.filter(
+      l => l.rowRank != null && dominatedUniverseKey(l.bucketKey, l.row) !== null,
+    ).length;
     const unrankedListings = listings.length - rankedListings;
 
     const { kept: keptListings, dropped: droppedListings } = partitionDominated(listings, (l) => ({
       bucketKey: l.bucketKey,
       rowRank: l.rowRank,
+      rowLabel: l.row,
       perSeatPrice: l.price,
     }));
 
     // For each sample, name the listing that beat it: the cheapest survivor in
-    // the same bucket sitting closer to the field. That is what makes the drop
-    // legible — "Row 3 at $780 while Row 1 goes for $700".
-    const survivorsByBucket = new Map<string, PreviewListing[]>();
+    // the same universe sitting closer to the field. That is what makes the drop
+    // legible — "Row 3 at $780 while Row 1 goes for $700". Universe, not bucket:
+    // a numbered row is never beaten by a lettered one, so offering row B as the
+    // reason row 4 went would name a seat the filter never compared it against.
+    const survivorsByUniverse = new Map<string, PreviewListing[]>();
     for (const l of keptListings) {
       if (l.rowRank == null) continue;
-      const existing = survivorsByBucket.get(l.bucketKey);
+      const universeKey = dominatedUniverseKey(l.bucketKey, l.row);
+      if (universeKey === null) continue;
+      const existing = survivorsByUniverse.get(universeKey);
       if (existing) existing.push(l);
-      else survivorsByBucket.set(l.bucketKey, [l]);
+      else survivorsByUniverse.set(universeKey, [l]);
     }
 
     const samples: DominatedSample[] = [];
     for (const l of droppedListings) {
       if (samples.length >= DOMINATED_SAMPLE_LIMIT) break;
       let best: PreviewListing | null = null;
-      for (const s of survivorsByBucket.get(l.bucketKey) ?? []) {
+      const universeKey = dominatedUniverseKey(l.bucketKey, l.row);
+      for (const s of (universeKey === null ? null : survivorsByUniverse.get(universeKey)) ?? []) {
         // Equal rank counts: a cheaper listing in the same row dominates too,
         // and reporting that as "no better seat found" left the sample blank.
         if (s.rowRank! > l.rowRank!) continue;
