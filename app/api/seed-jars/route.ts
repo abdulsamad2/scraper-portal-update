@@ -147,7 +147,18 @@ export async function POST(req: NextRequest) {
     if (derivedSlot !== undefined) set.slot = derivedSlot;
     if (body.seedEvent !== undefined) set.seedEvent = body.seedEvent;
 
-    await coll.updateOne({ _id: id }, { $set: set }, { upsert: true });
+    // A slot re-mints into the SAME _id, so a $set alone leaves the previous jar's lease
+    // fields in place and the replacement is born already leased to a page that died
+    // before it existed — invisible to every scraper until the stale leaseUntil passes
+    // (measured: ~30 minutes of a ~50 minute life). Clear the lease with the mint.
+    await coll.updateOne(
+      { _id: id },
+      {
+        $set: set,
+        $unset: { leaseOwner: '', leaseProxy: '', leaseUntil: '', leasedAt: '' },
+      },
+      { upsert: true }
+    );
 
     return NextResponse.json({
       ok: true,
@@ -178,10 +189,17 @@ export async function GET(req: NextRequest) {
       const now = new Date();
       const docs = await coll
         .find({})
-        .project({ status: 1, expiresAt: 1, machineId: 1, mintedAt: 1, useCount: 1 })
+        .project({ status: 1, expiresAt: 1, machineId: 1, mintedAt: 1, useCount: 1, leaseUntil: 1 })
         .toArray();
       const healthy = docs.filter(
         (d) => d.status === 'healthy' && d.expiresAt && new Date(d.expiresAt) > now
+      );
+      // A healthy jar is not an AVAILABLE jar. The scrapers lease a jar one-to-one to a
+      // single page (browser-cookies.js#leaseFarmJar) and skip anything already held, so
+      // totalHealthy alone reports surplus while every instance logs "no farm jar
+      // available". totalFree is the number the farm's capacity math actually wants.
+      const free = healthy.filter(
+        (d) => !d.leaseUntil || new Date(d.leaseUntil) <= now
       );
       const machines = new Set(healthy.map((d) => d.machineId).filter(Boolean));
 
@@ -208,6 +226,7 @@ export async function GET(req: NextRequest) {
         ok: true,
         pool: {
           totalHealthy: healthy.length,
+          totalFree: free.length,     // healthy AND not leased — the real capacity number
           machines: machines.size,          // kept as a COUNT — existing callers rely on it
           totalDocs: docs.length,
           machineList: [...byMachine.values()].sort((a, b) => a.machineId.localeCompare(b.machineId)),
