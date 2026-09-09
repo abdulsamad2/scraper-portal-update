@@ -15,12 +15,17 @@ services:
       - CSV_AUTO_START=${CSV_AUTO_START:-true}
       - SYNC_COMPANY_ID=${SYNC_COMPANY_ID}
       - SYNC_API_TOKEN=${SYNC_API_TOKEN}
+      - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+      - WHATSAPP_SESSION_PATH=/app/.wwebjs_auth
     env_file:
       - .env.local
     restart: unless-stopped
     volumes:
       - ./exports:/app/exports
       - ./temp:/app/temp
+      # Linked WhatsApp Web session. Without this the alert transport unlinks on every
+      # deploy and goes quiet until someone re-scans the QR.
+      - ./.wwebjs_auth:/app/.wwebjs_auth
     networks:
       - app-network
     healthcheck:

@@ -46,6 +46,7 @@ import { PipelineStage } from 'mongoose';
 import {
   partitionDominated,
   dominatedBucketKey,
+  ticketTypeOf,
   resolveDominatedEnabled,
   EventRowBuffer,
   type DominatedEventOverride,
@@ -147,11 +148,13 @@ interface CsvRow {
   shown_quantity?: number;
   passthrough?: string;
   /**
-   * Internal only — never exported. The row's index within its section as
-   * Ticketmaster orders them (0 = closest to the field), carried on the record
+   * Internal only — never exported. Where the row sorts within its section,
+   * read off its label (rank 1 = closest to the field), carried on the record
    * so the dominated-listings rule can compare a listing against better seats.
-   * CSV output is driven by COLUMN_ENCODERS, not by this interface's keys, so
-   * this field cannot leak into the file. Null for GA and for older inventory.
+   * Only meaningful alongside `row`, which says which of the four rank scales
+   * it is on — see lib/rowRank.js. CSV output is driven by COLUMN_ENCODERS, not
+   * by this interface's keys, so this field cannot leak into the file. Null for
+   * GA, parking and older inventory.
    */
   rowRank?: number | null;
 }
@@ -457,8 +460,12 @@ async function loadDominatedListingsEvents(mappingIds: string[]): Promise<Set<st
 /**
  * Drop dominated listings for the events opted in. Records for events that have
  * not opted in, records with no rowRank (GA, parking, inventory scraped before
- * rowRank existed), and records whose row label is on neither rank scale pass
- * through untouched. Numbered and lettered rows are judged separately.
+ * rowRank existed), records whose row label is on no rank scale, and records
+ * with no usable face price pass through untouched.
+ *
+ * Each row shape is judged separately, and so is each ticket type: standard
+ * excludes only standard, fan only fan, broker only broker. The comparison is
+ * on face price, which is the same measure on all three.
  */
 function applyDominatedListingsFilter(
   records: CsvRow[],
@@ -469,10 +476,16 @@ function applyDominatedListingsFilter(
   const { kept, dropped } = partitionDominated(records, (r) =>
     enabledMappingIds.has(r.event_id)
       ? {
-          bucketKey: dominatedBucketKey(r.event_id, r.section, r.quantity, r.custom_split),
+          bucketKey: dominatedBucketKey(
+            r.event_id,
+            r.section,
+            r.quantity,
+            r.custom_split,
+            ticketTypeOf({ tags: r.tags, splitType: r.split_type }),
+          ),
           rowRank: r.rowRank,
           rowLabel: r.row,
-          perSeatPrice: r.list_price ?? 0,
+          perSeatPrice: r.face_price ?? 0,
         }
       : null,
   );

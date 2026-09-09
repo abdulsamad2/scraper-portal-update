@@ -13,11 +13,46 @@ import { verifySession } from '@/lib/auth';
  * unauthenticated request still redirects afterwards.
  */
 
+/**
+ * Routes that authenticate with EXTENSION_API_KEY instead of a browser session.
+ *
+ * The cookie-farm and the browser extension are headless callers: they present
+ * an `x-api-key` header and hold no session cookie, so the session check below
+ * would 401 them before their handler ever ran. Each of these routes calls
+ * requireApiKey() as its first statement — they are guarded, just by a
+ * different credential.
+ *
+ * This only started mattering when this file began being loaded at all. It was
+ * previously named proxy.ts, which Next 15 ignores, so /api/* was unguarded and
+ * these four worked by accident. Renaming it to middleware.ts turned the session
+ * check on for the first time and took the farm and the extension down with it —
+ * as a 401 that reads exactly like a rejected API key, because the real key
+ * check never got to run.
+ *
+ * NOTE: requireApiKey() disables itself when EXTENSION_API_KEY is unset (see
+ * lib/apiKey.ts), so these four are only actually protected when that variable
+ * is set in the portal's environment. It must be set in production.
+ */
+const API_KEY_ROUTES = [
+  '/api/seed-jars',
+  '/api/seed-event',
+  '/api/ticketmaster-state',
+  '/api/proxies',
+];
+
+function usesApiKeyAuth(pathname: string): boolean {
+  return API_KEY_ROUTES.some((p) => pathname === p || pathname.startsWith(p + '/'));
+}
+
 export default async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Protect API routes (except auth endpoints)
-  if (pathname.startsWith('/api/') && !pathname.startsWith('/api/auth/')) {
+  // Protect API routes (except auth endpoints and the API-key-guarded ones)
+  if (
+    pathname.startsWith('/api/') &&
+    !pathname.startsWith('/api/auth/') &&
+    !usesApiKeyAuth(pathname)
+  ) {
     const isAuthenticated = await verifySession(request);
     if (!isAuthenticated) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });

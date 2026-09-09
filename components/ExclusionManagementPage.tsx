@@ -264,11 +264,13 @@ export default function ExclusionManagementPage({
 
         <div className="p-5 space-y-5">
           <p className="text-xs text-slate-500 leading-relaxed">
-            Inside one product &mdash; same section, quantity and split &mdash; a listing is
-            <span className="font-semibold text-slate-600"> dominated</span> when a row closer to the
-            field is already on sale at or below its per-seat price. Nobody pays more for a worse
-            seat, so it is held out of the CSV. Rows are ordered by Ticketmaster&rsquo;s own row
-            ordering, never by parsing the label, so 1/2/3, A/B/C and AA/A/B all rank correctly.
+            Inside one product &mdash; same section, quantity, split and ticket type &mdash; a listing
+            is <span className="font-semibold text-slate-600"> dominated</span> when a row closer to
+            the field is already on sale at or below its per-seat <span className="font-semibold text-slate-600">face</span> price.
+            Nobody pays more for a worse seat, so it is held out of the CSV. Standard excludes only
+            standard, fan only fan, broker only broker &mdash; and face price is compared because
+            the three carry different markups. Rows are ordered by the row label: 1/2/3, A/B/C,
+            AA/BB/CC and AAA/BBB each rank on their own scale and never against each other.
             When the front rows are the expensive ones &mdash; the normal case &mdash; nothing is dropped.
           </p>
 
@@ -372,13 +374,20 @@ export default function ExclusionManagementPage({
                               {sample.section} Row {sample.row}
                             </span>
                             <span className="text-slate-400">&times;{sample.quantity}</span>
+                            <span className="uppercase text-[10px] font-bold tracking-wide text-slate-400">
+                              {sample.ticketType}
+                            </span>
                             <span className="text-red-600 font-semibold tabular-nums">
-                              ${sample.listPrice.toFixed(2)}/seat
+                              ${sample.facePrice.toFixed(2)} face/seat
+                            </span>
+                            <span className="text-slate-400 tabular-nums">
+                              (${sample.listPrice.toFixed(2)} list)
                             </span>
                             {sample.beatenByRow && (
                               <span className="text-slate-400">
                                 &mdash; beaten by Row {sample.beatenByRow} at{' '}
-                                <span className="tabular-nums">${sample.beatenByPrice.toFixed(2)}</span>
+                                <span className="tabular-nums">${sample.beatenByFacePrice.toFixed(2)}</span>
+                                {' '}face
                               </span>
                             )}
                           </li>

@@ -7,8 +7,18 @@ FROM base AS deps
 RUN apk add --no-cache libc6-compat
 WORKDIR /app
 
+# whatsapp-web.js pulls puppeteer, which by default downloads its own Chromium build — one
+# that is glibc-linked and will not run on Alpine at all. Skip the download here and point
+# the runtime at Alpine's own chromium package instead (installed in the runner stage).
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+
 # Install dependencies based on the preferred package manager
-COPY package.json package-lock.json* ./
+# .puppeteerrc.cjs must be present BEFORE npm ci — it is what stops puppeteer's install
+# script downloading a ~350MB Chromium the image never uses (Alpine's chromium is installed
+# in the runner stage instead). The ENV flags above do the same job; both are kept so
+# removing either one on its own cannot silently reintroduce the download.
+COPY package.json package-lock.json* .puppeteerrc.cjs ./
 RUN npm ci --only=production
 
 # Rebuild the source code only when needed
@@ -32,6 +42,19 @@ ENV NODE_ENV production
 # Uncomment the following line in case you want to disable telemetry during runtime.
 # ENV NEXT_TELEMETRY_DISABLED 1
 
+# Chromium for whatsapp-web.js. nss/freetype/harfbuzz/ca-certificates are the runtime libs
+# headless Chromium fails to start without, and the font package stops WhatsApp Web from
+# rendering as empty boxes (which breaks the QR the linking flow depends on).
+RUN apk add --no-cache \
+      chromium \
+      nss \
+      freetype \
+      harfbuzz \
+      ca-certificates \
+      ttf-freefont
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
 
@@ -54,9 +77,11 @@ COPY --from=builder --chown=nextjs:nodejs /app/config ./config
 COPY --from=builder --chown=nextjs:nodejs /app/scripts ./scripts
 COPY --from=builder --chown=nextjs:nodejs /app/types ./types
 
-# Create directories for volumes
-RUN mkdir -p exports temp
-RUN chown nextjs:nodejs exports temp
+# Create directories for volumes. .wwebjs_auth holds the linked WhatsApp session; it must be
+# a mounted volume or every deploy drops the link and silently stops alerting until someone
+# notices and re-scans a QR.
+RUN mkdir -p exports temp .wwebjs_auth
+RUN chown nextjs:nodejs exports temp .wwebjs_auth
 
 USER nextjs
 

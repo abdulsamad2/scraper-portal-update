@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { validateCredentials, createSessionToken, getSessionCookieConfig } from '@/lib/auth';
+import { createSessionToken, getSessionCookieConfig } from '@/lib/auth';
+import { validateCredentials } from '@/lib/authCredentials';
 
 // Simple in-memory rate limiter for login attempts
 const loginAttempts = new Map<string, { count: number; resetAt: number }>();

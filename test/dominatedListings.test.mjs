@@ -13,10 +13,11 @@ import {
   dominatedBucketKey,
   dominatedUniverseKey,
   rowRankKind,
+  ticketTypeOf,
 } from '../lib/dominatedListings.ts';
 import { rowRankFromLabel } from '../lib/rowRank.js';
 
-const BUCKET = dominatedBucketKey('evt-1', '423', 2, '2');
+const BUCKET = dominatedBucketKey('evt-1', '423', 2, '2', 'standard');
 
 /** One listing, ranked exactly as the scraper ranks it. */
 function listing(row, price, bucketKey = BUCKET) {
@@ -89,7 +90,7 @@ test('listings with no rowRank pass through', () => {
 });
 
 test('different buckets never meet, same scale or not', () => {
-  const other = dominatedBucketKey('evt-1', '423', 4, '2');
+  const other = dominatedBucketKey('evt-1', '423', 4, '2', 'standard');
   const { kept, dropped } = run([listing('1', 100), listing('5', 200, other)]);
   assert.deepEqual(kept, ['1', '5']);
   assert.deepEqual(dropped, []);
@@ -190,6 +191,68 @@ test('the portal reads the same ranks the scraper writes', () => {
   ];
   for (const [label, rank] of expected) {
     assert.equal(rowRankFromLabel(label), rank, `rank of ${JSON.stringify(label)}`);
+  }
+});
+
+test('a ticket type only ever excludes its own kind', () => {
+  // Row 1 standard is in front of everything and cheaper than everything, and
+  // may still only drop the standard row behind it.
+  const bucketFor = (type) => dominatedBucketKey('evt-1', '118', 2, '2', type);
+  const { kept, dropped } = run([
+    listing('1', 200, bucketFor('standard')),
+    listing('5', 240, bucketFor('standard')),
+    listing('4', 210, bucketFor('fan')),
+    listing('2', 230, bucketFor('broker')),
+  ]);
+  assert.deepEqual(kept, ['1', '2', '4']);
+  assert.deepEqual(dropped, ['5']);
+});
+
+test('unclassified resale is its own product', () => {
+  const { kept, dropped } = run([
+    listing('1', 200, dominatedBucketKey('evt-1', '118', 2, '2', 'resale')),
+    listing('3', 240, dominatedBucketKey('evt-1', '118', 2, '2', 'fan')),
+  ]);
+  assert.deepEqual(kept, ['1', '3']);
+  assert.deepEqual(dropped, []);
+});
+
+test('ticketTypeOf reads the tag the scraper writes', () => {
+  assert.equal(ticketTypeOf({ tags: 'RESALE BROKER', splitType: 'DEFAULT' }), 'broker');
+  assert.equal(ticketTypeOf({ tags: 'RESALE FAN INVENTORY', splitType: 'DEFAULT' }), 'fan');
+  assert.equal(ticketTypeOf({ tags: 'resale fan', splitType: 'DEFAULT' }), 'fan');
+  assert.equal(ticketTypeOf({ tags: 'STANDARD', splitType: 'NEVERLEAVEONE' }), 'standard');
+  assert.equal(ticketTypeOf({ tags: 'GA_STANDARD', splitType: 'NEVERLEAVEONE' }), 'standard');
+  assert.equal(ticketTypeOf({ tags: '', splitType: 'NEVERLEAVEONE' }), 'standard');
+  assert.equal(ticketTypeOf({ tags: 'RESALE', splitType: 'DEFAULT' }), 'resale');
+  assert.equal(ticketTypeOf({ tags: 'GA_RESALE', splitType: 'CUSTOM' }), 'resale');
+  assert.equal(ticketTypeOf({}), 'resale');
+});
+
+test('a listing with no usable face price is never judged', () => {
+  // Zero is the shape a missing face price arrives in. Treated as a price it
+  // would beat everything in the bucket and empty it.
+  const { kept, dropped } = run([
+    { row: '1', price: 0, bucketKey: BUCKET, rowRank: 1 },
+    { row: '3', price: 240, bucketKey: BUCKET, rowRank: 3 },
+    { row: '5', price: 260, bucketKey: BUCKET, rowRank: 5 },
+  ]);
+  assert.deepEqual(kept, ['1', '3']);
+  assert.deepEqual(dropped, ['5'], 'row 5 still loses to row 3, the cheapest real price in front');
+});
+
+test('the bucket key keeps every dimension apart', () => {
+  const base = ['evt-1', '423', 2, '2', 'standard'];
+  const vary = [
+    ['evt-2', '423', 2, '2', 'standard'],
+    ['evt-1', '424', 2, '2', 'standard'],
+    ['evt-1', '423', 4, '2', 'standard'],
+    ['evt-1', '423', 2, '2,4', 'standard'],
+    ['evt-1', '423', 2, '2', 'fan'],
+  ];
+  const baseKey = dominatedBucketKey(...base);
+  for (const args of vary) {
+    assert.notEqual(dominatedBucketKey(...args), baseKey, `${args.join('|')} must not share a bucket`);
   }
 });
 

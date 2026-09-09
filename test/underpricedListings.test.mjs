@@ -117,11 +117,14 @@ test('only sections touched this cycle are examined', () => {
 });
 
 test('listings sharing a row rank are compared against each other', () => {
+  // The snapshot is keyed by (event, section, row), so two rank-mates need two
+  // labels; the ranks are what the rule reads, and here they are deliberately
+  // equal. Both labels are numeric, so both sit in the same universe.
   const found = findUnderpricedRows(
     stateWith([
       { section: '107', row: '1', rowRank: 0, price: 900 },
-      { section: '107', row: '3a', rowRank: 2, price: 800 },
-      { section: '107', row: '3b', rowRank: 2, price: 200 }, // same rank, far cheaper
+      { section: '107', row: '3', rowRank: 2, price: 800 },
+      { section: '107', row: '13', rowRank: 2, price: 200 }, // same rank, far cheaper
       { section: '107', row: '4', rowRank: 3, price: 800 },
       { section: '107', row: '5', rowRank: 4, price: 800 },
     ]),
@@ -129,10 +132,45 @@ test('listings sharing a row rank are compared against each other', () => {
   );
 
   assert.equal(found.length, 1);
-  assert.equal(found[0].row, '3b');
-  // Its own rank-mate counts as a comparable, so 3a is in the average.
+  assert.equal(found[0].row, '13');
+  // Its own rank-mate counts as a comparable, so row 3 is in the average.
   assert.equal(found[0].comparableCount, 3);
   assert.equal(found[0].comparableAvg, 800);
+});
+
+test('a bargain is judged against its own rank scale, not the whole section', () => {
+  // Section 218 runs numbered rows and doubled-letter rows. Row AA is rank 1 of
+  // the doubled letters and row 1 is rank 1 of the numbers; averaging them would
+  // price a $200 doubled-letter row against seats it does not compete with.
+  const rows = [
+    { section: '218', row: '1', rowRank: 1, price: 900 },
+    { section: '218', row: '2', rowRank: 2, price: 880 },
+    { section: '218', row: '3', rowRank: 3, price: 860 },
+    { section: '218', row: '4', rowRank: 4, price: 840 },
+    { section: '218', row: 'AA', rowRank: 1, price: 200 },
+    { section: '218', row: 'BB', rowRank: 28, price: 210 },
+    { section: '218', row: 'CC', rowRank: 55, price: 205 },
+  ];
+  const found = findUnderpricedRows(stateWith(rows), dirty('218'));
+
+  // AA has only BB and CC behind it — two comparables, below the minimum — so
+  // it is skipped rather than flagged against the numbered rows' $860 average.
+  assert.deepEqual(found.map(f => f.row), []);
+});
+
+test('an unrankable label is left out of the comparison entirely', () => {
+  const rows = [
+    { section: '218', row: '1', rowRank: 1, price: 900 },
+    { section: '218', row: '2', rowRank: 2, price: 880 },
+    { section: '218', row: '3', rowRank: 3, price: 860 },
+    { section: '218', row: '4', rowRank: 4, price: 840 },
+    // A stale rank on a label the ranker no longer reads. It must neither be
+    // flagged nor drag the numbered rows' average around.
+    { section: '218', row: 'WC', rowRank: 1, price: 100 },
+  ];
+  const found = findUnderpricedRows(stateWith(rows), dirty('218'));
+
+  assert.deepEqual(found.map(f => f.row), []);
 });
 
 test('the deepest discount is reported first', () => {

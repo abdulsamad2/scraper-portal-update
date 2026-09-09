@@ -20,7 +20,8 @@ import {
   Users,
   Bell,
   ChevronsLeft,
-  ChevronsRight, Zap
+  ChevronsRight, Zap,
+  Gauge
 } from 'lucide-react';
 
 interface FeatureFlags {
@@ -184,6 +185,11 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
       label: 'Proxies',
       icon: <SignalHigh className="w-5 h-5" />,
       flagKey: 'proxies' as keyof FeatureFlags,
+    },
+    {
+      path: '/dashboard/coverage',
+      label: 'Coverage',
+      icon: <Gauge className="w-5 h-5" />,
     },
   ];
 

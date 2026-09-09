@@ -1,26 +1,42 @@
+import { rowRankKind } from './rowRank.js';
+import { ticketTypeOf } from './ticketType.js';
+
+export { rowRankKind, ticketTypeOf };
+
 /**
  * ── The dominated-listings rule ───────────────────────────────────────────────
  *
- * Within one product — same event, section, quantity and split — a listing is
- * *dominated* when a seat closer to the field is already on sale at or below
- * its per-seat price. No buyer would ever pick it: they would be paying more
- * for a worse seat while the better one sits right there. It is dead weight in
- * the export, so it is dropped.
+ * Within one product — same event, section, quantity, split and ticket type — a
+ * listing is *dominated* when a seat closer to the field is already on sale at
+ * or below its per-seat face price. No buyer would ever pick it: they would be
+ * paying more for a worse seat while the better one sits right there. It is
+ * dead weight in the export, so it is dropped.
+ *
+ * Ticket type is part of the product, not a label on it. Standard, fan resale
+ * and broker resale are three different things to sell, priced by different
+ * people and marked up differently by us, so standard only ever excludes
+ * standard, fan only fan, and broker only broker. Resale the classifier could
+ * not place is a product of its own and competes with nothing else.
+ *
+ * The comparison is on FACE price — the price before our markup. That is the
+ * one number that means the same thing on every listing: two ticket types can
+ * carry different markups on the same seat, so list prices would rank the
+ * markup as much as the seat.
  *
  * Rows are ordered by `rowRank`, the position the scraper reads off the row
  * label: the number for a numbered row, the alphabet position for a lettered
  * one.
  *
- * Those are two labelling systems, not one, and a section can carry both. The
- * two scales overlap — row 2 and row B are each rank 2 — so judged together a
- * letter row would dominate a number row that sits nowhere near it. Section 423
- * of Arizona Cardinals v Philadelphia Eagles is the case that surfaced it: row
- * B at $212.03 was deleting row 2 at $242.32, which is the front of the
- * numbered rows and beaten by nothing.
+ * Those are four labelling systems, not one — numbers, single letters, doubled
+ * letters and three-letter rows — and a section can carry more than one. The
+ * scales overlap, since row 2, row B, row BB and row BBB are all rank 2, so
+ * judged together a row of one shape deletes a row of another that sits nowhere
+ * near it. Section 423 of Arizona Cardinals v Philadelphia Eagles is the case
+ * that surfaced it: row B at $212.03 was deleting row 2 at $242.32, which is
+ * the front of the numbered rows and beaten by nothing.
  *
- * So each bucket is judged as two independent universes, numbers and letters,
- * and the front-most of each survives. Letters never dominate numbers and
- * numbers never dominate letters.
+ * So each bucket is judged as one independent universe per shape, and the
+ * front-most of each survives. No shape can dominate another.
  *
  * Worked example — section 107, qty 2, split "2":
  *
@@ -32,14 +48,27 @@
  * normal case: Row 1 $900 / Row 3 $650 / Row 15 $500 keeps all three. It fires
  * only where a worse row is asking more than a better one.
  *
- * Worked example — section 423, qty 2, split "2", a section with both kinds:
+ * Worked example — section 218, qty 2, split "2", a section carrying four:
  *
- *     Row 2 (numeric) · $242.32   keep — the front of the numbered rows
- *     Row 4 (numeric) · $248.38   drop — row 2 is better and cheaper
- *     Row B (letter)  · $212.03   keep — the front of the lettered rows
+ *     Row 3   (numeric) · $220   keep — the only numbered row
+ *     Row A   (letter)  · $180   keep — the front of the single letters
+ *     Row B   (letter)  · $250   drop — row A is in front and cheaper
+ *     Row AA  (letter2) · $190   keep — the front of the doubled letters
+ *     Row BB  (letter2) · $220   drop — row AA is in front at $190
+ *     Row AAA (letter3) · $210   keep — the only three-letter row
  *
- * Row B is cheaper than everything and still cannot touch row 2: they are not
- * in the same universe.
+ * Row A is cheaper than everything and still cannot touch row 3, row AA or row
+ * AAA: none of them is in its universe.
+ *
+ * Worked example — section 118, qty 2, split "2", three ticket types:
+ *
+ *     Row 1 (standard) face $200   keep — the front of the standard rows
+ *     Row 5 (standard) face $240   drop — row 1 is better and cheaper
+ *     Row 4 (fan)      face $210   keep — the front of the fan rows
+ *     Row 2 (broker)   face $230   keep — the front of the broker rows
+ *
+ * Row 1 is in front of all of them and cheaper than all of them, and drops only
+ * row 5. Rows 2 and 4 are other people's products.
  *
  * Kept in lib/ rather than in the CSV action because both the exporter and the
  * portal's preview must apply the identical rule, and because a 'use server'
@@ -101,43 +130,35 @@ export interface DominatedCandidate {
    * A label on neither scale passes through.
    */
   rowLabel: string | null | undefined;
-  /** Per-seat price, the only price a buyer compares across two listings of the same size. */
+  /**
+   * Per-seat FACE price — before our markup, so it means the same thing on a
+   * standard listing and a broker one. A listing with no usable face price
+   * (zero, missing, not a number) is kept without being judged: there is
+   * nothing to compare it on, and the alternative is treating it as free and
+   * letting it delete the whole bucket.
+   */
   perSeatPrice: number;
 }
 
 /**
- * The two row-labelling systems that carry a position, matching what the
- * scraper ranks: "1".."10000" and a single letter "A".."Z", either case.
+ * The four row-labelling systems that carry a position, matching what the
+ * scraper ranks. Read the label with `rowRankKind` from lib/rowRank, which both
+ * this filter and the underpriced buy-list share.
  */
-export type RowRankKind = 'numeric' | 'letter';
+export type RowRankKind = 'numeric' | 'letter' | 'letter2' | 'letter3';
 
-/**
- * Which scale a row label is on, or null when it is on neither.
- *
- * Null covers AA and AAA (ahead of A in some venues, behind Z in others), 12A,
- * BOX, blank labels, and GA, lawn and parking. Those are never ranked by the
- * scraper either, and a listing carrying one is kept without being judged
- * rather than placed by guesswork.
- */
-export function rowRankKind(label: string | null | undefined): RowRankKind | null {
-  if (typeof label !== 'string') return null;
-  const name = label.trim();
-  if (/^\d+$/.test(name)) {
-    const value = Number(name);
-    return value >= 1 && value <= 10000 ? 'numeric' : null;
-  }
-  if (/^[A-Za-z]$/.test(name)) return 'letter';
-  return null;
-}
+/** The four products a listing can be, from lib/ticketType. */
+export type TicketType = 'standard' | 'fan' | 'broker' | 'resale';
 
 /**
  * The universe a listing is judged in: its bucket and its rank scale together.
  * Null when the label is on neither scale, which is the caller's signal to keep
  * the listing untouched.
  *
- * The two scales overlap — row 2 and row B are both rank 2 — so a bucket alone
- * is not a fair comparison. Splitting the key here keeps the exporter's filter
- * and the portal's "beaten by" preview reading the same universes.
+ * The scales overlap — row 2, row B, row BB and row BBB are all rank 2 — so a
+ * bucket alone is not a fair comparison. Splitting the key here keeps the
+ * exporter's filter and the portal's "beaten by" preview reading the same
+ * universes.
  */
 export function dominatedUniverseKey(
   bucketKey: string,
@@ -168,9 +189,9 @@ interface Bucket<T> {
  * seats get worse. A section holding both numbered and lettered rows therefore
  * keeps the front of each.
  *
- * Anything `describe` returns null for, anything with no rowRank, and anything
- * whose label is on neither rank scale is kept without being judged: there is
- * no row ordering to judge it against.
+ * Anything `describe` returns null for, anything with no rowRank, anything
+ * whose label is on no rank scale, and anything with no usable face price is
+ * kept without being judged: there is no ordering to judge it in.
  */
 export function partitionDominated<T>(
   items: T[],
@@ -183,7 +204,8 @@ export function partitionDominated<T>(
   for (const item of items) {
     const candidate = describe(item);
     const universeKey = candidate ? dominatedUniverseKey(candidate.bucketKey, candidate.rowLabel) : null;
-    if (!candidate || candidate.rowRank == null || universeKey === null) {
+    const hasPrice = candidate ? Number.isFinite(candidate.perSeatPrice) && candidate.perSeatPrice > 0 : false;
+    if (!candidate || candidate.rowRank == null || universeKey === null || !hasPrice) {
       kept.push(item);
       continue;
     }
@@ -217,14 +239,19 @@ export function partitionDominated<T>(
   return { kept, dropped };
 }
 
-/** The bucket a listing competes in: same event, section, quantity and split. */
+/**
+ * The bucket a listing competes in: same event, section, quantity, split and
+ * ticket type. Everything in one bucket is the same thing to buy, so the only
+ * thing left separating two of them is the seat and the price.
+ */
 export function dominatedBucketKey(
   eventId: string,
   section: string,
   quantity: number,
   split: string | undefined,
+  ticketType: TicketType,
 ): string {
-  return `${eventId}|${section}|${quantity}|${split || ''}`;
+  return `${eventId}|${section}|${quantity}|${split || ''}|${ticketType}`;
 }
 
 /**

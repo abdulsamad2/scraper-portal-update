@@ -1,6 +1,15 @@
 import { SignJWT, jwtVerify, type JWTPayload } from 'jose';
 import { NextRequest, NextResponse } from 'next/server';
-import { timingSafeEqual } from 'crypto';
+
+/**
+ * This module is imported by middleware.ts, which runs on the Edge runtime, so
+ * everything here must be Edge-safe: jose, the Web Crypto it uses internally,
+ * request cookies and process.env — no node: builtins.
+ *
+ * Password checking used to live here and pulled in node:crypto for
+ * timingSafeEqual, which Next warned about on every request. It now lives in
+ * lib/authCredentials.ts, which only the login route imports.
+ */
 
 const COOKIE_NAME = 'session_token';
 
@@ -13,51 +22,6 @@ function getSecret(): Uint8Array {
     throw new Error('AUTH_SECRET environment variable is not set');
   }
   return new TextEncoder().encode(secret);
-}
-
-/**
- * Constant-time string comparison to prevent timing attacks.
- */
-function safeCompare(a: string, b: string): boolean {
-  const bufA = Buffer.from(a);
-  const bufB = Buffer.from(b);
-  if (bufA.length !== bufB.length) {
-    // Compare a against itself to spend constant time, then return false
-    timingSafeEqual(bufA, bufA);
-    return false;
-  }
-  return timingSafeEqual(bufA, bufB);
-}
-
-/**
- * Validate credentials against server-side environment variables.
- * Credentials are NEVER exposed to the client.
- * Returns the role ('superadmin' | 'admin') or null if invalid.
- */
-export function validateCredentials(username: string, password: string): 'superadmin' | 'admin' | null {
-  const validUsername = process.env.AUTH_USERNAME;
-  const validPassword = process.env.AUTH_PASSWORD;
-  const superAdminPassword = process.env.SUPER_ADMIN_PASSWORD;
-
-  if (!validUsername || !validPassword) {
-    console.error('AUTH_USERNAME or AUTH_PASSWORD env vars are not set');
-    return null;
-  }
-
-  const usernameMatch = safeCompare(username, validUsername);
-  if (!usernameMatch) return null;
-
-  // Check superadmin password first
-  if (superAdminPassword && safeCompare(password, superAdminPassword)) {
-    return 'superadmin';
-  }
-
-  // Check regular admin password
-  if (safeCompare(password, validPassword)) {
-    return 'admin';
-  }
-
-  return null;
 }
 
 /**

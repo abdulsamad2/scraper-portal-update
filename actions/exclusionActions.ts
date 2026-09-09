@@ -7,9 +7,11 @@ import {
   partitionDominated,
   dominatedBucketKey,
   dominatedUniverseKey,
+  ticketTypeOf,
   resolveDominatedEnabled,
   resolveDominatedMode,
   type DominatedMode,
+  type TicketType,
 } from '../lib/dominatedListings';
 import { calculateSplitConfiguration } from '../lib/csvSplits';
 
@@ -263,11 +265,15 @@ export interface DominatedSample {
   row: string;
   rowRank: number;
   quantity: number;
-  /** Per-seat price this listing is asking. */
+  /** Standard, fan or broker — a listing is only ever beaten by its own kind. */
+  ticketType: TicketType;
+  /** Per-seat face price, the number the rule compared. */
+  facePrice: number;
+  /** Per-seat list price this listing would have carried into the CSV. */
   listPrice: number;
-  /** The better seat that beat it: closer to the field and no more expensive. */
+  /** The better seat that beat it: closer to the field and no dearer on face. */
   beatenByRow: string;
-  beatenByPrice: number;
+  beatenByFacePrice: number;
 }
 
 export interface DominatedPreview {
@@ -295,7 +301,11 @@ interface PreviewListing {
   row: string;
   rowRank: number | null;
   quantity: number;
+  /** Per-seat face price — what the rule compares. */
   price: number;
+  /** Per-seat list price, markup included — what the CSV would carry. */
+  listPrice: number;
+  ticketType: TicketType;
   bucketKey: string;
 }
 
@@ -354,6 +364,8 @@ export async function getDominatedListingsPreview(
           rowRank: '$inventory.rowRank',
           quantity: '$inventory.quantity',
           listPrice: '$inventory.listPrice',
+          facePrice: '$inventory.face_price',
+          cost: '$inventory.cost',
           customSplit: '$inventory.customSplit',
           splitType: '$inventory.splitType',
           tags: '$inventory.tags',
@@ -368,15 +380,27 @@ export async function getDominatedListingsPreview(
 
     const listings: PreviewListing[] = rows.map((r: Record<string, unknown>) => {
       const splitType = (r.splitType as string) ?? '';
-      const isResale = splitType !== 'NEVERLEAVEONE';
-      const isBroker = isResale && /broker/i.test((r.tags as string) || '');
-      const adj = isBroker
+      const tags = (r.tags as string) ?? '';
+      const ticketType = ticketTypeOf({ tags, splitType });
+      const isResale = ticketType !== 'standard';
+      const adj = ticketType === 'broker'
         ? (brokerAdj !== 0 ? brokerAdj : resaleAdj)
         : isResale ? resaleAdj : stdAdj;
       const raw = Number(r.listPrice) || 0;
-      const price = defaultPct !== 0 || adj !== 0
+      // Shown next to each sample, not compared: the export's own list price,
+      // markup and all, so the number in the preview is the one on the CSV.
+      const listPrice = defaultPct !== 0 || adj !== 0
         ? raw * (1 + (defaultPct + adj) / 100) / (1 + defaultPct / 100)
         : raw;
+      // What the rule actually compares. Face carries no markup, so it is the
+      // same measure on a standard listing and a broker one.
+      //
+      // Falling back to cost exactly as the CSV's face_price column does: the
+      // scraper does not yet write inventory.face_price (it names the field
+      // originalFaceValue on the way in), so nearly all stored inventory has
+      // none. Cost is the same pre-markup measure, and the fallback keeps the
+      // preview showing the number the export is actually comparing.
+      const price = Number(r.facePrice) || Number(r.cost) || 0;
 
       const quantity = Number(r.quantity) || 0;
       const { customSplit } = calculateSplitConfiguration(
@@ -394,7 +418,9 @@ export async function getDominatedListingsPreview(
         rowRank: typeof rank === 'number' ? rank : null,
         quantity,
         price: Number(price.toFixed(2)),
-        bucketKey: dominatedBucketKey(ev.mapping_id, section, quantity, customSplit),
+        listPrice: Number(listPrice.toFixed(2)),
+        ticketType,
+        bucketKey: dominatedBucketKey(ev.mapping_id, section, quantity, customSplit, ticketType),
       };
     });
 
@@ -445,9 +471,11 @@ export async function getDominatedListingsPreview(
         row: l.row,
         rowRank: l.rowRank!,
         quantity: l.quantity,
-        listPrice: l.price,
+        ticketType: l.ticketType,
+        facePrice: l.price,
+        listPrice: l.listPrice,
         beatenByRow: best?.row ?? '',
-        beatenByPrice: best?.price ?? 0,
+        beatenByFacePrice: best?.price ?? 0,
       });
     }
 
