@@ -25,18 +25,27 @@ export default function EventTableActions({
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
   const [mounted, setMounted] = useState(false);
+  // updateEvent RETURNS { error } for a refusal (e.g. no event type) rather than throwing,
+  // so a try/catch alone silently discarded it and the button appeared to do nothing.
+  const [toggleError, setToggleError] = useState<string | null>(null);
 
   useEffect(() => setMounted(true), []);
 
   // Toggle scraping status
   const handleToggleScraping = async () => {
     setIsToggling(true);
+    setToggleError(null);
     startTransition(async () => {
       try {
-        await updateEvent(eventId, { Skip_Scraping: isScrapingActive }, true);
+        const result = await updateEvent(eventId, { Skip_Scraping: isScrapingActive }, true);
+        if (result && 'error' in result && result.error) {
+          setToggleError(String(result.error));
+          return; // leave the row as-is; refreshing would just hide the reason
+        }
         router.refresh(); // Refresh the server data
       } catch (error) {
         console.error('Error toggling scraping:', error);
+        setToggleError('Could not update this event. Please try again.');
       } finally {
         setIsToggling(false);
       }
@@ -98,6 +107,12 @@ export default function EventTableActions({
               )}
               {isToggling ? 'Processing...' : isScrapingActive ? 'Stop' : 'Start'}
             </button>
+
+            {toggleError && (
+              <p role="alert" className="px-3 py-2 text-xs text-red-700 bg-red-50 border-t border-red-100">
+                {toggleError}
+              </p>
+            )}
 
             <button
               onClick={() => {
@@ -181,6 +196,16 @@ export default function EventTableActions({
           </>
         )}
       </button>
+
+      {toggleError && (
+        <span
+          role="alert"
+          title={toggleError}
+          className="max-w-[13rem] truncate text-xs text-red-700"
+        >
+          {toggleError}
+        </span>
+      )}
 
       {/* Delete Confirmation Modal – rendered via portal to avoid table stacking context */}
       {showDeleteConfirm && mounted && createPortal(

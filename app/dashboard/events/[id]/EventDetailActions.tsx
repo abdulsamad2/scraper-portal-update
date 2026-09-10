@@ -19,18 +19,29 @@ export default function EventDetailActions({ eventId, eventName, isScrapingActiv
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [liveMsg, setLiveMsg] = useState('');
+  // A refusal comes back as { error }, not as a throw. Without this the optimistic state
+  // stayed on and the page announced "Scraping started." for an event that never started.
+  const [toggleError, setToggleError] = useState<string | null>(null);
 
   const handleToggle = () => {
     const next = !optimisticActive;
     setOptimisticActive(next);
+    setToggleError(null);
     setLiveMsg(next ? 'Starting scraping…' : 'Stopping scraping…');
     startTransition(async () => {
       try {
-        await updateEvent(eventId, { Skip_Scraping: !next }, false);
+        const result = await updateEvent(eventId, { Skip_Scraping: !next }, false);
+        if (result && 'error' in result && result.error) {
+          setOptimisticActive(!next); // revert — nothing actually changed
+          setToggleError(String(result.error));
+          setLiveMsg(String(result.error));
+          return;
+        }
         router.refresh();
         setLiveMsg(next ? 'Scraping started.' : 'Scraping stopped.');
       } catch {
         setOptimisticActive(!next); // revert
+        setToggleError('Failed to update scraping status. Please try again.');
         setLiveMsg('Failed to update scraping status. Please try again.');
       }
     });
@@ -52,6 +63,12 @@ export default function EventDetailActions({ eventId, eventName, isScrapingActiv
     <>
       {/* Screen-reader live region */}
       <div aria-live="polite" aria-atomic="true" className="sr-only">{liveMsg}</div>
+
+      {toggleError && (
+        <p role="alert" className="mb-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+          {toggleError}
+        </p>
+      )}
 
       <div className="flex items-center gap-2 flex-wrap">
         {/* Start / Stop */}
