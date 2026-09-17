@@ -195,13 +195,13 @@ const InventoryTable: React.FC<InventoryTableProps> = ({ data }) => {
       selector: (row) => row.inventory?.event_date,
       format: (r) =>
         r.inventory?.event_date
-          ? new Date(r.inventory.event_date).toLocaleDateString()
+          ? new Date(r.inventory.event_date).toLocaleDateString('en-US', { timeZone: 'UTC' })
           : "-",
       sortable: true,
       width: "120px",
       cell: (row) => {
         const content = row.inventory?.event_date
-          ? new Date(row.inventory.event_date).toLocaleDateString()
+          ? new Date(row.inventory.event_date).toLocaleDateString('en-US', { timeZone: 'UTC' })
           : "-";
         return row.status === 'deleted'
           ? <RowStatus.Deleted deletedAt={row.deletedAt}>{content}</RowStatus.Deleted>

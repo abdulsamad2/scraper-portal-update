@@ -4,6 +4,7 @@ export { ConsecutiveGroup } from "./seatModel.js";
 export { SeatDrop } from "./seatDropModel.js";
 export { DropSettings } from "./dropSettingsModel.js";
 export { EvenueEvent, EvenueConsecutiveGroup } from "./evenueEventModel.js";
+export { TelechargeEvent, TelechargeConsecutiveGroup, TelechargeLookup } from "./telechargeEventModel.js";
 export { ErrorLog } from "./errorModel.js";
 export { SchedulerSettings } from "./schedulerModel.js";
 export { ExclusionRules } from "./exclusionRulesModel.js";

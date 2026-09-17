@@ -153,7 +153,8 @@ const OptimizedInventoryTable: React.FC<OptimizedInventoryTableProps> = ({
   };
 
   const formatDate = (dateString: string | undefined) => {
-    return dateString ? new Date(dateString).toLocaleDateString() : '-';
+    // Event dates are venue wall-clock time stored as UTC: show them as stored.
+    return dateString ? new Date(dateString).toLocaleDateString('en-US', { timeZone: 'UTC' }) : '-';
   };
 
   return (

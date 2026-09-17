@@ -7,6 +7,8 @@ import { EventFormMode, FormStatusMessages } from "@/components/ui/FormModes";
 import { useNotifications } from "@/components/providers/NotificationProvider";
 import { detectSportFromVenue } from "@/lib/venueToSport";
 import { isEvenueUrl } from "@/lib/evenue";
+import { isTelechargeUrl } from "@/lib/telecharge";
+import TelechargeEventForm from "@/app/dashboard/list-telecharge-event/TelechargeEventForm";
 
 
 // Explicit mode variants instead of boolean isEdit prop
@@ -201,6 +203,12 @@ const EventFormContent = ({ mode, onCancel, onSuccess, initialData }) => {
         return;
       }
 
+      // Telecharge: storing the URL switches this page to the performance picker.
+      if (isTelechargeUrl(value)) {
+        form.actions.updateField('URL', value);
+        return;
+      }
+
       const extractedData = extractEventDataFromUrl(value);
       if (extractedData) {
         // Update multiple fields at once
@@ -257,6 +265,21 @@ const EventFormContent = ({ mode, onCancel, onSuccess, initialData }) => {
     const { name, checked } = e.target;
     form.actions.updateField(name, checked);
   };
+
+  // A Telecharge show has many performances, so it gets the performance picker
+  // (load the show's dates & times, tick the ones to track) instead of this
+  // single-date form. Changing the URL to another site comes back here.
+  if (mode === 'create' && isTelechargeUrl(String(form.data.URL.value || ""))) {
+    return (
+      <TelechargeEventForm
+        mode="create"
+        initialUrl={String(form.data.URL.value)}
+        onLeaveTelecharge={(url) => form.actions.updateField('URL', url)}
+        onCancel={onCancel}
+        onSuccess={() => onSuccess?.()}
+      />
+    );
+  }
 
   /* ---- Vivid Seats mapping ID fetch ---- */
   const handleSubmit = async (e) => {

@@ -1396,7 +1396,7 @@ const ExportCsvPage: React.FC = () => {
                             <td className="px-4 py-2.5 text-sm font-medium text-slate-800">{event.id}</td>
                             <td className="px-4 py-2.5 text-sm text-slate-700 max-w-[200px] truncate" title={event.name}>{event.name}</td>
                             <td className="px-4 py-2.5 text-sm text-slate-500 whitespace-nowrap">
-                              {moment(event.dateTime).format('YYYY-MM-DD HH:mm')}
+                              {moment.utc(event.dateTime).format('YYYY-MM-DD HH:mm')}
                             </td>
                             <td className="px-4 py-2.5 text-sm text-slate-500 max-w-[150px] truncate" title={event.venue}>{event.venue || '—'}</td>
                             <td className="px-4 py-2.5 text-sm">

@@ -6,6 +6,7 @@ import { Event } from '@/models/eventModel'; // Assuming models are aliased to @
 import { UpdateQuery } from 'mongoose';
 import { deleteInventoryBatchFromSync } from './csvActions';
 import { EVENUE_GROUPS_COLLECTION, EVENUE_SOURCE, TICKETMASTER_SOURCE } from '@/lib/evenue';
+import { TELECHARGE_GROUPS_COLLECTION, TELECHARGE_SOURCE } from '@/lib/telecharge';
 
 /**
  * Creates a new consecutive seat group.
@@ -134,10 +135,11 @@ export async function deleteConsecutiveGroup(groupId: string) {
 export async function getConsecutiveGroupsByEventId(eventId: string) {
   await dbConnect();
   try {
-    // Spans both scrapers' collections — an eventId belongs to whichever owns it.
+    // Spans every scraper's collection — an eventId belongs to whichever owns it.
     const groups = await ConsecutiveGroup.aggregate([
       { $match: { eventId } },
       { $unionWith: { coll: EVENUE_GROUPS_COLLECTION, pipeline: [{ $match: { eventId } }] } },
+      { $unionWith: { coll: TELECHARGE_GROUPS_COLLECTION, pipeline: [{ $match: { eventId } }] } },
     ]);
     return JSON.parse(JSON.stringify(groups));
   } catch (error: unknown) {
@@ -154,7 +156,7 @@ interface FilterOptions {
   mapping?: string;
   section?: string;
   row?: string;
-  /** 'evenue' | 'ticketmaster' — which scraper produced the row. */
+  /** 'evenue' | 'telecharge' | 'ticketmaster' — which scraper produced the row. */
   source?: string;
 }
 
@@ -227,8 +229,10 @@ export async function getConsecutiveGroupsPaginated(
       // half a million Ticketmaster ones and never surface on their own.
       if (filters.source === EVENUE_SOURCE) {
         conditions.push({ source: EVENUE_SOURCE });
+      } else if (filters.source === TELECHARGE_SOURCE) {
+        conditions.push({ source: TELECHARGE_SOURCE });
       } else if (filters.source === TICKETMASTER_SOURCE) {
-        conditions.push({ source: { $ne: EVENUE_SOURCE } });
+        conditions.push({ source: { $nin: [EVENUE_SOURCE, TELECHARGE_SOURCE] } });
       }
     }
     
@@ -245,12 +249,17 @@ export async function getConsecutiveGroupsPaginated(
     const unionEvenue = {
       $unionWith: { coll: EVENUE_GROUPS_COLLECTION, pipeline: [{ $match: query }] },
     };
+    // Telecharge inventory is its own collection too, unioned the same way.
+    const unionTelecharge = {
+      $unionWith: { coll: TELECHARGE_GROUPS_COLLECTION, pipeline: [{ $match: query }] },
+    };
 
     const [countAgg, qtyAgg] = await Promise.all([
-      ConsecutiveGroup.aggregate([matchStage, unionEvenue, { $count: 'n' }]),
+      ConsecutiveGroup.aggregate([matchStage, unionEvenue, unionTelecharge, { $count: 'n' }]),
       ConsecutiveGroup.aggregate([
         matchStage,
         unionEvenue,
+        unionTelecharge,
         { $group: { _id: null, seats: { $sum: '$inventory.quantity' } } },
       ]),
     ]);
@@ -263,6 +272,7 @@ export async function getConsecutiveGroupsPaginated(
     const groups = await ConsecutiveGroup.aggregate([
       matchStage,
       unionEvenue,
+      unionTelecharge,
       { $sort: { _id: 1 } },
       { $skip: (page - 1) * limit },
       { $limit: limit },

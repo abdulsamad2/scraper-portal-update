@@ -164,6 +164,7 @@ export default function InventoryClient({
                   <option value="">All scrapers</option>
                   <option value="ticketmaster">Ticketmaster</option>
                   <option value="evenue">eVenue</option>
+                  <option value="telecharge">Telecharge</option>
                 </select>
               </div>
 

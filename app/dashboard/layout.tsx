@@ -21,7 +21,8 @@ import {
   Bell,
   ChevronsLeft,
   ChevronsRight, Zap,
-  Gauge
+  Gauge,
+  Ticket
 } from 'lucide-react';
 
 interface FeatureFlags {
@@ -150,6 +151,12 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
       path: '/dashboard/list-event',
       label: 'Add Event',
       icon: <Plus className="w-5 h-5" />,
+      flagKey: 'addEvent' as keyof FeatureFlags,
+    },
+    {
+      path: '/dashboard/list-telecharge-event',
+      label: 'Add Telecharge Event',
+      icon: <Ticket className="w-5 h-5" />,
       flagKey: 'addEvent' as keyof FeatureFlags,
     },
     {

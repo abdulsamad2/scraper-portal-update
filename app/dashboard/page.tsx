@@ -309,17 +309,31 @@ export default function DashboardPage() {
     return weekData;
   };
 
-  // Format date
+  // Format an event date. Event dates are the venue's wall-clock time stored as
+  // UTC, so read them in UTC — the browser's zone would move evening shows a day.
   const formatDate = (dateString: string) => {
     const options: Intl.DateTimeFormatOptions = {
       year: 'numeric',
       month: 'short',
       day: 'numeric',
+      timeZone: 'UTC',
     };
     return new Date(dateString).toLocaleDateString('en-US', options);
   };
 
-  // Format date with time
+  // Format an event date with its time, as stored (see formatDate).
+  const formatEventDateTime = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
+      timeZone: 'UTC',
+    });
+  };
+
+  // Format a real moment in time (last run, stopped at) in the viewer's zone.
   const formatDateTime = (dateString: string) => {
     return new Date(dateString).toLocaleDateString('en-US', {
       month: 'short',
@@ -1162,7 +1176,7 @@ export default function DashboardPage() {
                           </span>
                         )}
                         <span className="text-xs text-slate-400">
-                          {formatDateTime(event.dateTime)}
+                          {formatEventDateTime(event.dateTime)}
                         </span>
                       </div>
                     </div>
@@ -1307,7 +1321,7 @@ export default function DashboardPage() {
 
                   {/* Event date + stopped time */}
                   <div className="mt-2 flex items-center justify-between text-[10px] text-slate-400">
-                    <span>Event: {formatDateTime(evt.eventDateTime)}</span>
+                    <span>Event: {formatEventDateTime(evt.eventDateTime)}</span>
                     <span>Stopped: {formatDateTime(evt.deletedAt)}</span>
                   </div>
                 </div>

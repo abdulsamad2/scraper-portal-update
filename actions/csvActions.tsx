@@ -42,6 +42,8 @@ import { deleteConsecutiveGroupsByEventIds } from './seatActions';
 import { detectTimezoneFromVenueAsync, resolveVenueTimezonesBulk, getCurrentTimeInTimezone } from '../lib/timezone';
 import { EvenueEvent } from '../models/evenueEventModel';
 import { EVENUE_GROUPS_COLLECTION } from '../lib/evenue';
+import { TelechargeEvent } from '../models/telechargeEventModel';
+import { TELECHARGE_GROUPS_COLLECTION } from '../lib/telecharge';
 import { PipelineStage } from 'mongoose';
 import {
   partitionDominated,
@@ -56,7 +58,7 @@ import { calculateSplitConfiguration } from '@/lib/csvSplits';
 /**
  * ── Combining the three scrapers in one export ────────────────────────────────
  *
- * Ticketmaster, eVenue, and tickets.com inventory live in separate collections,
+ * Ticketmaster, eVenue, tickets.com and Telecharge inventory live in separate collections,
  * one per scraper, so no scraper can pick up the others' events. The CSV is where
  * they come back together: all scrapers emit the same ConsecutiveGroup shape
  * and join on the same `mapping_id`, so all rows go through the identical
@@ -65,7 +67,7 @@ import { calculateSplitConfiguration } from '@/lib/csvSplits';
 
 const TICKETSCOM_GROUPS_COLLECTION = 'tc_consecutivegroups';
 
-/** Append eVenue and tickets.com inventory to a ConsecutiveGroup pipeline, filtered the same way. */
+/** Append eVenue, tickets.com and Telecharge inventory to a ConsecutiveGroup pipeline, filtered the same way. */
 function unionAllInventorySources(match: Record<string, any>): PipelineStage[] {
   return [
     // The filter is pushed into the sub-pipeline so Mongo never materialises
@@ -75,6 +77,9 @@ function unionAllInventorySources(match: Record<string, any>): PipelineStage[] {
     } as PipelineStage,
     {
       $unionWith: { coll: TICKETSCOM_GROUPS_COLLECTION, pipeline: [{ $match: match }] },
+    } as PipelineStage,
+    {
+      $unionWith: { coll: TELECHARGE_GROUPS_COLLECTION, pipeline: [{ $match: match }] },
     } as PipelineStage,
   ];
 }
@@ -87,12 +92,13 @@ function unionAllInventorySources(match: Record<string, any>): PipelineStage[] {
  * against nothing downstream.
  */
 async function findActiveEventsBothSources(activeEventQuery: Record<string, any>) {
-  const [tmEvents, evEvents, tcEvents] = await Promise.all([
+  const [tmEvents, evEvents, tcEvents, teleEvents] = await Promise.all([
     Event.find(activeEventQuery, { mapping_id: 1 }).read('primary').maxTimeMS(30000).lean(),
     EvenueEvent.find(activeEventQuery, { mapping_id: 1 }).maxTimeMS(30000).lean(),
     TcEvent.find(activeEventQuery, { mapping_id: 1 }).maxTimeMS(30000).lean(),
+    TelechargeEvent.find(activeEventQuery, { mapping_id: 1 }).maxTimeMS(30000).lean(),
   ]);
-  return [...tmEvents, ...evEvents, ...tcEvents].filter((e: any) => e.mapping_id);
+  return [...tmEvents, ...evEvents, ...tcEvents, ...teleEvents].filter((e: any) => e.mapping_id);
 }
 
 /**
@@ -110,12 +116,13 @@ async function findEventDetailsBothSources(eventMappingIds: string[]) {
     brokerMarkupAdjustment: 1, priceIncreasePercentage: 1,
     includeStandardSeats: 1, includeResaleSeats: 1,
   };
-  const [tmDocs, evDocs, tcDocs] = await Promise.all([
+  const [tmDocs, evDocs, tcDocs, teleDocs] = await Promise.all([
     Event.find({ mapping_id: { $in: eventMappingIds } }, projection).lean(),
     EvenueEvent.find({ mapping_id: { $in: eventMappingIds } }, projection).lean(),
     TcEvent.find({ mapping_id: { $in: eventMappingIds } }, projection).lean(),
+    TelechargeEvent.find({ mapping_id: { $in: eventMappingIds } }, projection).lean(),
   ]);
-  return [...tmDocs, ...evDocs, ...tcDocs];
+  return [...tmDocs, ...evDocs, ...tcDocs, ...teleDocs];
 }
 
 interface CsvRow {

@@ -145,7 +145,7 @@ export default function UnderpricedView() {
                         )}
                       </div>
                       <div className="text-xs text-slate-400">
-                        {[b.venue, b.eventDate ? new Date(b.eventDate).toLocaleDateString() : '']
+                        {[b.venue, b.eventDate ? new Date(b.eventDate).toLocaleDateString('en-US', { timeZone: 'UTC' }) : '']
                           .filter(Boolean)
                           .join(' · ')}
                       </div>

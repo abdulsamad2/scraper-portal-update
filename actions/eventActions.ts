@@ -23,6 +23,17 @@ import { EvenueEvent } from '@/models/evenueEventModel';
 import { deleteConsecutiveGroupsByEventId, deleteConsecutiveGroupsByEventIds } from './seatActions';
 import { isValidEventType, EVENT_TYPES } from '@/lib/venueToSport';
 import { EVENUE_EVENTS_COLLECTION, EVENUE_GROUPS_COLLECTION, EVENUE_SOURCE, isEvenueUrl } from '@/lib/evenue';
+import { TelechargeEvent } from '@/models/telechargeEventModel';
+import {
+  TELECHARGE_EVENTS_COLLECTION,
+  TELECHARGE_GROUPS_COLLECTION,
+  TELECHARGE_SOURCE,
+  canonicalTelechargeUrl,
+  formatPerformance,
+  isTelechargeUrl,
+  type TelechargeLookupResult,
+} from '@/lib/telecharge';
+import { lookupTelechargeShow, performanceMinute } from '@/lib/telechargeLookup';
 
 // Escape special regex characters to prevent ReDoS and injection
 function escapeRegex(str: string): string {
@@ -69,16 +80,26 @@ const EVENUE_ADJUSTMENT_FIELDS = [
  */
 async function findEventAnywhere(eventId: string) {
   const tmEvent = await Event.findById(eventId).maxTimeMS(5000);
-  if (tmEvent) return { doc: tmEvent, isEvenue: false, isTc: false };
+  if (tmEvent) return { doc: tmEvent, isEvenue: false, isTc: false, isTelecharge: false };
 
   const tcEvent = await TcEvent.findById(eventId).maxTimeMS(5000);
-  if (tcEvent) return { doc: tcEvent, isEvenue: false, isTc: true };
+  if (tcEvent) return { doc: tcEvent, isEvenue: false, isTc: true, isTelecharge: false };
 
   const evEvent = await EvenueEvent.findById(eventId).maxTimeMS(5000);
-  if (evEvent) return { doc: evEvent, isEvenue: true, isTc: false };
+  if (evEvent) return { doc: evEvent, isEvenue: true, isTc: false, isTelecharge: false };
 
-  return { doc: null, isEvenue: false, isTc: false };
+  const teleEvent = await TelechargeEvent.findById(eventId).maxTimeMS(5000);
+  if (teleEvent) return { doc: teleEvent, isEvenue: false, isTc: false, isTelecharge: true };
+
+  return { doc: null, isEvenue: false, isTc: false, isTelecharge: false };
 }
+
+/** The non-Ticketmaster event rosters, one per scraper, unioned onto `events`. */
+const OTHER_EVENT_ROSTERS = () => [
+  { $unionWith: { coll: 'tc_events' } },
+  { $unionWith: { coll: EVENUE_EVENTS_COLLECTION } },
+  { $unionWith: { coll: TELECHARGE_EVENTS_COLLECTION } },
+];
 
 /**
  * Creates a new event.
@@ -97,6 +118,12 @@ export async function createEvent(eventData: Partial<Event>) {
   // tickets.com events are registered separately
   if (isTicketsComUrl(url)) {
     return registerTicketsComEvent(input);
+  }
+
+  // Telecharge performances have their own page and action.
+  if (isTelechargeUrl(url)) {
+    const result = await registerTelechargePerformances({ ...(input as TelechargeEventInput), performances: [input as TelechargePerformanceInput] });
+    return 'error' in result ? result : result.created[0];
   }
 
   const venue = ((eventData as any).Venue || '').trim().toLowerCase();
@@ -233,6 +260,170 @@ async function registerTicketsComEvent(input: EvenueEventInput) {
   }
 }
 
+/** One performance on the Add Telecharge Event page. */
+export interface TelechargePerformanceInput {
+  Event_DateTime?: string | Date;
+  inHandDate?: string | Date | null;
+  mapping_id?: string | null;
+}
+
+/** The show-level fields shared by every performance submitted together. */
+export interface TelechargeEventInput extends EvenueEventInput {
+  Event_Name?: string | null;
+  performances?: TelechargePerformanceInput[];
+}
+
+/**
+ * A form date as the portal stores dates: venue wall-clock time labelled UTC.
+ * A datetime-local value ("2026-09-19T20:00") carries no zone, and handing it to
+ * `new Date()` would read it in the server's zone — so the zone is added here.
+ */
+function wallClockDate(value: string | Date | null | undefined): Date | null {
+  if (value === null || value === undefined || value === '') return null;
+  if (value instanceof Date) return isNaN(value.getTime()) ? null : value;
+  const s = String(value).trim();
+  const d = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?)?$/.test(s)
+    ? new Date(s.length === 10 ? `${s}T00:00:00Z` : `${s}${s.length === 16 ? ':00' : ''}Z`)
+    : new Date(s);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+/**
+ * Every performance a Telecharge show has on sale, for the Add Event picker.
+ *
+ * Fetched by the running Telecharge scraper (see lib/telechargeLookup.ts), so an
+ * answer also proves the URL is a real show. Performances this show already has
+ * in the portal come back with `tracked: true`.
+ */
+export async function getTelechargePerformances(url: string): Promise<TelechargeLookupResult> {
+  try {
+    const result = await lookupTelechargeShow(url);
+    if ('error' in result) return result;
+    const existing = await TelechargeEvent.find(
+      { URL: result.show.url, Event_DateTime: { $in: result.performances.map((p) => new Date(p.Event_DateTime)) } },
+      { Event_DateTime: 1 }
+    ).lean().maxTimeMS(5000);
+    const tracked = new Set(existing.map((e) => performanceMinute(e.Event_DateTime as Date)));
+    return {
+      show: result.show,
+      performances: result.performances.map((p) => ({ ...p, tracked: tracked.has(performanceMinute(p.Event_DateTime)) })),
+    };
+  } catch (error) {
+    console.error('Error loading Telecharge performances:', error);
+    return { error: (error as Error).message || 'Failed to load Telecharge performances' };
+  }
+}
+
+/**
+ * Register one or more performances of a Telecharge show into `tele_events`.
+ *
+ * Each performance becomes its own row, identified by show URL + date/time. Every
+ * date/time is checked against the show's live calendar (fetched by the scraper)
+ * before anything is written, so a wrong URL or a time that is not on sale is
+ * rejected here rather than showing up later as a failing row. Name and venue
+ * default to the show's own; the scraper fills in Event_ID on its first pass.
+ *
+ * All rows are validated before any is written, so a bad date never leaves half
+ * a show registered.
+ */
+export async function registerTelechargePerformances(input: TelechargeEventInput) {
+  const url = canonicalTelechargeUrl(input.URL || '');
+  if (!url) {
+    return { error: 'Enter a Telecharge show URL, e.g. https://www.telecharge.com/<Show-Name>-Tickets' };
+  }
+
+  const rawMarkup = input.priceIncreasePercentage;
+  const markup = rawMarkup === undefined || rawMarkup === null || rawMarkup === '' ? 35 : Number(rawMarkup);
+  if (isNaN(markup) || markup < 0) {
+    return { error: 'Markup percentage must be a number, 0 or greater.' };
+  }
+  if (input.eventType != null && input.eventType !== '' && !isValidEventType(input.eventType)) {
+    return { error: `Invalid eventType. Must be one of: ${EVENT_TYPES.join(', ')}.` };
+  }
+
+  const performances = input.performances || [];
+  if (!performances.length) return { error: 'Add at least one performance date and time.' };
+
+  // The show's live calendar: proves the URL is a real show and that every
+  // date/time below is actually on sale.
+  let lookup: TelechargeLookupResult;
+  try {
+    lookup = await lookupTelechargeShow(url, { maxAgeMs: 15 * 60_000 });
+  } catch (error) {
+    console.error('Error looking up Telecharge show:', error);
+    return { error: (error as Error).message || 'Could not check the show on Telecharge' };
+  }
+  if ('error' in lookup) return { error: lookup.error };
+  const onSale = new Set(lookup.performances.map((p) => performanceMinute(p.Event_DateTime)));
+  const showName = lookup.show.title || undefined;
+  const theatre = lookup.show.theatre || undefined;
+
+  const rows: Record<string, unknown>[] = [];
+  const seenTimes = new Set<number>();
+  const seenMappings = new Set<string>();
+  for (const [i, perf] of performances.entries()) {
+    const when = wallClockDate(perf.Event_DateTime);
+    if (!when) return { error: `Performance ${i + 1}: pick a date and time.` };
+    const label = formatPerformance(when);
+    if (seenTimes.has(when.getTime())) return { error: `${label}: that date and time is listed twice.` };
+    seenTimes.add(when.getTime());
+    if (!onSale.has(performanceMinute(when))) {
+      return { error: `${label}: ${showName || 'this show'} has no performance on sale at that date and time on Telecharge.` };
+    }
+
+    // Same default as the Ticketmaster form: the day before the performance.
+    const inHand = wallClockDate(perf.inHandDate) || new Date(Date.UTC(when.getUTCFullYear(), when.getUTCMonth(), when.getUTCDate() - 1));
+
+    const mappingId = String(perf.mapping_id || '').trim();
+    if (mappingId) {
+      if (seenMappings.has(mappingId)) return { error: `${label}: mapping ID ${mappingId} is used twice.` };
+      seenMappings.add(mappingId);
+    }
+
+    rows.push({
+      URL: url,
+      Event_DateTime: when,
+      inHandDate: inHand,
+      ...(mappingId ? { mapping_id: mappingId } : {}),
+      ...(String(input.Event_Name || '').trim() || showName ? { Event_Name: String(input.Event_Name || '').trim() || showName } : {}),
+      ...(theatre ? { Venue: theatre } : {}),
+      priceIncreasePercentage: markup,
+      Source: TELECHARGE_SOURCE,
+      Skip_Scraping: input.Skip_Scraping ?? false,
+      Zone: input.Zone || 'none',
+      telecharge: { status: 'pending' },
+      ...(input.eventType ? { eventType: input.eventType } : {}),
+      ...Object.fromEntries(
+        EVENUE_ADJUSTMENT_FIELDS.filter((f) => input[f] !== undefined && !isNaN(Number(input[f]))).map((f) => [f, Number(input[f])])
+      ),
+      ...(input.includeStandardSeats !== undefined ? { includeStandardSeats: Boolean(input.includeStandardSeats) } : {}),
+      ...(input.includeResaleSeats !== undefined ? { includeResaleSeats: Boolean(input.includeResaleSeats) } : {}),
+    });
+  }
+
+  await dbConnect();
+  try {
+    const clashes = await TelechargeEvent.find(
+      { URL: url, Event_DateTime: { $in: rows.map((r) => r.Event_DateTime) } },
+      { Event_DateTime: 1 }
+    ).lean().maxTimeMS(5000);
+    if (clashes.length) {
+      const times = clashes.map((c) => formatPerformance(c.Event_DateTime as Date));
+      return { error: `Already registered for this show: ${times.join(', ')}` };
+    }
+    if (seenMappings.size) {
+      const taken = await TelechargeEvent.findOne({ mapping_id: { $in: [...seenMappings] } }, { mapping_id: 1 }).lean().maxTimeMS(5000);
+      if (taken) return { error: `Mapping ID ${(taken as { mapping_id?: string }).mapping_id} is already used by another Telecharge performance.` };
+    }
+
+    const created = await TelechargeEvent.insertMany(rows, { ordered: true });
+    return { created: JSON.parse(JSON.stringify(created)) as Record<string, unknown>[] };
+  } catch (error: unknown) {
+    console.error('Error registering Telecharge performances:', error);
+    return { error: (error as Error).message || 'Failed to register Telecharge performances' };
+  }
+}
+
 /**
  * Retrieves a single event by its ID.
  * @param {string} eventId - The ID of the event to retrieve.
@@ -262,11 +453,8 @@ export async function getEventById(eventId: string): Promise<object | null> {
 export async function getAllEvents(): Promise<Array<object>> {
   await dbConnect();
   try {
-    // All three rosters, same format.
-    const events = await Event.aggregate([
-      { $unionWith: { coll: 'tc_events' } },
-      { $unionWith: { coll: EVENUE_EVENTS_COLLECTION } }
-    ]);
+    // Every roster, same format.
+    const events = await Event.aggregate(OTHER_EVENT_ROSTERS());
     return JSON.parse(JSON.stringify(events));
   } catch (error) {
     console.error('Error fetching all events:', error);
@@ -392,20 +580,17 @@ export async function getPaginatedEventsAdvanced(page: number = 1, limit: number
         sortCriteria = { Last_Updated: -orderMul, updatedAt: -orderMul };
     }
 
-    // Ticketmaster, tickets.com, and eVenue events live in separate collections,
-    // one per scraper. The dashboard is the one place they come back together:
-    // union all three rosters, then apply the search, filters, sort and paging
-    // to the combined set so paging stays correct across all.
-    const tcUnionStage = { $unionWith: { coll: 'tc_events' } };
-    const evUnionStage = { $unionWith: { coll: EVENUE_EVENTS_COLLECTION } };
+    // Ticketmaster, tickets.com, eVenue and Telecharge events live in separate
+    // collections, one per scraper. The dashboard is the one place they come back
+    // together: union every roster, then apply the search, filters, sort and
+    // paging to the combined set so paging stays correct across all.
     const matchStages = allConditions.length > 0 ? [{ $match: query }] : [];
 
-    const countResult = await Event.aggregate([tcUnionStage, evUnionStage, ...matchStages, { $count: 'total' }]);
+    const countResult = await Event.aggregate([...OTHER_EVENT_ROSTERS(), ...matchStages, { $count: 'total' }]);
     const total = countResult[0]?.total || 0;
 
     const events = await Event.aggregate([
-      tcUnionStage,
-      evUnionStage,
+      ...OTHER_EVENT_ROSTERS(),
       ...matchStages,
       { $sort: sortCriteria },
       { $skip: skip },
@@ -443,13 +628,10 @@ export async function getEventCounts(): Promise<{ total: number; active: number 
   await dbConnect();
   try {
     const activeMatch = { $or: [{ Skip_Scraping: false }, { Skip_Scraping: { $exists: false } }] };
-    const tcUnion = { $unionWith: { coll: 'tc_events' } };
-    const evUnion = { $unionWith: { coll: EVENUE_EVENTS_COLLECTION } };
-
-    // Counts cover all three rosters so the dashboard totals match the list.
+    // Counts cover every roster so the dashboard totals match the list.
     const [totalResult, activeResult] = await Promise.all([
-      Event.aggregate([tcUnion, evUnion, { $count: 'n' }]),
-      Event.aggregate([tcUnion, evUnion, { $match: activeMatch }, { $count: 'n' }]),
+      Event.aggregate([...OTHER_EVENT_ROSTERS(), { $count: 'n' }]),
+      Event.aggregate([...OTHER_EVENT_ROSTERS(), { $match: activeMatch }, { $count: 'n' }]),
     ]);
     return { total: totalResult[0]?.n || 0, active: activeResult[0]?.n || 0 };
   } catch {
@@ -495,6 +677,7 @@ export async function getInventoryCountsByType(
     // mapping_ids, so nothing can be double-counted by the $group below.
     const result = await ConsecutiveGroup.aggregate([
       { $unionWith: { coll: EVENUE_GROUPS_COLLECTION } },
+      { $unionWith: { coll: TELECHARGE_GROUPS_COLLECTION } },
       { $match: { mapping_id: { $in: mappingIds } } },
       {
         $group: {
@@ -563,6 +746,9 @@ export async function updateEvent(eventId: string, updateData: Partial<Event> & 
     }
     if (found.isTc) {
       return updateTcEvent(found.doc, updateData);
+    }
+    if (found.isTelecharge) {
+      return updateTelechargeEvent(found.doc, updateData);
     }
     const currentEvent = found.doc;
 
@@ -774,6 +960,102 @@ async function updateTcEvent(
   return JSON.parse(JSON.stringify(updated));
 }
 
+/**
+ * Update a Telecharge performance.
+ *
+ * Writable: pause, markup, zone, CSV adjustments and toggles, event type, and the
+ * timing fields — performance date/time, in-hand date — plus name and mapping ID.
+ *
+ * Like eVenue, this never deletes inventory. The scraper retires listings itself
+ * (Mongo row + SeatScouts delete together):
+ *   - paused             -> delisted on its next sweep
+ *   - markup changed     -> re-priced on its next pass
+ *   - date/time changed  -> re-resolved to the new performance; the old
+ *                           performance's inventory is delisted
+ */
+async function updateTelechargeEvent(
+  currentEvent: { _id: unknown; URL?: string; Event_DateTime?: Date | string },
+  updateData: Partial<Event> & { Skip_Scraping?: boolean; priceIncreasePercentage?: number }
+) {
+  const input = updateData as TelechargeEventInput & { Event_DateTime?: string | Date; inHandDate?: string | Date; mapping_id?: string };
+  const $set: Record<string, unknown> = {};
+  const $unset: Record<string, ''> = {};
+
+  if (input.priceIncreasePercentage !== undefined) {
+    const markup = Number(input.priceIncreasePercentage);
+    if (isNaN(markup) || markup < 0) return { error: 'Markup percentage must be a number, 0 or greater.' };
+    $set.priceIncreasePercentage = markup;
+  }
+  if (input.Skip_Scraping !== undefined) $set.Skip_Scraping = Boolean(input.Skip_Scraping);
+  if (input.Zone !== undefined) $set.Zone = String(input.Zone);
+  for (const field of EVENUE_ADJUSTMENT_FIELDS) {
+    if (input[field] === undefined) continue;
+    const n = Number(input[field]);
+    if (isNaN(n)) return { error: `${field} must be a number.` };
+    $set[field] = n;
+  }
+  if (input.includeStandardSeats !== undefined) $set.includeStandardSeats = Boolean(input.includeStandardSeats);
+  if (input.includeResaleSeats !== undefined) $set.includeResaleSeats = Boolean(input.includeResaleSeats);
+  if (input.eventType !== undefined) {
+    if (input.eventType !== null && input.eventType !== '' && !isValidEventType(input.eventType)) {
+      return { error: `Invalid eventType. Must be one of: ${EVENT_TYPES.join(', ')}.` };
+    }
+    $set.eventType = input.eventType || null;
+  }
+
+  const currentWhen = currentEvent.Event_DateTime ? new Date(currentEvent.Event_DateTime) : null;
+  const newWhen = input.Event_DateTime !== undefined ? wallClockDate(input.Event_DateTime) : undefined;
+  if (input.Event_DateTime !== undefined && !newWhen) return { error: 'Pick a performance date and time.' };
+  if (newWhen && (!currentWhen || performanceMinute(newWhen) !== performanceMinute(currentWhen))) {
+    const when = newWhen;
+    // Moving to another performance: it must be one the show has on sale.
+    const lookup = await lookupTelechargeShow(currentEvent.URL || '', { maxAgeMs: 15 * 60_000 });
+    if ('error' in lookup) return { error: lookup.error };
+    if (!lookup.performances.some((p) => performanceMinute(p.Event_DateTime) === performanceMinute(when))) {
+      return { error: `${formatPerformance(when)}: ${lookup.show.title || 'this show'} has no performance on sale at that date and time on Telecharge.` };
+    }
+    const clash = await TelechargeEvent.findOne(
+      { _id: { $ne: currentEvent._id }, URL: currentEvent.URL, Event_DateTime: when },
+      { _id: 1 }
+    ).lean().maxTimeMS(5000);
+    if (clash) return { error: 'That performance of this show is already registered.' };
+    $set.Event_DateTime = when;
+    // Resolve again against the new time: the scraper re-derives Event_ID and
+    // delists the old performance's inventory.
+    $set['telecharge.status'] = 'pending';
+    $set['telecharge.lastError'] = null;
+  }
+  if (input.inHandDate !== undefined) {
+    const inHand = wallClockDate(input.inHandDate);
+    if (!inHand) return { error: 'Pick an in-hand date.' };
+    $set.inHandDate = inHand;
+  }
+  if (input.Event_Name !== undefined && String(input.Event_Name).trim()) $set.Event_Name = String(input.Event_Name).trim();
+  if (input.mapping_id !== undefined) {
+    const mappingId = String(input.mapping_id || '').trim();
+    // Blank hands the mapping back to the scraper, which uses the Event_ID.
+    if (mappingId) $set.mapping_id = mappingId;
+    else $unset.mapping_id = '';
+  }
+
+  if (!Object.keys($set).length && !Object.keys($unset).length) {
+    return JSON.parse(JSON.stringify(currentEvent));
+  }
+
+  try {
+    const updated = await TelechargeEvent.findByIdAndUpdate(
+      currentEvent._id,
+      { ...(Object.keys($set).length ? { $set } : {}), ...(Object.keys($unset).length ? { $unset } : {}) },
+      { new: true, runValidators: true }
+    ).maxTimeMS(10000);
+    if (!updated) return { error: 'Failed to update event - event may have been deleted' };
+    return JSON.parse(JSON.stringify(updated));
+  } catch (error) {
+    const message = (error as Error).message || 'Failed to update event';
+    return { error: /duplicate key/i.test(message) ? 'That mapping ID is already used by another Telecharge performance.' : message };
+  }
+}
+
 // Example of how to get an event by a different unique field, e.g., Event_ID
 /**
  * Retrieves a single event by its Event_ID.
@@ -817,6 +1099,17 @@ export async function deleteEvent(eventId: string) {
       const deleted = await EvenueEvent.findByIdAndDelete(eventId);
       return {
         message: 'Event deleted. Its inventory is delisted by the eVenue scraper on its next sweep.',
+        success: true,
+        deletedEvent: JSON.parse(JSON.stringify(deleted)),
+        deletedSeatGroups: 0,
+      };
+    }
+
+    // Telecharge: same contract as eVenue — the scraper's sweep delists.
+    if (found.isTelecharge) {
+      const deleted = await TelechargeEvent.findByIdAndDelete(eventId);
+      return {
+        message: 'Event deleted. Its inventory is delisted by the Telecharge scraper on its next sweep.',
         success: true,
         deletedEvent: JSON.parse(JSON.stringify(deleted)),
         deletedSeatGroups: 0,
@@ -867,7 +1160,7 @@ export async function toggleCsvExportSetting(
       return { error: 'Event not found' };
     }
 
-    const model = found.isEvenue ? EvenueEvent : Event;
+    const model = found.isEvenue ? EvenueEvent : found.isTelecharge ? TelechargeEvent : Event;
     const updatedEvent = await model
       .findByIdAndUpdate(eventId, { [field]: value }, { new: true, runValidators: true })
       .maxTimeMS(5000);

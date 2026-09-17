@@ -11,6 +11,7 @@ import EventTableActions from './EventTableActions';
 import PaginationControls from './PaginationControls';
 import TimeAgo from './TimeAgo';
 import { isEvenueEvent } from '@/lib/evenue';
+import { isTelechargeEvent, TELECHARGE_STATUS_LABELS } from '@/lib/telecharge';
 
 interface EventData {
   _id: string;
@@ -38,6 +39,8 @@ interface EventData {
   // Set on eVenue rows; absent on Ticketmaster ones, which predate it.
   Source?: string;
   URL?: string;
+  // Set on Telecharge rows by that scraper.
+  telecharge?: { status?: string; lastError?: string | null };
 }
 
 /**
@@ -48,6 +51,27 @@ interface EventData {
  * like a Ticketmaster event with fields missing.
  */
 function SourceBadge({ event }: { event: EventData }) {
+  if (isTelechargeEvent(event)) {
+    // A Telecharge row is one performance, matched to the show's calendar by the
+    // scraper. When that match fails — wrong time, show already started — the
+    // reason is written back on the row, and this is where the operator sees it.
+    const status = event.telecharge?.status || 'pending';
+    const problem = status === 'unresolved' || status === 'not_on_sale' || status === 'error';
+    return (
+      <span className="inline-flex items-center gap-1 shrink-0" title={event.telecharge?.lastError || TELECHARGE_STATUS_LABELS[status] || status}>
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border shadow-[inset_0_0_0_1px_rgba(255,255,255,0.5)] bg-rose-100 text-rose-800 border-rose-300/80">
+          <span className="w-1.5 h-1.5 rounded-full bg-rose-500" aria-hidden="true" />
+          Telecharge
+        </span>
+        {problem && (
+          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-semibold border bg-amber-50 text-amber-800 border-amber-300">
+            <AlertCircle size={10} aria-hidden="true" />
+            {TELECHARGE_STATUS_LABELS[status] || status}
+          </span>
+        )}
+      </span>
+    );
+  }
   if (!isEvenueEvent(event)) return null;
   return (
     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border shadow-[inset_0_0_0_1px_rgba(255,255,255,0.5)] bg-violet-100 text-violet-800 border-violet-300/80 shrink-0">
@@ -74,7 +98,7 @@ function TotalBadge({ value }: { value?: number }) {
  */
 function EventTitle({ event }: { event: EventData }) {
   if (event.Event_Name) return <>{event.Event_Name}</>;
-  if (isEvenueEvent(event)) {
+  if (isEvenueEvent(event) || isTelechargeEvent(event)) {
     return <span className="italic text-gray-500 font-normal">Awaiting first scrape…</span>;
   }
   return <span className="text-gray-400">—</span>;
@@ -369,7 +393,8 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                     ? Date.now() - new Date(lastUpdated).getTime() < 4 * 60 * 1000
                     : false;
                   const isActive = !event.Skip_Scraping;
-                  const isEvenue = isEvenueEvent(event);
+                  // eVenue and Telecharge: primary box-office inventory at one markup.
+                  const isSinglePrice = isEvenueEvent(event) || isTelechargeEvent(event);
                   const stdIncluded = event.includeStandardSeats !== false;
                   const resIncluded = event.includeResaleSeats !== false;
 
@@ -396,7 +421,7 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                               <EventTitle event={event} />
                             </Link>
                             <SourceBadge event={event} />
-                            {!isEvenue && <EventTypeBadge type={event.eventType} />}
+                            {!isSinglePrice && <EventTypeBadge type={event.eventType} />}
                           </div>
                           <div className="flex items-center gap-2 text-xs text-gray-500 mt-0.5 min-w-0">
                             {event.Venue && (
@@ -423,7 +448,7 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                         {/* eVenue is primary box-office inventory sold at a price
                             level — there is no resale/broker split to show, so a
                             single total is the honest reading. */}
-                        {isEvenue ? (
+                        {isSinglePrice ? (
                           <TotalBadge value={event.standardQty} />
                         ) : (
                         <div className="inline-flex items-center gap-1 whitespace-nowrap">
@@ -440,7 +465,7 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                         )}
                       </td>
                       <td className="px-2 py-1.5 whitespace-nowrap text-right">
-                        {isEvenue ? (
+                        {isSinglePrice ? (
                           <TotalBadge value={event.standardRows} />
                         ) : (
                         <div className="inline-flex items-center gap-1 whitespace-nowrap">
@@ -473,7 +498,7 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                               one price level, so per-channel adjustments do not
                               exist there and rendering them as 0% would imply a
                               knob the operator can turn. */}
-                          {!isEvenue && (() => {
+                          {!isSinglePrice && (() => {
                             const stdAdj = event.standardMarkupAdjustment ?? 0;
                             const resAdj = event.resaleMarkupAdjustment ?? 0;
                             const brkAdj = event.brokerMarkupAdjustment ?? 0;
@@ -517,7 +542,7 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                       <td className="px-2 py-1.5 whitespace-nowrap text-right">
                         <EventTableActions
                           eventId={event._id}
-                          eventName={event.Event_Name || "this eVenue event"}
+                          eventName={event.Event_Name || "this event"}
                           isScrapingActive={isActive}
                         />
                       </td>
@@ -536,7 +561,7 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                 ? Date.now() - new Date(lastUpdated).getTime() < 4 * 60 * 1000
                 : false;
               const isActive = !event.Skip_Scraping;
-              const isEvenue = isEvenueEvent(event);
+              const isSinglePrice = isEvenueEvent(event) || isTelechargeEvent(event);
               const stdIncluded = event.includeStandardSeats !== false;
               const resIncluded = event.includeResaleSeats !== false;
 
@@ -561,12 +586,12 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                         <div className="flex items-center gap-2 mt-1">
                           <StatusBadge isActive={isActive} />
                           <SourceBadge event={event} />
-                          {!isEvenue && <EventTypeBadge type={event.eventType} />}
+                          {!isSinglePrice && <EventTypeBadge type={event.eventType} />}
                         </div>
                       </div>
                       <EventTableActions
                         eventId={event._id}
-                        eventName={event.Event_Name || "this eVenue event"}
+                        eventName={event.Event_Name || "this event"}
                         isScrapingActive={isActive}
                         compact
                       />
@@ -594,7 +619,7 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                       <div className="space-y-2 text-right">
                         <div className="flex items-center justify-end gap-1">
                           <Users size={14} className="text-gray-400" />
-                          {isEvenue ? <TotalBadge value={event.standardQty} /> : <>
+                          {isSinglePrice ? <TotalBadge value={event.standardQty} /> : <>
                           <span className={`inline-flex items-center text-[11px] font-semibold px-1.5 py-0.5 rounded border tabular-nums ${
                             stdIncluded ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-slate-200 bg-slate-50 text-slate-400 line-through opacity-50'
                           }`}>
@@ -614,7 +639,7 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                         </div>
                         <div className="flex items-center justify-end gap-1">
                           <span className="text-[10px] text-gray-400 mr-0.5">rows</span>
-                          {isEvenue ? <TotalBadge value={event.standardRows} /> : <>
+                          {isSinglePrice ? <TotalBadge value={event.standardRows} /> : <>
                           <span className={`inline-flex items-center text-[11px] font-semibold px-1.5 py-0.5 rounded border tabular-nums ${
                             stdIncluded ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-slate-200 bg-slate-50 text-slate-400 line-through opacity-50'
                           }`}>
@@ -646,7 +671,7 @@ export default async function EventsTableServerSide({ searchParams }: PageProps)
                               {(event.priceIncreasePercentage || 0) > 0 ? '+' : ''}{event.priceIncreasePercentage || 0}%
                             </span>
                           </div>
-                          {!isEvenue && (() => {
+                          {!isSinglePrice && (() => {
                             const stdAdj = event.standardMarkupAdjustment ?? 0;
                             const resAdj = event.resaleMarkupAdjustment ?? 0;
                             const brkAdj = event.brokerMarkupAdjustment ?? 0;

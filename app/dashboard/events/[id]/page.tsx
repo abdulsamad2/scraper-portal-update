@@ -11,6 +11,16 @@ import {
 import EventDetailActions from './EventDetailActions';
 import PriceEditor from './PriceEditor';
 import CsvExportToggles from './CsvExportToggles';
+import { sourceForUrl } from '@/lib/evenue';
+
+/** Name of the site an event's URL points at, for the outbound links. */
+function sourceLabel(url?: string): string {
+  const source = url ? sourceForUrl(url) : null;
+  return source === 'telecharge' ? 'Telecharge'
+    : source === 'evenue' ? 'eVenue'
+    : source === 'ticketscom' ? 'tickets.com'
+    : 'Ticketmaster';
+}
 
 interface EventDetailsProps {
   params: Promise<{ id: string }>;
@@ -110,7 +120,7 @@ export default async function EventDetailsPage({ params }: EventDetailsProps) {
             <a href={event.URL} target="_blank" rel="noopener noreferrer"
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold bg-blue-600 hover:bg-blue-700 text-white transition-colors shadow-sm">
               <Ticket size={13} />
-              Ticketmaster
+              {sourceLabel(event.URL)}
               <ExternalLink size={10} />
             </a>
           )}
@@ -299,7 +309,7 @@ export default async function EventDetailsPage({ params }: EventDetailsProps) {
                     <a href={event.URL} target="_blank" rel="noopener noreferrer"
                       className="inline-flex items-center gap-1.5 text-purple-600 hover:text-purple-700 transition-colors text-sm font-medium">
                       <Globe size={11} />
-                      Ticketmaster
+                      {sourceLabel(event.URL)}
                       <ExternalLink size={10} />
                     </a>
                   ) : <span className="text-slate-300">—</span>}

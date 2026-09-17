@@ -16,6 +16,8 @@
  * the scraper will not recognise the row the portal wrote.
  */
 
+import { TELECHARGE_SOURCE, isTelechargeUrl } from './telecharge';
+
 export const EVENUE_SOURCE = 'evenue';
 export const TICKETMASTER_SOURCE = 'ticketmaster';
 
@@ -101,11 +103,12 @@ export function isTicketsComUrl(url: string): boolean {
   }
 }
 
-/** Which scraper owns this URL, or null if neither does. */
-export function sourceForUrl(url: string): 'evenue' | 'ticketmaster' | 'ticketscom' | null {
+/** Which scraper owns this URL, or null if none does. */
+export function sourceForUrl(url: string): 'evenue' | 'ticketmaster' | 'ticketscom' | 'telecharge' | null {
   if (isEvenueUrl(url)) return EVENUE_SOURCE;
   if (isTicketmasterUrl(url)) return TICKETMASTER_SOURCE;
   if (isTicketsComUrl(url)) return 'ticketscom';
+  if (isTelechargeUrl(url)) return TELECHARGE_SOURCE;
   return null;
 }
 
