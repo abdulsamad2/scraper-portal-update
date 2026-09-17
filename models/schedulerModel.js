@@ -87,6 +87,12 @@ const schedulerSettingsSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  // Global switch for Telecharge: when off, Telecharge events and their
+  // inventory are left out of every CSV export, scheduled or manual.
+  telechargeCsvEnabled: {
+    type: Boolean,
+    default: false
+  },
   createdAt: {
     type: Date,
     default: Date.now

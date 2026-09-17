@@ -67,8 +67,23 @@ import { calculateSplitConfiguration } from '@/lib/csvSplits';
 
 const TICKETSCOM_GROUPS_COLLECTION = 'tc_consecutivegroups';
 
-/** Append eVenue, tickets.com and Telecharge inventory to a ConsecutiveGroup pipeline, filtered the same way. */
-function unionAllInventorySources(match: Record<string, any>): PipelineStage[] {
+/**
+ * The global Telecharge switch (SchedulerSettings), off by default. Read once
+ * per export and passed down, so one run never mixes both answers.
+ */
+async function getTelechargeCsvEnabled(): Promise<boolean> {
+  const settings = await SchedulerSettings.findOne(
+    {},
+    { telechargeCsvEnabled: 1 }
+  ).lean() as { telechargeCsvEnabled?: boolean } | null;
+  return settings?.telechargeCsvEnabled === true;
+}
+
+/**
+ * Append eVenue, tickets.com and — when the global switch is on — Telecharge
+ * inventory to a ConsecutiveGroup pipeline, filtered the same way.
+ */
+function unionAllInventorySources(match: Record<string, any>, includeTelecharge: boolean): PipelineStage[] {
   return [
     // The filter is pushed into the sub-pipeline so Mongo never materialises
     // the whole collection just to throw most of it away.
@@ -78,25 +93,28 @@ function unionAllInventorySources(match: Record<string, any>): PipelineStage[] {
     {
       $unionWith: { coll: TICKETSCOM_GROUPS_COLLECTION, pipeline: [{ $match: match }] },
     } as PipelineStage,
-    {
-      $unionWith: { coll: TELECHARGE_GROUPS_COLLECTION, pipeline: [{ $match: match }] },
-    } as PipelineStage,
+    ...(includeTelecharge
+      ? [{ $unionWith: { coll: TELECHARGE_GROUPS_COLLECTION, pipeline: [{ $match: match }] } } as PipelineStage]
+      : []),
   ];
 }
 
 /**
- * Active events from all three rosters (Ticketmaster, eVenue, tickets.com).
+ * Active events from every roster (Ticketmaster, eVenue, tickets.com, and
+ * Telecharge when its global switch is on).
  *
  * Rows the portal registered but the scraper has not reached yet have no
  * mapping_id and no inventory, so they are dropped here rather than joining
  * against nothing downstream.
  */
-async function findActiveEventsBothSources(activeEventQuery: Record<string, any>) {
+async function findActiveEventsBothSources(activeEventQuery: Record<string, any>, includeTelecharge: boolean) {
   const [tmEvents, evEvents, tcEvents, teleEvents] = await Promise.all([
     Event.find(activeEventQuery, { mapping_id: 1 }).read('primary').maxTimeMS(30000).lean(),
     EvenueEvent.find(activeEventQuery, { mapping_id: 1 }).maxTimeMS(30000).lean(),
     TcEvent.find(activeEventQuery, { mapping_id: 1 }).maxTimeMS(30000).lean(),
-    TelechargeEvent.find(activeEventQuery, { mapping_id: 1 }).maxTimeMS(30000).lean(),
+    includeTelecharge
+      ? TelechargeEvent.find(activeEventQuery, { mapping_id: 1 }).maxTimeMS(30000).lean()
+      : Promise.resolve([]),
   ]);
   return [...tmEvents, ...evEvents, ...tcEvents, ...teleEvents].filter((e: any) => e.mapping_id);
 }
@@ -110,7 +128,7 @@ async function findActiveEventsBothSources(activeEventQuery: Record<string, any>
  * default to on, which is the same treatment a Ticketmaster event with unset
  * fields gets.
  */
-async function findEventDetailsBothSources(eventMappingIds: string[]) {
+async function findEventDetailsBothSources(eventMappingIds: string[], includeTelecharge: boolean) {
   const projection = {
     mapping_id: 1, URL: 1, standardMarkupAdjustment: 1, resaleMarkupAdjustment: 1,
     brokerMarkupAdjustment: 1, priceIncreasePercentage: 1,
@@ -120,7 +138,9 @@ async function findEventDetailsBothSources(eventMappingIds: string[]) {
     Event.find({ mapping_id: { $in: eventMappingIds } }, projection).lean(),
     EvenueEvent.find({ mapping_id: { $in: eventMappingIds } }, projection).lean(),
     TcEvent.find({ mapping_id: { $in: eventMappingIds } }, projection).lean(),
-    TelechargeEvent.find({ mapping_id: { $in: eventMappingIds } }, projection).lean(),
+    includeTelecharge
+      ? TelechargeEvent.find({ mapping_id: { $in: eventMappingIds } }, projection).lean()
+      : Promise.resolve([]),
   ]);
   return [...tmDocs, ...evDocs, ...tcDocs, ...teleDocs];
 }
@@ -700,6 +720,8 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
     try {
       let eventFilter = {};
       
+      const includeTelecharge = await getTelechargeCsvEnabled();
+
       // Only include active events (Skip_Scraping: false)
       const activeEventQuery: Record<string, any> = { Skip_Scraping: false };
 
@@ -712,7 +734,7 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
         console.log('Including all active events (Skip_Scraping: false)');
       }
 
-      const activeEvents = await findActiveEventsBothSources(activeEventQuery);
+      const activeEvents = await findActiveEventsBothSources(activeEventQuery, includeTelecharge);
 
       console.log(`Found ${activeEvents.length} active events matching filter criteria`);
 
@@ -731,7 +753,7 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
         url: string; stdAdj: number; resaleAdj: number; brokerAdj: number; defaultPct: number;
         includeStandard: boolean; includeResale: boolean;
       }>();
-      const eventDocs = await findEventDetailsBothSources(eventMappingIds);
+      const eventDocs = await findEventDetailsBothSources(eventMappingIds, includeTelecharge);
       for (const ev of eventDocs) {
         eventDetailsMap.set(ev.mapping_id, {
           url: ev.URL || '',
@@ -772,7 +794,7 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
       // Step 1: Get all matching _ids quickly (no $lookup, very fast)
       const idPipeline: PipelineStage[] = [
         { $match: eventFilter },
-        ...unionAllInventorySources(eventFilter),
+        ...unionAllInventorySources(eventFilter, includeTelecharge),
         { $sort: { _id: 1 as const } },
         { $project: { _id: 1 } },
       ];
@@ -810,7 +832,7 @@ export async function generateInventoryCsv(eventUpdateFilterMinutes: number = 0)
         const chunkDocs: ConsecutiveGroupDocument[] = await ConsecutiveGroup.aggregate(
           [
             { $match: { _id: { $in: chunkIds } } },
-            ...unionAllInventorySources({ _id: { $in: chunkIds } }),
+            ...unionAllInventorySources({ _id: { $in: chunkIds } }, includeTelecharge),
             { $project: projection },
           ] as PipelineStage[],
           { allowDiskUse: true, maxTimeMS: 120000 }
@@ -1229,6 +1251,7 @@ export async function* generateInventoryCsvStream(
   const schedulerSettings = await SchedulerSettings.findOne({}).lean() as any;
   const minSeatFilter = schedulerSettings?.minSeatFilter ?? 0;
   const minSeatFilterMode = schedulerSettings?.minSeatFilterMode ?? 'section';
+  const includeTelecharge = schedulerSettings?.telechargeCsvEnabled === true;
 
   try {
     const activeEventQuery: Record<string, any> = { Skip_Scraping: false };
@@ -1237,7 +1260,7 @@ export async function* generateInventoryCsvStream(
       activeEventQuery.updatedAt = { $gte: cutoffTime };
     }
 
-    const activeEvents = await findActiveEventsBothSources(activeEventQuery);
+    const activeEvents = await findActiveEventsBothSources(activeEventQuery, includeTelecharge);
 
     if (activeEvents.length === 0) {
       const msg = eventUpdateFilterMinutes > 0
@@ -1256,7 +1279,7 @@ export async function* generateInventoryCsvStream(
       url: string; stdAdj: number; resaleAdj: number; brokerAdj: number; defaultPct: number;
       includeStandard: boolean; includeResale: boolean;
     }>();
-    const eventDocs = await findEventDetailsBothSources(eventMappingIds);
+    const eventDocs = await findEventDetailsBothSources(eventMappingIds, includeTelecharge);
     for (const ev of eventDocs) {
       eventDetailsMap.set(ev.mapping_id, {
         url: ev.URL || '',
@@ -1300,7 +1323,7 @@ export async function* generateInventoryCsvStream(
     const CHUNK_SIZE = 10000;
     const idPipeline: PipelineStage[] = [
       { $match: eventFilter },
-      ...unionAllInventorySources(eventFilter),
+      ...unionAllInventorySources(eventFilter, includeTelecharge),
       // Ordering by event only matters when something is being held back; the
       // plain _id order is left alone otherwise.
       dominatedEvents.size > 0
@@ -1333,7 +1356,7 @@ export async function* generateInventoryCsvStream(
           { $match: eventFilter },
           // Section totals must span both scrapers, or the min-seat filter would
           // judge an eVenue section on a partial count.
-          ...unionAllInventorySources(eventFilter),
+          ...unionAllInventorySources(eventFilter, includeTelecharge),
           {
             $group: {
               _id: { mappingId: '$mapping_id', section: '$inventory.section' },
@@ -1360,7 +1383,7 @@ export async function* generateInventoryCsvStream(
       const chunkDocs: ConsecutiveGroupDocument[] = await ConsecutiveGroup.aggregate(
         [
           { $match: { _id: { $in: chunkIds } } },
-          ...unionAllInventorySources({ _id: { $in: chunkIds } }),
+          ...unionAllInventorySources({ _id: { $in: chunkIds } }, includeTelecharge),
           { $project: projection },
         ] as PipelineStage[],
         { allowDiskUse: true, maxTimeMS: 120000 }
@@ -1657,6 +1680,7 @@ export async function updateSchedulerSettings(updates: {
   minSeatFilter?: number;
   minSeatFilterMode?: 'row' | 'section';
   dominatedListingsEnabled?: boolean;
+  telechargeCsvEnabled?: boolean;
 }) {
   await dbConnect();
   try {

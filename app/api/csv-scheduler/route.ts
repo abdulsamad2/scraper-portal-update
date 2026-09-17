@@ -289,6 +289,7 @@ interface SchedulerResponse {
     minSeatFilter: number;
     minSeatFilterMode: 'row' | 'section';
     dominatedListingsEnabled: boolean;
+    telechargeCsvEnabled: boolean;
   };
   metrics?: {
     totalRuns: number;
@@ -332,6 +333,7 @@ export async function GET(request: Request) {
         minSeatFilter: settings.minSeatFilter ?? 0,
         minSeatFilterMode: settings.minSeatFilterMode ?? 'section',
         dominatedListingsEnabled: settings.dominatedListingsEnabled ?? false,
+        telechargeCsvEnabled: settings.telechargeCsvEnabled ?? false,
       }
     };
 
@@ -460,6 +462,7 @@ export async function POST(req: NextRequest) {
         minSeatFilter?: number;
         minSeatFilterMode?: 'row' | 'section';
         dominatedListingsEnabled?: boolean;
+        telechargeCsvEnabled?: boolean;
       } = {};
       if (intervalMinutes !== undefined) updates.scheduleRateMinutes = intervalMinutes;
       if (uploadToSync !== undefined) updates.uploadToSync = uploadToSync;
@@ -469,6 +472,7 @@ export async function POST(req: NextRequest) {
       if (typeof body.minSeatFilter === 'number') updates.minSeatFilter = Math.min(Math.max(body.minSeatFilter, 0), 100);
       if (body.minSeatFilterMode === 'row' || body.minSeatFilterMode === 'section') updates.minSeatFilterMode = body.minSeatFilterMode;
       if (typeof body.dominatedListingsEnabled === 'boolean') updates.dominatedListingsEnabled = body.dominatedListingsEnabled;
+      if (typeof body.telechargeCsvEnabled === 'boolean') updates.telechargeCsvEnabled = body.telechargeCsvEnabled;
 
       await updateSchedulerSettings(updates);
 

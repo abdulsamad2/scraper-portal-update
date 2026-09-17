@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import moment from 'moment';
-import { Download, Upload, Settings, BarChart3, Clock, Trash2, AlertTriangle, Play, Square, RefreshCw, Eye, Zap, Shield, ChevronDown, CheckCircle2, XCircle, Timer, Layers } from 'lucide-react';
+import { Download, Upload, Settings, BarChart3, Clock, Trash2, AlertTriangle, Play, Square, RefreshCw, Eye, Zap, Shield, ChevronDown, CheckCircle2, XCircle, Timer, Layers, Ticket } from 'lucide-react';
 import { deleteStaleInventory } from '../../../actions/seatActions';
 
 // Simple toast notification function
@@ -29,6 +29,7 @@ interface ExportSettings {
   minSeatFilter: number;
   minSeatFilterMode: 'row' | 'section';
   dominatedListingsEnabled: boolean;
+  telechargeCsvEnabled: boolean;
 }
 
 interface CsvStatus {
@@ -109,6 +110,7 @@ const ExportCsvPage: React.FC = () => {
     minSeatFilter: 0,
     minSeatFilterMode: 'section',
     dominatedListingsEnabled: false,
+    telechargeCsvEnabled: false,
   });
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [schedulerStatus, setSchedulerStatus] = useState<string>('Stopped');
@@ -254,6 +256,7 @@ const ExportCsvPage: React.FC = () => {
             minSeatFilter: dbSettings.minSeatFilter ?? 0,
             minSeatFilterMode: dbSettings.minSeatFilterMode ?? 'section',
             dominatedListingsEnabled: dbSettings.dominatedListingsEnabled ?? false,
+            telechargeCsvEnabled: dbSettings.telechargeCsvEnabled ?? false,
           });
           setSchedulerStatus(dbSettings.isRunning ? 'Running' : 'Stopped');
           setPerformanceMetrics({
@@ -659,6 +662,7 @@ const ExportCsvPage: React.FC = () => {
           minSeatFilter: settings.minSeatFilter,
           minSeatFilterMode: settings.minSeatFilterMode,
           dominatedListingsEnabled: settings.dominatedListingsEnabled,
+          telechargeCsvEnabled: settings.telechargeCsvEnabled,
         })
       });
       
@@ -965,6 +969,30 @@ const ExportCsvPage: React.FC = () => {
                   Skip a listing when a row closer to the field is already on sale at or below its
                   per-seat price &mdash; anything a better seat matches or beats is dropped.
                   Applies to every event unless its exclusion rules say otherwise.
+                </p>
+              </div>
+
+              {/* Telecharge Inventory */}
+              <div className="p-3 bg-rose-50/40 border border-rose-100 rounded-lg space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <Ticket className="w-3.5 h-3.5 text-rose-500" />
+                    <span className="text-xs font-semibold text-slate-700">Telecharge Inventory</span>
+                  </div>
+                  <button type="button" onClick={() => setSettings(prev => ({ ...prev, telechargeCsvEnabled: !prev.telechargeCsvEnabled }))}
+                    role="switch" aria-checked={settings.telechargeCsvEnabled} aria-label="Include Telecharge inventory in CSV"
+                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-rose-400 ${
+                      settings.telechargeCsvEnabled ? 'bg-rose-500' : 'bg-slate-300'
+                    }`}>
+                    <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform shadow-sm ${
+                      settings.telechargeCsvEnabled ? 'translate-x-6' : 'translate-x-1'
+                    }`} />
+                  </button>
+                </div>
+                <p className="text-[11px] text-rose-600/70">
+                  {settings.telechargeCsvEnabled
+                    ? <>Telecharge events and their seats are joined into the CSV with every other source.</>
+                    : <>Off &mdash; Telecharge events keep scraping, but none of their inventory goes into the CSV.</>}
                 </p>
               </div>
 
