@@ -23,7 +23,7 @@ import {
  * Paste a show URL and the form loads every performance Telecharge has on sale
  * (asked of the Telecharge scraper, which also proves the URL is a real show).
  * Tick the dates and times to track — or Select all — and each one is saved as
- * its own event, with its own in-hand date and optional mapping ID. Times can
+ * its own event, with its own in-hand date and required mapping ID. Times can
  * only be picked from the show's calendar, and the server checks them again.
  *
  * Editing moves a performance to another on-sale date/time of the same show.
@@ -114,10 +114,7 @@ export default function TelechargeEventForm({
   // Edit: the one performance this row tracks.
   const [editWhen, setEditWhen] = useState(toIso(initialData?.Event_DateTime));
   const [editInHand, setEditInHand] = useState(toDateInput(initialData?.inHandDate));
-  // A mapping ID the scraper filled in from the Event_ID is shown blank, so saving does not pin it.
-  const [editMapping, setEditMapping] = useState(
-    initialData?.mapping_id && initialData.mapping_id !== initialData.Event_ID ? initialData.mapping_id : ''
-  );
+  const [editMapping, setEditMapping] = useState(initialData?.mapping_id || '');
 
   const submitting = state === 'submitting';
   const urlValid = isTelechargeUrl(url);
@@ -205,10 +202,12 @@ export default function TelechargeEventForm({
     for (const [iso, s] of selected) {
       if (!s.inHandDate) errors.push(`${formatPerformance(iso)}: pick an in-hand date`);
       const m = s.mapping_id.trim();
-      if (m) {
-        if (seen.has(m)) errors.push(`Mapping ID ${m} is used twice`);
-        seen.add(m);
+      if (!m) {
+        errors.push(`${formatPerformance(iso)}: enter a mapping ID`);
+        continue;
       }
+      if (seen.has(m)) errors.push(`Mapping ID ${m} is used twice`);
+      seen.add(m);
     }
     return errors;
   }, [selected]);
@@ -224,6 +223,7 @@ export default function TelechargeEventForm({
     if (isEdit) {
       if (!editWhen) return setError('Pick a performance');
       if (!editInHand) return setError('Pick an in-hand date');
+      if (!editMapping.trim()) return setError('Enter a mapping ID');
     } else {
       if (lookup.status === 'loading') return setError('Still loading performances from Telecharge…');
       if (lookup.status !== 'loaded') return setError(lookup.status === 'error' ? lookup.error : 'Load the show’s performances first');
@@ -254,7 +254,7 @@ export default function TelechargeEventForm({
           URL: initialData?.URL,
           Event_DateTime: editWhen,
           inHandDate: editInHand,
-          mapping_id: editMapping,
+          mapping_id: editMapping.trim(),
         } as never);
         if ((result as { error?: string })?.error) throw new Error((result as { error: string }).error);
         message = 'Telecharge event updated!';
@@ -485,9 +485,9 @@ export default function TelechargeEventForm({
                 <FormField.Help>Defaults to the day before</FormField.Help>
               </FormField.Root>
               <FormField.Root>
-                <FormField.Label htmlFor="edit-mapping">Event Mapping ID</FormField.Label>
-                <input id="edit-mapping" type="text" value={editMapping} onChange={(e) => setEditMapping(e.target.value)} disabled={submitting} placeholder="Optional" className={inputClass} />
-                <FormField.Help>Blank uses the Telecharge event ID</FormField.Help>
+                <FormField.Label htmlFor="edit-mapping" required>Event Mapping ID</FormField.Label>
+                <input id="edit-mapping" type="text" value={editMapping} onChange={(e) => setEditMapping(e.target.value)} disabled={submitting} placeholder="Mapping ID" className={`${inputClass} ${editMapping.trim() ? '' : 'border-red-400'}`} />
+                <FormField.Help>Used to join this event into the CSV</FormField.Help>
               </FormField.Root>
             </div>
           ) : (
@@ -578,8 +578,8 @@ export default function TelechargeEventForm({
                                       value={sel.mapping_id}
                                       onChange={(e) => patchSelection(p.Event_DateTime, { mapping_id: e.target.value })}
                                       disabled={submitting}
-                                      placeholder="Mapping ID (optional)"
-                                      className={inputClass}
+                                      placeholder="Mapping ID"
+                                      className={`${inputClass} ${sel.mapping_id.trim() ? '' : 'border-red-400'}`}
                                     />
                                   </>
                                 )}
@@ -592,7 +592,7 @@ export default function TelechargeEventForm({
                   </div>
                 )}
                 <p className="mt-1 text-xs text-gray-500">
-                  In-hand date defaults to the day before. A blank mapping ID uses the Telecharge event ID. “Select all times” skips sold-out performances.
+                  In-hand date defaults to the day before. Every performance needs its own mapping ID. “Select all times” skips sold-out performances.
                 </p>
               </div>
             )

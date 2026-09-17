@@ -15,7 +15,7 @@ import {
  * portal writes URL + Event_DateTime and the scraper resolves the rest.
  *
  * Portal-owned: URL, Event_DateTime, inHandDate, Skip_Scraping, Zone, markup,
- * adjustments, include toggles, eventType, and optionally Event_Name / mapping_id.
+ * adjustments, include toggles, eventType, mapping_id (required) and optionally Event_Name.
  * Scraper-owned: Event_ID, Venue, Available_Seats, Last_Updated, metadata, telecharge.
  */
 const telechargeEventSchema = new mongoose.Schema(
@@ -40,9 +40,10 @@ const telechargeEventSchema = new mongoose.Schema(
     includeStandardSeats: { type: Boolean, default: true },
     includeResaleSeats: { type: Boolean, default: true },
 
-    // `sparse`: a row the portal just inserted has no Event_ID, and may have no
-    // mapping_id, until the scraper resolves it.
-    mapping_id: { type: String, unique: true, sparse: true },
+    // mapping_id is what the CSV joins on, so a row without one never exports.
+    // `sparse` stays only so the existing index definition in Mongo still matches.
+    mapping_id: { type: String, required: true, trim: true, unique: true, sparse: true },
+    // `sparse`: a row the portal just inserted has no Event_ID until the scraper resolves it.
     Event_ID: { type: String, unique: true, sparse: true },
     Event_Name: { type: String },
     Venue: String,

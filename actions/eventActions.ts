@@ -375,16 +375,15 @@ export async function registerTelechargePerformances(input: TelechargeEventInput
     const inHand = wallClockDate(perf.inHandDate) || new Date(Date.UTC(when.getUTCFullYear(), when.getUTCMonth(), when.getUTCDate() - 1));
 
     const mappingId = String(perf.mapping_id || '').trim();
-    if (mappingId) {
-      if (seenMappings.has(mappingId)) return { error: `${label}: mapping ID ${mappingId} is used twice.` };
-      seenMappings.add(mappingId);
-    }
+    if (!mappingId) return { error: `${label}: enter a mapping ID.` };
+    if (seenMappings.has(mappingId)) return { error: `${label}: mapping ID ${mappingId} is used twice.` };
+    seenMappings.add(mappingId);
 
     rows.push({
       URL: url,
       Event_DateTime: when,
       inHandDate: inHand,
-      ...(mappingId ? { mapping_id: mappingId } : {}),
+      mapping_id: mappingId,
       ...(String(input.Event_Name || '').trim() || showName ? { Event_Name: String(input.Event_Name || '').trim() || showName } : {}),
       ...(theatre ? { Venue: theatre } : {}),
       priceIncreasePercentage: markup,
@@ -411,10 +410,8 @@ export async function registerTelechargePerformances(input: TelechargeEventInput
       const times = clashes.map((c) => formatPerformance(c.Event_DateTime as Date));
       return { error: `Already registered for this show: ${times.join(', ')}` };
     }
-    if (seenMappings.size) {
-      const taken = await TelechargeEvent.findOne({ mapping_id: { $in: [...seenMappings] } }, { mapping_id: 1 }).lean().maxTimeMS(5000);
-      if (taken) return { error: `Mapping ID ${(taken as { mapping_id?: string }).mapping_id} is already used by another Telecharge performance.` };
-    }
+    const taken = await TelechargeEvent.findOne({ mapping_id: { $in: [...seenMappings] } }, { mapping_id: 1 }).lean().maxTimeMS(5000);
+    if (taken) return { error: `Mapping ID ${(taken as { mapping_id?: string }).mapping_id} is already used by another Telecharge performance.` };
 
     const created = await TelechargeEvent.insertMany(rows, { ordered: true });
     return { created: JSON.parse(JSON.stringify(created)) as Record<string, unknown>[] };
@@ -1033,9 +1030,8 @@ async function updateTelechargeEvent(
   if (input.Event_Name !== undefined && String(input.Event_Name).trim()) $set.Event_Name = String(input.Event_Name).trim();
   if (input.mapping_id !== undefined) {
     const mappingId = String(input.mapping_id || '').trim();
-    // Blank hands the mapping back to the scraper, which uses the Event_ID.
-    if (mappingId) $set.mapping_id = mappingId;
-    else $unset.mapping_id = '';
+    if (!mappingId) return { error: 'Enter a mapping ID.' };
+    $set.mapping_id = mappingId;
   }
 
   if (!Object.keys($set).length && !Object.keys($unset).length) {
