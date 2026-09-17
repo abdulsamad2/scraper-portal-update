@@ -12,6 +12,7 @@ import EventDetailActions from './EventDetailActions';
 import PriceEditor from './PriceEditor';
 import CsvExportToggles from './CsvExportToggles';
 import { sourceForUrl } from '@/lib/evenue';
+import { isTelechargeEvent } from '@/lib/telecharge';
 
 /** Name of the site an event's URL points at, for the outbound links. */
 function sourceLabel(url?: string): string {
@@ -102,6 +103,8 @@ export default async function EventDetailsPage({ params }: EventDetailsProps) {
 
   const includeStandard = event.includeStandardSeats !== false;
   const includeResale = event.includeResaleSeats !== false;
+  // Telecharge sells box-office seats only: no resale or broker inventory to show.
+  const standardOnly = isTelechargeEvent(event);
 
   return (
     <div className="space-y-5">
@@ -171,7 +174,7 @@ export default async function EventDetailsPage({ params }: EventDetailsProps) {
         </div>
 
         {/* ── Inventory & Markup strip ── */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 bg-slate-50/80 border-t border-slate-100 divide-x divide-slate-100">
+        <div className={`grid grid-cols-2 ${standardOnly ? 'sm:grid-cols-3' : 'sm:grid-cols-4'} bg-slate-50/80 border-t border-slate-100 divide-x divide-slate-100`}>
           {/* Standard */}
           <div className={`px-4 py-3 relative group transition-opacity duration-200 ${includeStandard ? '' : 'opacity-35'}`}>
             <div className="flex items-center gap-1.5 mb-1">
@@ -200,7 +203,7 @@ export default async function EventDetailsPage({ params }: EventDetailsProps) {
           </div>
 
           {/* Resale */}
-          <div className={`px-4 py-3 relative group transition-opacity duration-200 ${includeResale ? '' : 'opacity-35'}`}>
+          {!standardOnly && <div className={`px-4 py-3 relative group transition-opacity duration-200 ${includeResale ? '' : 'opacity-35'}`}>
             <div className="flex items-center gap-1.5 mb-1">
               <span className={`inline-flex items-center justify-center w-5 h-5 rounded text-[10px] font-bold ${
                 includeResale ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-400'
@@ -230,7 +233,7 @@ export default async function EventDetailsPage({ params }: EventDetailsProps) {
                 <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-px border-4 border-transparent border-t-slate-800" />
               </div>
             )}
-          </div>
+          </div>}
 
           {/* Markup */}
           <div className="px-4 py-3">
@@ -247,12 +250,14 @@ export default async function EventDetailsPage({ params }: EventDetailsProps) {
               <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded tabular-nums ${
                 stdAdj !== 0 ? (stdAdj > 0 ? 'bg-orange-50 text-orange-600' : 'bg-sky-50 text-sky-600') : 'bg-slate-100 text-slate-400'
               }`}>S {pct + stdAdj}%</span>
+              {!standardOnly && <>
               <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded tabular-nums ${
                 resAdj !== 0 ? (resAdj > 0 ? 'bg-orange-50 text-orange-600' : 'bg-sky-50 text-sky-600') : 'bg-slate-100 text-slate-400'
               }`}>R {pct + resAdj}%</span>
               <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded tabular-nums ${
                 brkAdj !== 0 ? (brkAdj > 0 ? 'bg-orange-50 text-orange-600' : 'bg-sky-50 text-sky-600') : 'bg-slate-100 text-slate-400'
               }`}>B {pct + (brkAdj !== 0 ? brkAdj : resAdj)}%</span>
+              </>}
             </div>
           </div>
 
@@ -345,6 +350,7 @@ export default async function EventDetailsPage({ params }: EventDetailsProps) {
             resaleQty={resaleQty}
             standardRows={standardRows}
             resaleRows={resaleRows}
+            standardOnly={standardOnly}
           />
           <PriceEditor
             eventId={id}
@@ -352,6 +358,7 @@ export default async function EventDetailsPage({ params }: EventDetailsProps) {
             initialStandardAdj={stdAdj}
             initialResaleAdj={resAdj}
             initialBrokerAdj={brkAdj}
+            standardOnly={standardOnly}
           />
         </div>
       </div>

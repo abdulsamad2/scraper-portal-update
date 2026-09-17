@@ -12,6 +12,8 @@ interface Props {
   resaleQty: number;
   standardRows: number;
   resaleRows: number;
+  /** Sources with no resale inventory (Telecharge) show only the Standard toggle. */
+  standardOnly?: boolean;
 }
 
 export default function CsvExportToggles({
@@ -22,6 +24,7 @@ export default function CsvExportToggles({
   resaleQty,
   standardRows,
   resaleRows,
+  standardOnly = false,
 }: Props) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -79,7 +82,7 @@ export default function CsvExportToggles({
         />
 
         {/* Resale toggle */}
-        <ToggleRow
+        {!standardOnly && <ToggleRow
           label="Resale Seats"
           tag="R"
           isOn={resOn}
@@ -88,7 +91,7 @@ export default function CsvExportToggles({
           isPending={isPending && togglingField === 'includeResaleSeats'}
           onToggle={() => handleToggle('includeResaleSeats')}
           colorOn="red"
-        />
+        />}
       </div>
     </div>
   );

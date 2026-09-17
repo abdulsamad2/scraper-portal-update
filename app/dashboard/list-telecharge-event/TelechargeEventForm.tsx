@@ -55,8 +55,6 @@ interface TelechargeRow {
   Skip_Scraping?: boolean;
   priceIncreasePercentage?: number;
   standardMarkupAdjustment?: number;
-  resaleMarkupAdjustment?: number;
-  brokerMarkupAdjustment?: number;
   eventType?: string | null;
   telecharge?: { status?: string; lastError?: string | null; perfKey?: number; productId?: number; theatre?: string };
 }
@@ -102,8 +100,6 @@ export default function TelechargeEventForm({
   const [eventType, setEventType] = useState(initialData?.eventType || '');
   const [markup, setMarkup] = useState<number>(initialData?.priceIncreasePercentage ?? 35);
   const [stdAdj, setStdAdj] = useState<number>(initialData?.standardMarkupAdjustment ?? 0);
-  const [resAdj, setResAdj] = useState<number>(initialData?.resaleMarkupAdjustment ?? 0);
-  const [brkAdj, setBrkAdj] = useState<number>(initialData?.brokerMarkupAdjustment ?? 0);
   const [paused, setPaused] = useState<boolean>(initialData?.Skip_Scraping ?? true);
   const [state, setState] = useState<FormState>('idle');
   const [error, setError] = useState('');
@@ -241,8 +237,6 @@ export default function TelechargeEventForm({
       eventType: eventType || null,
       priceIncreasePercentage: markup,
       standardMarkupAdjustment: stdAdj,
-      resaleMarkupAdjustment: resAdj,
-      brokerMarkupAdjustment: brkAdj,
       Skip_Scraping: paused,
     };
 
@@ -618,13 +612,10 @@ export default function TelechargeEventForm({
             />
             <EventFormFields.MarkupAdjustments
               standardAdj={stdAdj}
-              resaleAdj={resAdj}
-              brokerAdj={brkAdj}
               defaultPct={markup}
               onStandardChange={setStdAdj}
-              onResaleChange={setResAdj}
-              onBrokerChange={setBrkAdj}
               disabled={submitting}
+              standardOnly
             />
             <EventFormFields.SkipScraping
               name="Skip_Scraping"

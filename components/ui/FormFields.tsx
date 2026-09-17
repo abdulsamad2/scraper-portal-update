@@ -394,22 +394,25 @@ export const EventFormFields = {
 
   MarkupAdjustments: ({
     standardAdj,
-    resaleAdj,
-    brokerAdj,
+    resaleAdj = 0,
+    brokerAdj = 0,
     defaultPct,
     onStandardChange,
-    onResaleChange,
-    onBrokerChange,
+    onResaleChange = () => {},
+    onBrokerChange = () => {},
     disabled,
+    standardOnly = false,
   }: {
     standardAdj: number;
-    resaleAdj: number;
-    brokerAdj: number;
+    resaleAdj?: number;
+    brokerAdj?: number;
     defaultPct: number;
     onStandardChange: (val: number) => void;
-    onResaleChange: (val: number) => void;
-    onBrokerChange: (val: number) => void;
+    onResaleChange?: (val: number) => void;
+    onBrokerChange?: (val: number) => void;
     disabled?: boolean;
+    /** Sources with no resale or broker inventory (Telecharge) show only Standard. */
+    standardOnly?: boolean;
   }) => {
     const step = 1;
     const effectiveStandard = defaultPct + standardAdj;
@@ -425,7 +428,7 @@ export const EventFormFields = {
           CSV Price Adjustments{' '}
           <span className="text-xs font-normal text-gray-400">(on top of scraper default)</span>
         </div>
-        <div className="grid grid-cols-3 gap-3 p-4 rounded-lg border border-gray-200 bg-gray-50">
+        <div className={`grid ${standardOnly ? 'grid-cols-1' : 'grid-cols-3'} gap-3 p-4 rounded-lg border border-gray-200 bg-gray-50`}>
           {/* Standard */}
           <div className="space-y-1">
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Standard</p>
@@ -462,6 +465,7 @@ export const EventFormFields = {
             </p>
           </div>
 
+          {!standardOnly && (<>
           {/* Resale */}
           <div className="space-y-1">
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Resale</p>
@@ -533,8 +537,12 @@ export const EventFormFields = {
               Effective: <span className={colorClass(brokerAdj !== 0 ? brokerAdj : resaleAdj)}>{effectiveBroker > 0 ? '+' : ''}{effectiveBroker}%</span>
             </p>
           </div>
+          </>)}
         </div>
-        <p className="mt-1 text-xs text-gray-400">These adjustments are applied at CSV generation time on top of the scraper default. Broker = listings tagged &ldquo;resale broker&rdquo; (falls back to Resale if 0).</p>
+        <p className="mt-1 text-xs text-gray-400">
+          These adjustments are applied at CSV generation time on top of the scraper default.
+          {!standardOnly && <> Broker = listings tagged &ldquo;resale broker&rdquo; (falls back to Resale if 0).</>}
+        </p>
       </div>
     );
   },

@@ -11,6 +11,8 @@ interface Props {
   initialStandardAdj?: number;
   initialResaleAdj?: number;
   initialBrokerAdj?: number;
+  /** Sources with no resale or broker inventory (Telecharge) edit only Standard. */
+  standardOnly?: boolean;
 }
 
 const PRESETS = [0, 5, 10, 15, 20, 25, 30, 40, 50];
@@ -62,7 +64,7 @@ function AdjRow({
   );
 }
 
-export default function PriceEditor({ eventId, initialPct, initialStandardAdj = 0, initialResaleAdj = 0, initialBrokerAdj = 0 }: Props) {
+export default function PriceEditor({ eventId, initialPct, initialStandardAdj = 0, initialResaleAdj = 0, initialBrokerAdj = 0, standardOnly = false }: Props) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [value, setValue] = useState(initialPct);
@@ -97,8 +99,7 @@ export default function PriceEditor({ eventId, initialPct, initialStandardAdj = 
         await updateEvent(eventId, {
           priceIncreasePercentage: value,
           standardMarkupAdjustment: stdAdj,
-          resaleMarkupAdjustment: resaleAdj,
-          brokerMarkupAdjustment: brokerAdj,
+          ...(standardOnly ? {} : { resaleMarkupAdjustment: resaleAdj, brokerMarkupAdjustment: brokerAdj }),
         } as Parameters<typeof updateEvent>[1], false);
         setSaveState('saved');
         router.refresh();
@@ -200,6 +201,7 @@ export default function PriceEditor({ eventId, initialPct, initialStandardAdj = 
             }}
             disabled={isPending}
           />
+          {!standardOnly && (<>
           <div className="h-px bg-gray-200 my-1" />
           <AdjRow
             label="Resale (Fan)"
@@ -225,6 +227,7 @@ export default function PriceEditor({ eventId, initialPct, initialStandardAdj = 
           <p className="text-[10px] text-gray-400 mt-1 leading-tight">
             Broker = listings tagged &ldquo;resale broker&rdquo; by scraper. If 0, falls back to Resale %.
           </p>
+          </>)}
         </div>
 
         {/* Save button */}
